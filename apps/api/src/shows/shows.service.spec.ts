@@ -268,4 +268,27 @@ describe('ShowsService.getShow (anime repair)', () => {
     expect(backfill.fixAnimeShowFromTvdb).not.toHaveBeenCalled();
     expect(meta.getShowSeasons).toHaveBeenCalledWith('m1', undefined);
   });
+
+  it('matches the animation genre by slug OR English name on the episodes path', async () => {
+    await service.getSeasons('m1');
+    expect(prisma.mediaGenre.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          mediaId: 'm1',
+          genre: {
+            OR: [{ slug: 'animation' }, { name: { equals: 'Animation', mode: 'insensitive' } }],
+          },
+        }),
+      }),
+    );
+  });
+
+  it('treats an English-named animation genre as animation even with a localized slug', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue(
+      stored({ genres: [{ genre: { slug: 'animazione', name: 'Animation' } }] }),
+    );
+    backfill.fixAnimeShowFromTvdb.mockResolvedValue({ fixed: true, remapped: 0 });
+    await service.getShow('m1');
+    expect(backfill.fixAnimeShowFromTvdb).toHaveBeenCalledWith('m1');
+  });
 });

@@ -56,11 +56,11 @@ export class MediaMetadataService {
   }
 
   // ---- External lookup ----
-  async findMediaByExternal(provider: ExternalProvider, value: string) {
-    // Kind-agnostic read: a verified (provider,value) is unique within a kind; findFirst
-    // across kinds keeps existing callers compatible with the namespace-aware schema.
+  async findMediaByExternal(provider: ExternalProvider, value: string, kind?: ProviderEntityKind) {
+    // Kind-aware when requested: TMDB/TVDB use SEPARATE id namespaces per entity type
+    // (the same number is a different series vs movie) — hydration must not cross kinds.
     const ext = await this.prisma.externalId.findFirst({
-      where: { provider, value },
+      where: kind ? { provider, providerEntityKind: kind, value } : { provider, value },
       include: { media: true },
     });
     return ext?.media ?? null;
@@ -147,7 +147,7 @@ export class MediaMetadataService {
   }): Promise<string> {
     const tmdbVal = String(item.tmdbId);
     const lang = currentLanguage();
-    const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal);
+    const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal, ProviderEntityKind.SERIES);
     if (existing) {
       // List data is single-language: store it as a locale override only, never
       // overwriting the (English) base so other users aren't contaminated.
@@ -182,7 +182,7 @@ export class MediaMetadataService {
     } catch (e: any) {
       // Race condition: another concurrent call (search/import) created this media first.
       if (e?.code === 'P2002') {
-        const found = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal);
+        const found = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal, ProviderEntityKind.SERIES);
         if (found) return found.id;
       }
       throw e;
@@ -201,7 +201,7 @@ export class MediaMetadataService {
   }): Promise<string> {
     const tmdbVal = String(item.tmdbId);
     const lang = currentLanguage();
-    const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal);
+    const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal, ProviderEntityKind.MOVIE);
     if (existing) {
       const { data, changed } = this.localeOverrideUpdate(existing, item, lang);
       if (changed) {
@@ -228,7 +228,7 @@ export class MediaMetadataService {
       return created.id;
     } catch (e: any) {
       if (e?.code === 'P2002') {
-        const found = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal);
+        const found = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal, ProviderEntityKind.MOVIE);
         if (found) return found.id;
       }
       throw e;
@@ -246,7 +246,7 @@ export class MediaMetadataService {
   }): Promise<string> {
     const tvdbVal = String(item.tvdbId);
     const lang = currentLanguage();
-    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal);
+    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal, ProviderEntityKind.SERIES);
     if (existing) {
       await this.prisma.mediaItem.update({
         where: { id: existing.id },
@@ -307,7 +307,7 @@ export class MediaMetadataService {
   }): Promise<string> {
     const tvdbVal = String(item.tvdbId);
     const lang = currentLanguage();
-    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal);
+    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal, ProviderEntityKind.MOVIE);
     if (existing) {
       await this.prisma.mediaItem.update({
         where: { id: existing.id },
@@ -467,7 +467,7 @@ export class MediaMetadataService {
     const lang = currentLanguage();
     const data = await this.tmdb.getShow(tmdbId); // request locale (L)
     const tmdbVal = String(tmdbId);
-    const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal);
+    const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal, ProviderEntityKind.SERIES);
     let mediaId: string;
     if (this.isStale(existing)) {
       // Full refresh: English base + all relations + the request-locale overrides.
@@ -497,7 +497,7 @@ export class MediaMetadataService {
     const lang = currentLanguage();
     const data = await this.tvdb.getShow(tvdbId, lang); // pass locale → episodes get correct language
     const tvdbVal = String(tvdbId);
-    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal);
+    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal, ProviderEntityKind.SERIES);
     let mediaId: string;
     if (this.isStale(existing)) {
       const enData = lang !== 'en' ? await this.tvdb.getShow(tvdbId, 'en') : undefined;
@@ -523,7 +523,7 @@ export class MediaMetadataService {
     const lang = currentLanguage();
     const data = await this.tvdb.getMovie(tvdbId, lang);
     const tvdbVal = String(tvdbId);
-    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal);
+    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal, ProviderEntityKind.MOVIE);
     let mediaId: string;
     if (this.isStale(existing)) {
       // No second call needed: data.translations already has ALL locales (including English).
@@ -670,7 +670,7 @@ export class MediaMetadataService {
     const lang = currentLanguage();
     const data = await this.tmdb.getMovie(tmdbId); // request locale (L)
     const tmdbVal = String(tmdbId);
-    const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal);
+    const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal, ProviderEntityKind.MOVIE);
     let mediaId: string;
     if (this.isStale(existing)) {
       const enData = lang !== 'en' ? await this.tmdb.getMovie(tmdbId, 'en-US') : undefined;
@@ -696,12 +696,19 @@ export class MediaMetadataService {
   ): Promise<string> {
     return this.prisma.$transaction(async (tx) => {
       // Existing JSON (to merge locale overrides without clobbering other locales).
-      const prev = existingId
+      let prev = existingId
         ? await tx.mediaItem.findUnique({
             where: { id: existingId },
-            select: { titles: true, overviews: true, posterUrls: true, backdropUrls: true, titleLocale: true },
+            select: { titles: true, overviews: true, posterUrls: true, backdropUrls: true, titleLocale: true, type: true },
           })
         : null;
+      // Cross-type guard: series data must NEVER merge into a MOVIE row (TMDB/TVDB use
+      // separate movie/series id namespaces — a shared number is a different entity).
+      if (prev && prev.type !== MediaType.SHOW) {
+        this.logger.warn(`persistShow: refusing to merge series into ${prev.type} row ${existingId} — creating a new show row`);
+        existingId = undefined;
+        prev = null;
+      }
       const base = enData ?? data; // English base when available, else the fetched locale
       const genres = await this.upsertGenres(tx, data.genres, lang, enData?.genres);
       const providers = await this.upsertProviders(tx, data.providers);
@@ -801,12 +808,18 @@ export class MediaMetadataService {
     enData?: NormalizedMovie,
   ): Promise<string> {
     return this.prisma.$transaction(async (tx) => {
-      const prev = existingId
+      let prev = existingId
         ? await tx.mediaItem.findUnique({
             where: { id: existingId },
-            select: { titles: true, overviews: true, posterUrls: true, backdropUrls: true, titleLocale: true },
+            select: { titles: true, overviews: true, posterUrls: true, backdropUrls: true, titleLocale: true, type: true },
           })
         : null;
+      // Cross-type guard (mirror of persistShow): movie data must NEVER merge into a SHOW row.
+      if (prev && prev.type !== MediaType.MOVIE) {
+        this.logger.warn(`persistMovie: refusing to merge movie into ${prev.type} row ${existingId} — creating a new movie row`);
+        existingId = undefined;
+        prev = null;
+      }
       const base = enData ?? data;
       const genres = await this.upsertGenres(tx, data.genres, lang, enData?.genres);
       const providers = await this.upsertProviders(tx, data.providers);
@@ -913,7 +926,9 @@ export class MediaMetadataService {
     // "Original title" is a details-page-only extra, and only for ANIME whose original
     // language isn't the user's (e.g. a Japanese title for an English user). Anything
     // else keeps the field empty so non-anime originals never clutter the page.
-    const isAnime = (media.genres ?? []).some((g: any) => g.genre?.slug === 'animation');
+    const isAnime = (media.genres ?? []).some(
+      (g: any) => g.genre?.slug === 'animation' || g.genre?.name?.toLowerCase?.() === 'animation',
+    );
     const originalLanguage = media.show.originalLanguage;
     const userBaseLang = currentLanguage().split('-')[0];
     if (
@@ -1197,10 +1212,14 @@ export class MediaMetadataService {
     enGenres?: { tmdbId?: number; name: string }[],
   ): Promise<string[]> {
     const ids: string[] = [];
-    for (const g of genres) {
+    for (const [index, g] of genres.entries()) {
       // Match the English name (stable identity) so different request languages
       // collapse onto the same Genre row instead of creating per-language dupes.
-      const enName = enGenres?.find((e) => e.tmdbId != null && e.tmdbId === g.tmdbId)?.name;
+      const enName =
+        enGenres?.find((e) => e.tmdbId != null && e.tmdbId === g.tmdbId)?.name ??
+        // TVDB genres carry no tmdbId — but the provider returns the same genre set in
+        // the same order for every locale, so the English name lines up by index.
+        (enGenres && enGenres.length === genres.length ? enGenres[index]?.name : undefined);
       const slug = slugify(enName ?? g.name);
       const existing = await tx.genre.findUnique({ where: { slug }, select: { names: true } }).catch(() => null);
       const names = mergeLocalized((existing?.names as any) ?? null, lang, g.name, enName);

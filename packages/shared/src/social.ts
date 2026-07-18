@@ -102,6 +102,27 @@ export interface UpdateCommentDto {
 
 export interface PaginatedComments extends Paginated<CommentDto> {}
 
+/** Thread context attached to comments in the "my comments" list. */
+export interface MyCommentContextDto {
+  threadType: 'SHOW' | 'MOVIE' | 'EPISODE' | 'GROUP';
+  threadId: string;
+  /** Display label: media title, "Show · S01E05" for episodes, or the group slug (localized client-side via `groups:names.<id>`). */
+  label: string;
+  /** Episode title for EPISODE threads. */
+  sublabel?: string | null;
+  mediaType?: 'SHOW' | 'MOVIE';
+  /** Media id for SHOW/MOVIE threads and for an EPISODE thread's parent show. */
+  mediaId?: string | null;
+  episodeId?: string;
+  groupId?: string;
+}
+
+export interface MyCommentDto extends CommentDto {
+  context: MyCommentContextDto | null;
+}
+
+export interface PaginatedMyComments extends Paginated<MyCommentDto> {}
+
 export interface RatingDto {
   mediaType: MediaType;
   mediaId: string;

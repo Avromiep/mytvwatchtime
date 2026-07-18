@@ -64,5 +64,9 @@
   "timeJustNow": "अभी",
   "timeMinutesAgo": "{{count}} मि पहले",
   "timeHoursAgo": "{{count}} घं पहले",
-  "timeDaysAgo": "{{count}} दि पहले"
+  "timeDaysAgo": "{{count}} दि पहले",
+  "viewFullThread": "पूरा थ्रेड देखें",
+  "myCommentsTitle": "मेरी टिप्पणियाँ",
+  "myCommentsEmpty": "अभी कोई टिप्पणी नहीं",
+  "myCommentsEmptyDesc": "शो, फ़िल्मों, एपिसोड और समूहों पर आपकी टिप्पणियाँ यहाँ दिखेंगी।"
 }

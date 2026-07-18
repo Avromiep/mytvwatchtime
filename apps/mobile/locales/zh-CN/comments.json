@@ -64,5 +64,9 @@
   "timeJustNow": "刚刚",
   "timeMinutesAgo": "{{count}}分钟前",
   "timeHoursAgo": "{{count}}小时前",
-  "timeDaysAgo": "{{count}}天前"
+  "timeDaysAgo": "{{count}}天前",
+  "viewFullThread": "查看完整讨论串",
+  "myCommentsTitle": "我的评论",
+  "myCommentsEmpty": "还没有评论",
+  "myCommentsEmptyDesc": "你在剧集、电影、单集和小组中的评论将显示在这里。"
 }

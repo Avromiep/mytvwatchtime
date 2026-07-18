@@ -64,5 +64,9 @@
   "timeJustNow": "jetzt",
   "timeMinutesAgo": "vor {{count}} Min.",
   "timeHoursAgo": "vor {{count}} Std.",
-  "timeDaysAgo": "vor {{count}} T"
+  "timeDaysAgo": "vor {{count}} T",
+  "viewFullThread": "Ganzen Thread ansehen",
+  "myCommentsTitle": "Meine Kommentare",
+  "myCommentsEmpty": "Noch keine Kommentare",
+  "myCommentsEmptyDesc": "Deine Kommentare zu Serien, Filmen, Episoden und Gruppen erscheinen hier."
 }

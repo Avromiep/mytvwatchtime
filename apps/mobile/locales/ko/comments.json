@@ -64,5 +64,9 @@
   "timeJustNow": "방금",
   "timeMinutesAgo": "{{count}}분 전",
   "timeHoursAgo": "{{count}}시간 전",
-  "timeDaysAgo": "{{count}}일 전"
+  "timeDaysAgo": "{{count}}일 전",
+  "viewFullThread": "전체 스레드 보기",
+  "myCommentsTitle": "내 댓글",
+  "myCommentsEmpty": "아직 댓글이 없습니다",
+  "myCommentsEmptyDesc": "프로그램, 영화, 에피소드, 그룹에 남긴 내 댓글이 여기에 표시됩니다."
 }

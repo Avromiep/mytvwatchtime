@@ -122,7 +122,11 @@ describe('ContactService', () => {
       );
       expect(notifications.createForUser).toHaveBeenCalledWith(
         'u1',
-        expect.objectContaining({ category: 'CONTACT', push: true, link: 'tvwatchtime://contact' }),
+        expect.objectContaining({
+          category: 'CONTACT',
+          push: true,
+          link: 'tvwatchtime://contact/t1',
+        }),
       );
     });
   });

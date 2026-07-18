@@ -163,7 +163,7 @@ export class ContactService {
         category: 'CONTACT',
         title: '💬 New reply to your message',
         body: 'You have a new reply — open Contact in Settings to view it.',
-        link: 'tvwatchtime://contact',
+        link: `tvwatchtime://contact/${thread.id}`,
         dedupeKey: `contact:${thread.id}`,
         push: true,
       });

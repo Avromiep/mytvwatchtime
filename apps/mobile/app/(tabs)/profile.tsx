@@ -115,6 +115,22 @@ export default function ProfileScreen() {
             </Card>
           </Pressable>
 
+          {/* My comments */}
+          <Pressable onPress={() => router.push('/my-comments')}>
+            <Card style={styles.chevron}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Ionicons name="chatbubbles-outline" size={20} color={tokens.primary} />
+                <T variant="h2" style={{ marginLeft: spacing.sm }}>{t('profile:myComments')}</T>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <T variant="caption" muted style={{ marginRight: spacing.xs }}>
+                  {me?.commentsCount ?? 0}
+                </T>
+                <Ionicons name="chevron-forward" size={20} color={tokens.textMuted} />
+              </View>
+            </Card>
+          </Pressable>
+
           {/* Find users */}
           <Pressable onPress={() => router.push('/find-user')}>
             <Card style={styles.chevron}>

@@ -88,5 +88,9 @@
   "timeJustNow": "now",
   "timeMinutesAgo": "{{count}}m ago",
   "timeHoursAgo": "{{count}}h ago",
-  "timeDaysAgo": "{{count}}d ago"
+  "timeDaysAgo": "{{count}}d ago",
+  "viewFullThread": "View full thread",
+  "myCommentsTitle": "My Comments",
+  "myCommentsEmpty": "No comments yet",
+  "myCommentsEmptyDesc": "Your comments on shows, movies, episodes and groups will appear here."
 }

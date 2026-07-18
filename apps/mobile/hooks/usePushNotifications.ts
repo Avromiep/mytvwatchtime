@@ -4,6 +4,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { api } from '../api/client';
 import { showError } from '../lib/dialog';
+import { navigateFromLink } from '../lib/announcement';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -78,5 +79,17 @@ export function usePushNotifications(enabled: boolean) {
     return () => {
       cancelled = true;
     };
+  }, [enabled]);
+
+  // Tap handling: warm taps via listener, cold start via the last queued response.
+  useEffect(() => {
+    if (!enabled || Platform.OS === 'web') return;
+    const open = (response: Notifications.NotificationResponse | null) => {
+      const link = (response?.notification.request.content.data as any)?.link;
+      if (typeof link === 'string') navigateFromLink(link);
+    };
+    const sub = Notifications.addNotificationResponseReceivedListener(open);
+    Notifications.getLastNotificationResponseAsync().then(open).catch(() => undefined);
+    return () => sub.remove();
   }, [enabled]);
 }

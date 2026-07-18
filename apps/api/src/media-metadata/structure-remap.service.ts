@@ -46,15 +46,12 @@ const ZERO: RemapStats = {
 
 /**
  * Transfers user data (watch statuses, history, ratings, reactions, character votes,
- * comments) from stale TMDB-structured episode rows onto the fresh TVDB structure after
- * a show is switched from TMDB to TVDB hydration (anime fix). TVDB hydration is a union
- * upsert keyed by (season, episode) numbers, so episodes that only exist in TMDB's
- * numbering (e.g. Re:ZERO TMDB S1E26-77 vs TVDB S2-S4) survive as stale rows with the
- * users' data still attached.
+ * comments) between episode structures when a show's episodes are replaced — either
+ * after a TMDB→TVDB structure switch (remapShow) or when splitting a cross-type
+ * contaminated record into two entities (remapEpisodesToMedia).
  *
- * Stale rows are detected post-hoc: they have a TMDB episode external id and NO TVDB one
- * (fresh rows carry both). Matching is conservative — airDate first, then exact slugified
- * title; ambiguous or unmatched rows are KEPT (never lose watch data) and reported.
+ * Matching is conservative — exact airDate first, then exact slugified title; ambiguous
+ * or unmatched rows are KEPT (never lose watch data) and reported.
  */
 @Injectable()
 export class StructureRemapService {
@@ -62,7 +59,64 @@ export class StructureRemapService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * After a TVDB hydration of a formerly TMDB-structured show: union upsert keeps stale
+   * TMDB-only rows (e.g. Re:ZERO TMDB S1E26-77 vs TVDB S2-S4). Stale = has a TMDB episode
+   * external id and NO TVDB one (fresh rows carry both). Maps them onto the fresh rows.
+   */
   async remapShow(mediaId: string): Promise<RemapStats> {
+    const episodes = await this.loadShowEpisodes(mediaId);
+    if (episodes === null) return { ...ZERO };
+
+    const stale = episodes.filter((e) => !e.hasTvdb && e.hasTmdb);
+    if (stale.length === 0) return { ...ZERO };
+    const fresh = episodes.filter((e) => e.hasTvdb);
+
+    const stats = await this.transferMatches(stale, fresh, mediaId);
+
+    // Seasons left empty by the cleanup are not part of the fresh structure — drop them.
+    const showId = episodes[0]?.showId;
+    if (showId) {
+      const removedSeasons = await this.prisma.season.deleteMany({
+        where: { showId, episodes: { none: {} } },
+      });
+      stats.seasonsRemoved = removedSeasons.count;
+    }
+
+    this.logger.log(
+      `remapShow(${mediaId}): ${stats.mapped}/${stats.stale} mapped, ${stats.unmapped} unmapped/kept, ` +
+        `${stats.episodesRemoved} episodes + ${stats.seasonsRemoved} seasons removed, ` +
+        `${stats.statusesMoved} statuses, ${stats.historiesMoved} history, ${stats.ratingsMoved} ratings, ` +
+        `${stats.reactionsMoved} reactions, ${stats.votesMoved} votes, ${stats.commentsMoved} comments`,
+    );
+    return stats;
+  }
+
+  /**
+   * Cross-entity variant: move user data from episodes under one media (e.g. a stray
+   * `shows` row contaminating a MOVIE record) onto the episodes of another media (the
+   * freshly-created correct show). Every source episode is a remap candidate; matching
+   * is the same conservative airDate/title logic. Source rows are deleted once mapped
+   * (or when they carry no user data); unmapped rows with user data are KEPT.
+   */
+  async remapEpisodesToMedia(sourceMediaId: string, targetMediaId: string): Promise<RemapStats> {
+    if (sourceMediaId === targetMediaId) return this.remapShow(sourceMediaId);
+    const source = await this.loadShowEpisodes(sourceMediaId);
+    const target = await this.loadShowEpisodes(targetMediaId);
+    if (!source?.length || !target?.length) return { ...ZERO };
+
+    const stats = await this.transferMatches(source, target, targetMediaId);
+    this.logger.log(
+      `remapEpisodesToMedia(${sourceMediaId} → ${targetMediaId}): ${stats.mapped}/${stats.stale} mapped, ` +
+        `${stats.unmapped} unmapped/kept, ${stats.episodesRemoved} episodes removed`,
+    );
+    return stats;
+  }
+
+  // ---- shared core ----
+
+  /** All episodes of a media's shows row (null when the media has no shows row). */
+  private async loadShowEpisodes(mediaId: string): Promise<(EpRow & { showId: string })[] | null> {
     const show = await this.prisma.show.findUnique({
       where: { mediaId },
       include: {
@@ -77,14 +131,12 @@ export class StructureRemapService {
         },
       },
     });
-    if (!show) return { ...ZERO };
-
-    const stale: EpRow[] = [];
-    const fresh: EpRow[] = [];
+    if (!show) return null;
+    const rows: (EpRow & { showId: string })[] = [];
     for (const s of show.seasons) {
       for (const e of s.episodes) {
         const providers = new Set(e.externalIds.map((x) => x.provider));
-        const row: EpRow = {
+        rows.push({
           id: e.id,
           number: e.number,
           title: e.title,
@@ -94,13 +146,20 @@ export class StructureRemapService {
           isSpecial: s.isSpecial,
           hasTmdb: providers.has(ExternalProvider.TMDB),
           hasTvdb: providers.has(ExternalProvider.THE_TVDB),
-        };
-        if (row.hasTvdb) fresh.push(row);
-        else if (row.hasTmdb) stale.push(row);
+          showId: show.id,
+        });
       }
     }
-    if (stale.length === 0) return { ...ZERO };
+    return rows;
+  }
 
+  /** Match stale→fresh, transfer user data per pair, clean up unmapped rows, and
+   *  recompute progress caches on the target show for every affected user. */
+  private async transferMatches(
+    stale: EpRow[],
+    fresh: EpRow[],
+    targetMediaId: string,
+  ): Promise<RemapStats> {
     const stats: RemapStats = { ...ZERO, stale: stale.length };
     const claimed = new Set<string>();
     const byDate = new Map<string, EpRow[]>();
@@ -147,8 +206,7 @@ export class StructureRemapService {
       }
     }
 
-    // Unmapped stale rows: delete only when they carry NO user data; keep (and report)
-    // the rest — losing watch history is never acceptable.
+    // Unmapped rows: delete only when they carry NO user data; keep (and report) the rest.
     for (const s of unmapped) {
       try {
         if (await this.hasUserData(s.id)) {
@@ -166,25 +224,12 @@ export class StructureRemapService {
       }
     }
 
-    // Seasons left empty by the cleanup are not part of the fresh structure — drop them.
-    const removedSeasons = await this.prisma.season.deleteMany({
-      where: { showId: show.id, episodes: { none: {} } },
-    });
-    stats.seasonsRemoved = removedSeasons.count;
-
     // Recompute per-user progress caches for everyone touched.
     for (const userId of affectedUsers) {
-      await this.recomputeUserShowStatus(userId, mediaId).catch((e) =>
+      await this.recomputeUserShowStatus(userId, targetMediaId).catch((e) =>
         this.logger.debug(`recompute userShowStatus failed for ${userId}: ${(e as Error).message}`),
       );
     }
-
-    this.logger.log(
-      `remapShow(${mediaId}): ${stats.mapped}/${stats.stale} mapped, ${stats.unmapped} unmapped/kept, ` +
-        `${stats.episodesRemoved} episodes + ${stats.seasonsRemoved} seasons removed, ` +
-        `${stats.statusesMoved} statuses, ${stats.historiesMoved} history, ${stats.ratingsMoved} ratings, ` +
-        `${stats.reactionsMoved} reactions, ${stats.votesMoved} votes, ${stats.commentsMoved} comments`,
-    );
     return stats;
   }
 

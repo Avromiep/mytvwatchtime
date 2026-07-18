@@ -179,7 +179,7 @@ export class CommentsService {
           category: NotificationCategory.COMMENT_REPLY,
           title: 'New reply to your comment',
           body: comment.body.slice(0, 80),
-          link: `tvwatchtime://comment/${comment.id}`,
+          link: `tvwatchtime://comment/${dto.parentId}?highlight=${dto.parentId}`,
           dedupeKey: `reply:${comment.id}`,
           push: true,
         });
@@ -218,6 +218,114 @@ export class CommentsService {
       media: r.mediaId ? mediaMap.get(r.mediaId) : null,
       list: r.listId ? listMap.get(r.listId) : null,
     });
+  }
+
+  /** Paginated list of the user's own comments (newest first) with thread context labels. */
+  async listMine(userId: string, page = 1, pageSize = 20) {
+    const where = { userId, deletedByUser: false };
+    const [rows, total] = await Promise.all([
+      this.prisma.comment.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: { user: { include: { profile: true } }, image: true },
+      }),
+      this.prisma.comment.count({ where }),
+    ]);
+
+    const contextMap = await this.threadContexts(rows);
+    const c = (await this.authorCounts([userId])).get(userId)!;
+    const liked = await this.likedIds(
+      userId,
+      rows.map((r) => r.id),
+    );
+    const mediaMap = await this.mediaRefs(rows.map((r) => r.mediaId).filter(Boolean) as string[]);
+    const listMap = await this.listRefs(rows.map((r) => r.listId).filter(Boolean) as string[]);
+
+    const items = rows.map((r) => ({
+      ...this.toDto(r, c, liked.has(r.id), {
+        media: r.mediaId ? mediaMap.get(r.mediaId) : null,
+        list: r.listId ? listMap.get(r.listId) : null,
+      }),
+      context: contextMap.get(r.id) ?? null,
+    }));
+    return paginate(items, page, pageSize, total);
+  }
+
+  /** Batch-resolve display context (label + navigation ids) for the threads of the given comments. */
+  private async threadContexts(
+    rows: { id: string; threadType: CommentThreadType; threadId: string }[],
+  ) {
+    const map = new Map<string, any>();
+    if (rows.length === 0) return map;
+    const mediaIds = [
+      ...new Set(
+        rows
+          .filter((r) => r.threadType === 'SHOW' || r.threadType === 'MOVIE')
+          .map((r) => r.threadId),
+      ),
+    ];
+    const episodeIds = [
+      ...new Set(rows.filter((r) => r.threadType === 'EPISODE').map((r) => r.threadId)),
+    ];
+
+    const [mediaRows, episodeRows] = await Promise.all([
+      mediaIds.length
+        ? this.prisma.mediaItem.findMany({
+            where: { id: { in: mediaIds } },
+            include: { show: true, movie: true },
+          })
+        : [],
+      episodeIds.length
+        ? this.prisma.episode.findMany({
+            where: { id: { in: episodeIds } },
+            include: { season: { include: { show: { include: { media: true } } } } },
+          })
+        : [],
+    ]);
+    const mediaById = new Map(mediaRows.map((m) => [m.id, m]));
+    const episodeById = new Map(episodeRows.map((e) => [e.id, e]));
+
+    for (const r of rows) {
+      if (r.threadType === 'GROUP') {
+        // Group display names are localized client-side under `groups:names.<id>`.
+        map.set(r.id, {
+          threadType: r.threadType,
+          threadId: r.threadId,
+          label: r.threadId,
+          groupId: r.threadId,
+        });
+        continue;
+      }
+      if (r.threadType === 'EPISODE') {
+        const ep = episodeById.get(r.threadId);
+        const media = ep?.season?.show?.media;
+        const showTitle = media ? localized(media, 'titles', 'title') : null;
+        const code = ep
+          ? `S${String(ep.season?.number ?? 0).padStart(2, '0')}E${String(ep.number).padStart(2, '0')}`
+          : '';
+        map.set(r.id, {
+          threadType: r.threadType,
+          threadId: r.threadId,
+          label: showTitle ? `${showTitle} · ${code}` : code,
+          sublabel: ep ? (localized(ep, 'titles', 'title') ?? null) : null,
+          mediaType: 'SHOW',
+          mediaId: media?.id ?? null,
+          episodeId: r.threadId,
+        });
+        continue;
+      }
+      const m = mediaById.get(r.threadId);
+      map.set(r.id, {
+        threadType: r.threadType,
+        threadId: r.threadId,
+        label: m ? (localized(m, 'titles', 'title') ?? '') : '',
+        mediaType: r.threadType,
+        mediaId: r.threadId,
+      });
+    }
+    return map;
   }
 
   async replies(userId: string, commentId: string, q: RepliesQueryDto) {
@@ -353,7 +461,7 @@ export class CommentsService {
           category: NotificationCategory.COMMENT_LIKE,
           title: 'Someone liked your comment',
           body: comment.body.slice(0, 80),
-          link: `tvwatchtime://comment/${commentId}`,
+          link: `tvwatchtime://comment/${commentId}?highlight=${commentId}`,
           dedupeKey: `like:${userId}:${commentId}`,
           push: true,
         });

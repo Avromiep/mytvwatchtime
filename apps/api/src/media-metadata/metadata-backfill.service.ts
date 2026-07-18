@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ExternalProvider, ProviderEntityKind } from '@tvwatch/shared';
+import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { MediaMetadataService } from './media-metadata.service';
@@ -30,6 +30,8 @@ export class MetadataBackfillService {
   private backfillRunning = false;
   /** Prevents concurrent anime→TVDB rehydration batches. */
   private animeFixRunning = false;
+  /** Prevents concurrent type-mismatch repair batches. */
+  private typeRepairRunning = false;
   /** In-flight per-show repairs — concurrent callers (detail + episodes requests arriving
    *  together, or a view racing the cron) share ONE repair instead of double-hydrating. */
   private readonly animeFixInflight = new Map<string, Promise<{ fixed: boolean; remapped: number }>>();
@@ -57,6 +59,7 @@ export class MetadataBackfillService {
       classification,
       animeOnTmdb,
       animeOnTmdbNoTvdbId,
+      structuralTypeMismatch,
     ] = await Promise.all([
       this.prisma.mediaItem.count(),
       this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
@@ -77,12 +80,13 @@ export class MetadataBackfillService {
       // Animation-genre shows with stale TMDB-structured episode rows (TMDB anime
       // structures are often wrong — these should be TVDB-hydrated). "Stale" = the row
       // has a TMDB episode external id and no TVDB one; fresh rows carry both after the
-      // union upsert, so partially-switched shows are still counted.
+      // union upsert, so partially-switched shows are still counted. The animation genre
+      // matches slug OR English name (localized genre rows exist from non-en hydrations).
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
           JOIN shows sh ON sh.media_id = m.id
           WHERE m.type='SHOW'
             AND EXISTS (SELECT 1 FROM media_genres mg JOIN genres g ON g.id = mg.genre_id
-                        WHERE mg.media_id = m.id AND g.slug = 'animation')
+                        WHERE mg.media_id = m.id AND (g.slug = 'animation' OR lower(g.name) = 'animation'))
             AND EXISTS (SELECT 1 FROM seasons s
                         JOIN episodes e ON e.season_id = s.id
                         JOIN episode_external_ids ee ON ee.episode_id = e.id AND ee.provider = 'TMDB'
@@ -94,7 +98,7 @@ export class MetadataBackfillService {
           JOIN shows sh ON sh.media_id = m.id
           WHERE m.type='SHOW'
             AND EXISTS (SELECT 1 FROM media_genres mg JOIN genres g ON g.id = mg.genre_id
-                        WHERE mg.media_id = m.id AND g.slug = 'animation')
+                        WHERE mg.media_id = m.id AND (g.slug = 'animation' OR lower(g.name) = 'animation'))
             AND EXISTS (SELECT 1 FROM seasons s
                         JOIN episodes e ON e.season_id = s.id
                         JOIN episode_external_ids ee ON ee.episode_id = e.id AND ee.provider = 'TMDB'
@@ -102,6 +106,11 @@ export class MetadataBackfillService {
                           AND NOT EXISTS (SELECT 1 FROM episode_external_ids tv
                                           WHERE tv.episode_id = e.id AND tv.provider = 'THE_TVDB'))
             AND NOT EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id AND x.provider = 'THE_TVDB')`,
+      // Cross-type contamination: a MOVIE row carrying a shows row (or the reverse) —
+      // two entities merged into one record by a cross-namespace id confusion.
+      this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
+          WHERE (m.type='MOVIE' AND EXISTS (SELECT 1 FROM shows sh WHERE sh.media_id = m.id))
+             OR (m.type='SHOW' AND EXISTS (SELECT 1 FROM movies mv WHERE mv.media_id = m.id))`,
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     return {
@@ -119,6 +128,7 @@ export class MetadataBackfillService {
       ),
       animeOnTmdb: toNum(animeOnTmdb as any),
       animeOnTmdbNoTvdbId: toNum(animeOnTmdbNoTvdbId as any),
+      structuralTypeMismatch: toNum(structuralTypeMismatch as any),
     };
   }
 
@@ -157,7 +167,9 @@ export class MetadataBackfillService {
           m.id,
           m.externalIds as unknown as { provider: ExternalProvider; value: string }[],
           m.type,
-          m.genres.map((g) => g.genre.slug),
+          // Genre identity is locale-tolerant: slug OR lowercased name (localized genre
+          // rows exist from non-en hydrations).
+          m.genres.flatMap((g) => [g.genre.slug, g.genre.name.toLowerCase()]),
         );
         succeeded++;
         if (sample.length < 5) sample.push(m.title);
@@ -198,12 +210,12 @@ export class MetadataBackfillService {
     mediaId: string,
     externals: { provider: ExternalProvider; value: string }[],
     type: string,
-    genreSlugs: string[] = [],
+    genreKeys: string[] = [],
   ) {
     const tmdb = externals.find((e) => e.provider === ExternalProvider.TMDB);
     const tvdb = externals.find((e) => e.provider === ExternalProvider.THE_TVDB);
     const isShow = type === 'SHOW';
-    const hasAnimation = genreSlugs.includes('animation');
+    const hasAnimation = genreKeys.includes('animation');
 
     // Detect existing structure: shows with ≥1 episode, movies with overview.
     const hasStructure = isShow
@@ -282,7 +294,9 @@ export class MetadataBackfillService {
       const candidates = await this.prisma.mediaItem.findMany({
         where: {
           type: 'SHOW',
-          genres: { some: { genre: { slug: 'animation' } } },
+          genres: {
+            some: { genre: { OR: [{ slug: 'animation' }, { name: { equals: 'Animation', mode: 'insensitive' } }] } },
+          },
           // At least one stale TMDB-only episode row. Fresh TVDB rows may coexist after a
           // partial switch (e.g. an earlier detail-view hydration) — those shows still
           // need the remap, so "has any TVDB id" does NOT exclude them.
@@ -470,6 +484,175 @@ export class MetadataBackfillService {
     return e instanceof ProviderThrottled || (isProviderError(e) && e.category === 'rate_limited');
   }
 
+  // ---- Structural type mismatch repair (admin button) ----
+
+  /**
+   * Split cross-type contaminated records: a MOVIE row that carries a `shows` row (or a
+   * SHOW row carrying a `movies` row) — two entities merged into one by a cross-namespace
+   * id confusion (e.g. TVDB series 280103 attached to TMDB movie 62211).
+   *
+   * Per row: the cross-type entity is re-created correctly (detach the stray-kind
+   * external id → fresh hydration), user watch data on the stray episodes is remapped
+   * onto it (StructureRemapService, conservative matching — unmapped rows keep the stray
+   * structure alive instead of losing data), then the contaminated row is rehydrated
+   * from its OWN provider to restore its base metadata.
+   */
+  async repairTypeMismatches(): Promise<{ processed: number; repaired: number; skipped: number; failed: number }> {
+    const empty = { processed: 0, repaired: 0, skipped: 0, failed: 0 };
+    if (this.typeRepairRunning) {
+      this.logger.log('Type mismatch repair already running — skipping');
+      return empty;
+    }
+    this.typeRepairRunning = true;
+    try {
+      const mismatches = await this.prisma.mediaItem.findMany({
+        where: {
+          OR: [
+            { type: 'MOVIE', show: { isNot: null } },
+            { type: 'SHOW', movie: { isNot: null } },
+          ],
+        },
+        include: { externalIds: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      let repaired = 0;
+      let skipped = 0;
+      let failed = 0;
+      for (const m of mismatches) {
+        try {
+          const ok = await this.repairOneMismatch(
+            m.id,
+            m.type,
+            m.title,
+            m.externalIds as unknown as {
+              provider: ExternalProvider;
+              providerEntityKind: ProviderEntityKind;
+              value: string;
+            }[],
+          );
+          if (ok) repaired++;
+          else skipped++;
+        } catch (e) {
+          failed++;
+          this.logger.warn(`type mismatch repair failed for ${m.title} (${m.id}): ${(e as Error).message}`);
+        }
+      }
+      this.logger.log(
+        `Type mismatch repair: ${repaired}/${mismatches.length} repaired, ${skipped} skipped, ${failed} failed`,
+      );
+      return { processed: mismatches.length, repaired, skipped, failed };
+    } finally {
+      this.typeRepairRunning = false;
+    }
+  }
+
+  /** One contaminated row → true when fully repaired, false when skipped (needs a human). */
+  private async repairOneMismatch(
+    mediaId: string,
+    type: string,
+    title: string,
+    externalIds: { provider: ExternalProvider; providerEntityKind: ProviderEntityKind; value: string }[],
+  ): Promise<boolean> {
+    const isMovieRow = type === MediaType.MOVIE;
+    // The cross-type entity's identity: the external id whose KIND matches the stray
+    // structure (SERIES id on a MOVIE row, MOVIE id on a SHOW row).
+    const strayKind = isMovieRow ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
+    const ownKind = isMovieRow ? ProviderEntityKind.MOVIE : ProviderEntityKind.SERIES;
+    const strayExt =
+      externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB && e.providerEntityKind === strayKind) ??
+      externalIds.find((e) => e.provider === ExternalProvider.TMDB && e.providerEntityKind === strayKind);
+    const ownExt =
+      externalIds.find((e) => e.provider === ExternalProvider.TMDB && e.providerEntityKind === ownKind) ??
+      externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB && e.providerEntityKind === ownKind);
+
+    if (!strayExt) {
+      // No identity to rebuild the cross-type entity from: remove the stray structural
+      // row only when it carries NO episodes with user data.
+      if (isMovieRow && (await this.strayShowHasUserData(mediaId))) return false;
+      await this.deleteStrayStructure(mediaId, isMovieRow);
+      this.logger.log(`type mismatch: removed stray structure on ${title} (${mediaId}) — no cross-type id`);
+      return true;
+    }
+
+    // 1. Detach the stray-kind external id (re-attached on failure so a retry can resolve it again).
+    const detached = await this.prisma.externalId.deleteMany({
+      where: {
+        mediaId,
+        provider: strayExt.provider,
+        providerEntityKind: strayExt.providerEntityKind,
+        value: strayExt.value,
+      },
+    });
+    try {
+      // 2. Recreate the cross-type entity correctly from its own provider.
+      const newEntityId =
+        strayExt.provider === ExternalProvider.THE_TVDB
+          ? isMovieRow
+            ? await this.meta.ensureShowFullTvdb(Number(strayExt.value))
+            : await this.meta.ensureMovieFullTvdb(Number(strayExt.value))
+          : isMovieRow
+            ? await this.meta.ensureShowFull(Number(strayExt.value))
+            : await this.meta.ensureMovieFull(Number(strayExt.value));
+
+      // 3. Transfer watch data from the stray episodes onto the new entity.
+      if (isMovieRow) {
+        const remap = await this.structureRemap.remapEpisodesToMedia(mediaId, newEntityId);
+        if (remap.unmapped > 0) {
+          this.logger.warn(
+            `type mismatch: ${title} (${mediaId}) split into ${newEntityId}, but ${remap.unmapped} episodes kept unmapped user data — stray shows row retained`,
+          );
+          return false; // stray shows row must stay (holds user data)
+        }
+      }
+
+      // 4. Remove the now-empty stray structure, then restore the row's own base metadata.
+      await this.deleteStrayStructure(mediaId, isMovieRow);
+      await this.prisma.mediaItem.update({ where: { id: mediaId }, data: { metadataRefreshedAt: null } });
+      if (ownExt) {
+        if (isMovieRow) {
+          if (ownExt.provider === ExternalProvider.TMDB) await this.meta.ensureMovieFull(Number(ownExt.value));
+          else await this.meta.ensureMovieFullTvdb(Number(ownExt.value));
+        } else {
+          if (ownExt.provider === ExternalProvider.TMDB) await this.meta.ensureShowFull(Number(ownExt.value));
+          else await this.meta.ensureShowFullTvdb(Number(ownExt.value));
+        }
+      }
+      this.logger.log(`type mismatch: split ${title} (${mediaId}) — cross-type entity is ${newEntityId}`);
+      return true;
+    } catch (e) {
+      // Restore the detached id so the next run can resolve the cross-type entity again.
+      if (detached.count > 0) {
+        await this.prisma.externalId
+          .create({
+            data: {
+              mediaId,
+              provider: strayExt.provider,
+              providerEntityKind: strayExt.providerEntityKind,
+              value: strayExt.value,
+            },
+          })
+          .catch(() => undefined);
+      }
+      throw e;
+    }
+  }
+
+  /** Any episodes with user data under the stray shows row of a MOVIE media? */
+  private async strayShowHasUserData(mediaId: string): Promise<boolean> {
+    const withData = await this.prisma.userEpisodeStatus.count({
+      where: { episode: { season: { show: { mediaId } } } },
+      take: 1,
+    });
+    return withData > 0;
+  }
+
+  /** Delete the stray structural row (shows on a MOVIE row cascades seasons+episodes). */
+  private async deleteStrayStructure(mediaId: string, isMovieRow: boolean): Promise<void> {
+    if (isMovieRow) await this.prisma.show.delete({ where: { mediaId } }).catch(() => undefined);
+    else await this.prisma.movie.delete({ where: { mediaId } }).catch(() => undefined);
+  }
+
   // ---- TMDB Changes sync (daily cron) ----
 
   /**
@@ -535,7 +718,12 @@ export class MetadataBackfillService {
     // Animation-genre shows are TVDB-authoritative — never re-hydrate them from TMDB here.
     // The anime_tvdb_rehydrate cron (and the Metadata Health fix button) owns them.
     const animationRows = await this.prisma.mediaItem.findMany({
-      where: { type: 'SHOW', genres: { some: { genre: { slug: 'animation' } } } },
+      where: {
+        type: 'SHOW',
+        genres: {
+          some: { genre: { OR: [{ slug: 'animation' }, { name: { equals: 'Animation', mode: 'insensitive' } }] } },
+        },
+      },
       select: { id: true },
     });
     const animationShows = new Set(animationRows.map((r) => r.id));

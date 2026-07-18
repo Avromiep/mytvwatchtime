@@ -15,7 +15,10 @@ function mockPrisma() {
   return {
     mediaItem: model(['count', 'findMany', 'findUnique', 'groupBy', 'update']),
     episode: model(['count']),
-    externalId: model(['findMany', 'findFirst', 'create']),
+    externalId: model(['findMany', 'findFirst', 'create', 'deleteMany']),
+    show: model(['delete']),
+    movie: model(['delete']),
+    userEpisodeStatus: model(['count']),
     $queryRaw: jest.fn().mockResolvedValue([{ c: BigInt(0) }]),
   } as any;
 }
@@ -314,7 +317,7 @@ describe('MetadataBackfillService', () => {
   describe('backfillBatch (hydrateOne)', () => {
     it('rehydrates animation shows from TVDB even without existing structure', async () => {
       prisma.mediaItem.findMany.mockResolvedValue([
-        { ...animeShow(), genres: [{ genre: { slug: 'animation' } }] },
+        { ...animeShow(), genres: [{ genre: { slug: 'animation', name: 'Animation' } }] },
       ]);
       prisma.episode.count.mockResolvedValue(0); // no existing structure → would normally go TMDB
       await service.backfillBatch(10);
@@ -329,7 +332,7 @@ describe('MetadataBackfillService', () => {
           title: 'House',
           type: 'SHOW',
           externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }],
-          genres: [{ genre: { slug: 'drama' } }],
+          genres: [{ genre: { slug: 'drama', name: 'Drama' } }],
         },
       ]);
       prisma.episode.count.mockResolvedValue(0);
@@ -356,6 +359,99 @@ describe('MetadataBackfillService', () => {
       const res = await service.syncTmdbChanges();
       expect(meta.ensureShowFull).toHaveBeenCalledTimes(1); // only the non-animation show
       expect(res).toMatchObject({ matched: 2, hydrated: 1, skippedAnime: 1 });
+    });
+  });
+
+  describe('repairTypeMismatches', () => {
+    const mismatchRow = (over: Record<string, unknown> = {}) => ({
+      id: 'movie-1',
+      type: 'MOVIE',
+      title: 'Sonic Boom',
+      externalIds: [
+        { provider: ExternalProvider.TMDB, providerEntityKind: 'MOVIE', value: '62211' },
+        { provider: ExternalProvider.IMDB, providerEntityKind: 'MOVIE', value: 'tt3232262' },
+        { provider: ExternalProvider.THE_TVDB, providerEntityKind: 'SERIES', value: '280103' },
+      ],
+      ...over,
+    });
+
+    it('splits a contaminated movie row: recreate show, remap, restore the movie', async () => {
+      prisma.mediaItem.findMany.mockResolvedValue([mismatchRow()]);
+      prisma.externalId.deleteMany.mockResolvedValue({ count: 1 });
+      meta.ensureShowFullTvdb.mockResolvedValue('show-new');
+      structureRemap.remapEpisodesToMedia = jest
+        .fn()
+        .mockResolvedValue({ mapped: 52, unmapped: 0 });
+
+      const res = await service.repairTypeMismatches();
+
+      // Stray-kind id detached → correct show created from TVDB → watch data remapped.
+      expect(prisma.externalId.deleteMany).toHaveBeenCalledWith({
+        where: {
+          mediaId: 'movie-1',
+          provider: ExternalProvider.THE_TVDB,
+          providerEntityKind: 'SERIES',
+          value: '280103',
+        },
+      });
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(280103);
+      expect(structureRemap.remapEpisodesToMedia).toHaveBeenCalledWith('movie-1', 'show-new');
+      // Stray structure removed and the movie rehydrated from its own provider.
+      expect(prisma.show.delete).toHaveBeenCalledWith({ where: { mediaId: 'movie-1' } });
+      expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+        where: { id: 'movie-1' },
+        data: { metadataRefreshedAt: null },
+      });
+      expect(meta.ensureMovieFull).toHaveBeenCalledWith(62211);
+      expect(res).toMatchObject({ processed: 1, repaired: 1, skipped: 0, failed: 0 });
+    });
+
+    it('skips the split when unmapped user data would be stranded', async () => {
+      prisma.mediaItem.findMany.mockResolvedValue([mismatchRow()]);
+      prisma.externalId.deleteMany.mockResolvedValue({ count: 1 });
+      meta.ensureShowFullTvdb.mockResolvedValue('show-new');
+      structureRemap.remapEpisodesToMedia = jest
+        .fn()
+        .mockResolvedValue({ mapped: 50, unmapped: 2 });
+
+      const res = await service.repairTypeMismatches();
+
+      expect(res.skipped).toBe(1);
+      expect(prisma.show.delete).not.toHaveBeenCalled(); // stray row holds user data
+      expect(meta.ensureMovieFull).not.toHaveBeenCalled();
+    });
+
+    it('drops the stray structure when there is no cross-type id and no user data', async () => {
+      prisma.mediaItem.findMany.mockResolvedValue([
+        mismatchRow({
+          externalIds: [
+            { provider: ExternalProvider.TMDB, providerEntityKind: 'MOVIE', value: '62211' },
+          ],
+        }),
+      ]);
+      prisma.userEpisodeStatus.count.mockResolvedValue(0);
+
+      const res = await service.repairTypeMismatches();
+
+      expect(prisma.show.delete).toHaveBeenCalledWith({ where: { mediaId: 'movie-1' } });
+      expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+      expect(res.repaired).toBe(1);
+    });
+
+    it('keeps the row when user data exists but no cross-type id can be resolved', async () => {
+      prisma.mediaItem.findMany.mockResolvedValue([
+        mismatchRow({
+          externalIds: [
+            { provider: ExternalProvider.TMDB, providerEntityKind: 'MOVIE', value: '62211' },
+          ],
+        }),
+      ]);
+      prisma.userEpisodeStatus.count.mockResolvedValue(3);
+
+      const res = await service.repairTypeMismatches();
+
+      expect(res.skipped).toBe(1);
+      expect(prisma.show.delete).not.toHaveBeenCalled();
     });
   });
 });

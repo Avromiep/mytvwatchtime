@@ -64,5 +64,9 @@
   "timeJustNow": "たった今",
   "timeMinutesAgo": "{{count}}分前",
   "timeHoursAgo": "{{count}}時間前",
-  "timeDaysAgo": "{{count}}日前"
+  "timeDaysAgo": "{{count}}日前",
+  "viewFullThread": "スレッド全体を見る",
+  "myCommentsTitle": "自分のコメント",
+  "myCommentsEmpty": "まだコメントがありません",
+  "myCommentsEmptyDesc": "番組・映画・エピソード・グループへのコメントがここに表示されます。"
 }

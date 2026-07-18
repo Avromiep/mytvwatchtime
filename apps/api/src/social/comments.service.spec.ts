@@ -388,3 +388,118 @@ describe('CommentsService tombstone mapping', () => {
     expect(list.items[0].image).toBeNull();
   });
 });
+
+describe('CommentsService notification links', () => {
+  it('reply notification links to the parent comment with highlight', async () => {
+    const parent = makeComment({ id: 'p1', userId: 'u-owner', body: 'parent' });
+    const { service, notifications } = makeService(parent);
+    await service.create('u2', { ...base, parentId: 'p1', body: 'reply' } as any);
+    expect(notifications.createForUser).toHaveBeenCalledWith(
+      'u-owner',
+      expect.objectContaining({
+        category: 'COMMENT_REPLY',
+        link: 'tvwatchtime://comment/p1?highlight=p1',
+      }),
+    );
+  });
+
+  it('like notification links to the liked comment with highlight', async () => {
+    const { service, prisma, notifications } = makeService(
+      makeComment({ id: 'c1', userId: 'u-owner' }),
+    );
+    prisma.commentLike.create = jest.fn().mockResolvedValue({});
+    await service.like('u2', 'c1');
+    expect(notifications.createForUser).toHaveBeenCalledWith(
+      'u-owner',
+      expect.objectContaining({
+        category: 'COMMENT_LIKE',
+        link: 'tvwatchtime://comment/c1?highlight=c1',
+      }),
+    );
+  });
+});
+
+describe('CommentsService.listMine', () => {
+  it('returns paginated comments with SHOW thread context', async () => {
+    const { service, prisma } = makeService(
+      makeComment({ id: 'c1', userId: 'u1', threadType: 'SHOW', threadId: 'm1', body: 'hi' }),
+    );
+    prisma.mediaItem = {
+      findMany: jest
+        .fn()
+        .mockResolvedValue([
+          {
+            id: 'm1',
+            type: 'SHOW',
+            title: 'My Show',
+            titles: null,
+            show: { yearStart: 2021 },
+            movie: null,
+          },
+        ]),
+    };
+    prisma.episode = { findMany: jest.fn().mockResolvedValue([]) };
+    const res = await service.listMine('u1', 1, 20);
+    expect(prisma.comment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'u1', deletedByUser: false } }),
+    );
+    expect(res.total).toBe(1);
+    expect(res.items[0].context).toEqual(
+      expect.objectContaining({ threadType: 'SHOW', mediaId: 'm1', label: 'My Show' }),
+    );
+  });
+
+  it('resolves EPISODE context as "Show · S01E05" with the episode title', async () => {
+    const { service, prisma } = makeService(makeComment({ threadType: 'EPISODE', threadId: 'e1' }));
+    prisma.mediaItem = { findMany: jest.fn().mockResolvedValue([]) };
+    prisma.episode = {
+      findMany: jest.fn().mockResolvedValue([
+        {
+          id: 'e1',
+          number: 5,
+          title: 'The Episode',
+          titles: null,
+          season: {
+            number: 1,
+            show: { media: { id: 'm1', type: 'SHOW', title: 'My Show', titles: null } },
+          },
+        },
+      ]),
+    };
+    const res = await service.listMine('u1', 1, 20);
+    expect(res.items[0].context).toEqual(
+      expect.objectContaining({
+        label: 'My Show · S01E05',
+        sublabel: 'The Episode',
+        mediaId: 'm1',
+        episodeId: 'e1',
+      }),
+    );
+  });
+
+  it('resolves GROUP context to the group slug', async () => {
+    const { service, prisma } = makeService(
+      makeComment({ threadType: 'GROUP', threadId: 'anime' }),
+    );
+    prisma.mediaItem = { findMany: jest.fn().mockResolvedValue([]) };
+    prisma.episode = { findMany: jest.fn().mockResolvedValue([]) };
+    const res = await service.listMine('u1', 1, 20);
+    expect(res.items[0].context).toEqual(
+      expect.objectContaining({ label: 'anime', groupId: 'anime' }),
+    );
+  });
+
+  it('excludes soft-deleted comments and paginates via skip/take', async () => {
+    const { service, prisma } = makeService();
+    prisma.mediaItem = { findMany: jest.fn().mockResolvedValue([]) };
+    prisma.episode = { findMany: jest.fn().mockResolvedValue([]) };
+    await service.listMine('u1', 2, 10);
+    expect(prisma.comment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: 'u1', deletedByUser: false },
+        skip: 10,
+        take: 10,
+      }),
+    );
+  });
+});

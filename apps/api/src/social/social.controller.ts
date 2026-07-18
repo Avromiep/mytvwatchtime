@@ -7,6 +7,7 @@ import { CommentsService } from './comments.service';
 import { SocialService } from './social.service';
 import { ModerationService } from './moderation.service';
 import { CommentQueryDto, CreateCommentDto, RepliesQueryDto, ReportCommentDto, UpdateCommentDto } from './dto/comment.dto';
+import { PaginationDto } from '../common/dto/pagination.dto';
 
 @ApiTags('social')
 @ApiBearerAuth()
@@ -85,6 +86,11 @@ export class SocialController {
   @Get('me/blocked')
   blockedUsers(@CurrentUser('id') userId: string) {
     return this.moderation.getBlockedUsers(userId);
+  }
+
+  @Get('me/comments')
+  myComments(@CurrentUser('id') userId: string, @Query() q: PaginationDto) {
+    return this.comments.listMine(userId, q.page, Math.min(q.pageSize ?? 20, 50));
   }
 
   // ---- Report User ----

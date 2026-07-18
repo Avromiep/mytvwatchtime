@@ -1,5 +1,6 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { useLocalSearchParams } from 'expo-router';
 import { Header } from '../components/Header';
 import { BadgeGrid, BarChart, StatsCard } from '../components/cards';
 import { Leaderboard } from '../components/Leaderboard';
@@ -13,12 +14,32 @@ import { useTranslation } from 'react-i18next';
 export default function StatsScreen() {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['stats', 'common']);
+  const { scroll } = useLocalSearchParams<{ scroll?: string }>();
   const [tab, setTab] = useState<'shows' | 'movies'>('shows');
   const summary = useStatsSummary();
   const shows = useStatsShows(tab === 'shows');
   const movies = useStatsMovies(tab === 'movies');
   const badges = useBadges();
   const [refreshing, setRefreshing] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const badgesY = useRef<number | null>(null);
+  const didScrollToBadges = useRef(false);
+
+  // Deep-link (?scroll=badges, e.g. badge-unlocked notification): scroll once the
+  // badges section has laid out.
+  useEffect(() => {
+    if (scroll !== 'badges' || didScrollToBadges.current || badgesY.current == null) return;
+    didScrollToBadges.current = true;
+    scrollRef.current?.scrollTo({ y: Math.max(0, badgesY.current - spacing.lg), animated: true });
+  }, [scroll]);
+
+  const onBadgesLayout = useCallback((e: { nativeEvent: { layout: { y: number } } }) => {
+    badgesY.current = e.nativeEvent.layout.y;
+    if (scroll === 'badges' && !didScrollToBadges.current) {
+      didScrollToBadges.current = true;
+      scrollRef.current?.scrollTo({ y: Math.max(0, e.nativeEvent.layout.y - spacing.lg), animated: true });
+    }
+  }, [scroll]);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await Promise.all([summary.refetch(), shows.refetch(), movies.refetch(), badges.refetch()]);
@@ -32,7 +53,7 @@ export default function StatsScreen() {
         <Chip label={t('stats:shows')} active={tab === 'shows'} onPress={() => setTab('shows')} />
         <Chip label={t('stats:movies')} active={tab === 'movies'} onPress={() => setTab('movies')} />
       </View>
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 60 }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
+      <ScrollView ref={scrollRef} contentContainerStyle={{ padding: spacing.lg, paddingBottom: 60 }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
         {summary.isLoading ? <Spinner /> : (
           <StatsCard title={t('stats:totalTime')} big={t('stats:totalTimeBig', { tv: fmtDuration(summary.data?.tvTime), movies: fmtDuration(summary.data?.movieTime) })} subtitle={t('stats:totalTimeSub', { episodes: summary.data?.episodesWatched ?? 0, movies: summary.data?.moviesWatched ?? 0 })} />
         )}
@@ -44,7 +65,9 @@ export default function StatsScreen() {
           <Leaderboard tabs={[]} typeOverride={tab} />
         </View>
 
-        <SectionHeader title={t('stats:badges')} />
+        <View onLayout={onBadgesLayout}>
+          <SectionHeader title={t('stats:badges')} />
+        </View>
         {badges.isLoading ? <Spinner /> : (
           <View>
             <StatsCard big={`${badges.data?.totalUnlocked ?? 0}`} subtitle={t('stats:badgesProgress', { count: badges.data?.totalBadges ?? 0 })} />

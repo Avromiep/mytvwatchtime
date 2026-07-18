@@ -1,10 +1,10 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import type { CommentDto, Paginated } from '@tvwatch/shared';
 import { Header } from '../../components/Header';
-import { EmptyState, Screen, Spinner, T } from '../../components/primitives';
+import { Button, EmptyState, Screen, Spinner, T } from '../../components/primitives';
 import { SortBar } from '../../components/comments/SortBar';
 import { NodeContent, ThreadNode, type ThreadHandlers } from '../../components/comments/ThreadNode';
 import { CommentComposer } from '../../components/comments/CommentComposer';
@@ -27,7 +27,7 @@ import { showError } from '../../lib/dialog';
 export default function CommentThreadScreen() {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['comments', 'common']);
-  const params = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{ id: string; highlight?: string }>();
   const id = params.id;
 
   const [sort, setSort] = useState<CommentSortMode>('LATEST');
@@ -37,6 +37,16 @@ export default function CommentThreadScreen() {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [expanded, setExpanded] = useState<Record<string, ExpandedNode>>({});
   const [replyTarget, setReplyTarget] = useState<CommentDto | null>(null);
+  // Transient highlight from a notification deep-link (?highlight=<commentId>), cleared after 2s.
+  const [highlightId, setHighlightId] = useState<string | null>(params.highlight ?? null);
+  const listRef = useRef<FlatList<CommentDto>>(null);
+  const didScrollToHighlight = useRef(false);
+
+  useEffect(() => {
+    if (!highlightId) return;
+    const timer = setTimeout(() => setHighlightId(null), 2000);
+    return () => clearTimeout(timer);
+  }, [highlightId]);
 
   const { data: me } = useMe();
   const currentUserId = me?.id;
@@ -59,6 +69,15 @@ export default function CommentThreadScreen() {
     [rootItems, expanded],
   );
   const topLevel = useMemo(() => childrenOf.get(id) ?? [], [childrenOf, id]);
+
+  // Scroll a highlighted top-level reply into view (header highlight needs no scroll).
+  useEffect(() => {
+    if (!highlightId || highlightId === id || didScrollToHighlight.current) return;
+    const index = topLevel.findIndex((c) => c.id === highlightId);
+    if (index < 0) return;
+    didScrollToHighlight.current = true;
+    listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.3 });
+  }, [highlightId, id, topLevel]);
 
   /** "Show more replies": inline-expand the next page of a node's children (appended). */
   const loadMore = useCallback(
@@ -190,12 +209,19 @@ export default function CommentThreadScreen() {
       collapsed={collapsed}
       expanded={expanded}
       handlers={handlers}
+      highlightId={highlightId}
     />
   );
 
   const ListHeader = parent ? (
     <View style={{ paddingBottom: spacing.sm }}>
-      <NodeContent comment={parent} depth={0} collapsed={false} handlers={handlers} />
+      <NodeContent
+        comment={parent}
+        depth={0}
+        collapsed={false}
+        handlers={handlers}
+        highlighted={parent.id === highlightId}
+      />
       <View style={{ paddingTop: spacing.sm, paddingLeft: spacing.xs }}>
         <SortBar
           sort={sort}
@@ -215,7 +241,24 @@ export default function CommentThreadScreen() {
       behavior="padding"
     >
       <Screen style={{ flex: 1 }}>
-        <Header title={t('comments:threadTitle')} showBack />
+        <Header
+          title={t('comments:threadTitle')}
+          showBack
+          right={
+            parent?.parentId ? (
+              <Button
+                title={t('comments:viewFullThread')}
+                variant="ghost"
+                onPress={() =>
+                  router.push(
+                    `/comments?type=${parent.threadType}&threadId=${encodeURIComponent(parent.threadId)}` as any,
+                  )
+                }
+                style={{ paddingHorizontal: spacing.sm }}
+              />
+            ) : undefined
+          }
+        />
 
         {/* Centered column (same max-width as the main feed). */}
         <View style={[feedColumn.root, { flex: 1 }]}>
@@ -225,10 +268,17 @@ export default function CommentThreadScreen() {
             <EmptyState title={t('comments:failedToLoad')} icon="alert-circle-outline" />
           ) : (
             <FlatList
+              ref={listRef}
               style={{ flex: 1 }}
               data={topLevel}
               keyExtractor={(c) => c.id}
               keyboardShouldPersistTaps="handled"
+              onScrollToIndexFailed={({ averageItemLength, index }) =>
+                listRef.current?.scrollToOffset({
+                  offset: (averageItemLength || 120) * index,
+                  animated: true,
+                })
+              }
               contentContainerStyle={{
                 paddingHorizontal: spacing.sm,
                 paddingBottom: spacing.xl,

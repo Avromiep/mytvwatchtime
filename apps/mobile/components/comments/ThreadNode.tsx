@@ -41,6 +41,8 @@ interface NodeContentProps {
   depth: number;
   collapsed: boolean;
   handlers: ThreadHandlers;
+  /** Transient highlight (e.g. opened from a notification) — cleared by the screen. */
+  highlighted?: boolean;
 }
 
 /**
@@ -48,7 +50,13 @@ interface NodeContentProps {
  * Thread lines live in ThreadNode around this — the own line emerges from the
  * avatar's bottom CENTER (hidden behind the circular avatar), like Reddit.
  */
-export function NodeContent({ comment, depth, collapsed, handlers }: NodeContentProps) {
+export function NodeContent({
+  comment,
+  depth,
+  collapsed,
+  handlers,
+  highlighted,
+}: NodeContentProps) {
   const { tokens, resolvedLocale } = useAppearance();
   const { t } = useTranslation(['comments', 'common']);
   const tombstone = comment.deletedByUser;
@@ -59,7 +67,12 @@ export function NodeContent({ comment, depth, collapsed, handlers }: NodeContent
   const openList = (list: CommentListRefDto) => router.push(`/list/${list.id}` as any);
 
   return (
-    <View style={styles.content}>
+    <View
+      style={[
+        styles.content,
+        highlighted ? { backgroundColor: tokens.primary + '15', borderRadius: radius.md } : null,
+      ]}
+    >
       {/* Header: avatar · username · time */}
       <View style={styles.headerRow}>
         <Pressable
@@ -255,6 +268,8 @@ export interface ThreadNodeProps {
   collapsed: ReadonlySet<string>;
   expanded: Record<string, ExpandedNode | undefined>;
   handlers: ThreadHandlers;
+  /** Comment id to highlight (notification deep-link), matched at any depth. */
+  highlightId?: string | null;
 }
 
 /**
@@ -276,6 +291,7 @@ export function ThreadNode({
   collapsed,
   expanded,
   handlers,
+  highlightId,
 }: ThreadNodeProps) {
   const { tokens } = useAppearance();
   const isCollapsed = collapsed.has(node.id);
@@ -340,7 +356,13 @@ export function ThreadNode({
         />
       ) : null}
 
-      <NodeContent comment={node} depth={depth} collapsed={isCollapsed} handlers={handlers} />
+      <NodeContent
+        comment={node}
+        depth={depth}
+        collapsed={isCollapsed}
+        handlers={handlers}
+        highlighted={node.id === highlightId}
+      />
 
       {/* Nested children + the "show more" row. */}
       {kids.map((kid, i) => (
@@ -353,6 +375,7 @@ export function ThreadNode({
           collapsed={collapsed}
           expanded={expanded}
           handlers={handlers}
+          highlightId={highlightId}
         />
       ))}
       {showKids && remaining > 0 ? (

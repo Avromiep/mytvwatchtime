@@ -15,6 +15,7 @@ interface MetadataHealth {
   byClassification: Record<string, number>;
   animeOnTmdb: number;
   animeOnTmdbNoTvdbId: number;
+  structuralTypeMismatch: number;
 }
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -34,6 +35,8 @@ export default function MetadataHealthPage() {
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [fixingAnime, setFixingAnime] = useState(false);
   const [animeResult, setAnimeResult] = useState<string | null>(null);
+  const [repairing, setRepairing] = useState(false);
+  const [repairResult, setRepairResult] = useState<string | null>(null);
   const [batchCount, setBatchCount] = useState('200');
   const [batchRps, setBatchRps] = useState('');
 
@@ -90,6 +93,19 @@ export default function MetadataHealthPage() {
       .finally(() => setFixingAnime(false));
   };
 
+  const runTypeRepair = () => {
+    setRepairing(true);
+    setRepairResult(null);
+    api
+      .post('/admin/repair-type-mismatch/run')
+      .then(() => {
+        setRepairResult('Type mismatch repair started in background. Stats refresh in 30s.');
+        setTimeout(() => load(), 30000);
+      })
+      .catch(() => setRepairResult('Type mismatch repair failed to start.'))
+      .finally(() => setRepairing(false));
+  };
+
   if (!canView) return <p className="p-6 text-sm text-zinc-500">Admins only.</p>;
 
   const pct = (n: number) => (stats && stats.total > 0 ? Math.round((n / stats.total) * 100) : 0);
@@ -115,6 +131,13 @@ export default function MetadataHealthPage() {
             className="rounded border border-blue-600 px-3 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
           >
             {fixingAnime ? 'Starting…' : 'Fix Anime → TVDB'}
+          </button>
+          <button
+            onClick={runTypeRepair}
+            disabled={repairing}
+            className="rounded border border-blue-600 px-3 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+          >
+            {repairing ? 'Starting…' : 'Repair Type Mismatch'}
           </button>
           <button
             onClick={runBackfill}
@@ -156,6 +179,11 @@ export default function MetadataHealthPage() {
           {animeResult}
         </div>
       )}
+      {repairResult && (
+        <div className="rounded-lg border border-purple-200 bg-purple-50 p-3 text-sm text-purple-800 dark:border-purple-800 dark:bg-purple-950 dark:text-purple-200">
+          {repairResult}
+        </div>
+      )}
 
       {loading || !stats ? (
         <p className="text-sm text-zinc-500">Loading…</p>
@@ -173,6 +201,12 @@ export default function MetadataHealthPage() {
               value={stats.animeOnTmdb}
               sub={`should be TVDB · ${stats.animeOnTmdbNoTvdbId} missing TVDB id`}
               highlight={stats.animeOnTmdb > 0}
+            />
+            <MetricCard
+              label="Type Mismatch"
+              value={stats.structuralTypeMismatch}
+              sub="movie/show merged into one row"
+              highlight={stats.structuralTypeMismatch > 0}
             />
             <MetricCard label="Stale (30+ days)" value={stats.stale} sub={`${pct(stats.stale)}% of total`} highlight={stats.stale > 0} />
           </div>

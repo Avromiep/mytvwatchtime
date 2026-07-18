@@ -94,7 +94,7 @@ export class BadgeService implements OnModuleInit {
           body: badge.description,
           iconUrl: null,
           imageUrl: null,
-          link: `tvwatchtime://stats`,
+          link: `tvwatchtime://stats?scroll=badges`,
           dedupeKey: `badge:${badge.id}`,
           push: true,
         });

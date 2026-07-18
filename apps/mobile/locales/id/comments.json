@@ -64,5 +64,9 @@
   "timeJustNow": "sekarang",
   "timeMinutesAgo": "{{count}} mnt lalu",
   "timeHoursAgo": "{{count}} j lalu",
-  "timeDaysAgo": "{{count}} h lalu"
+  "timeDaysAgo": "{{count}} h lalu",
+  "viewFullThread": "Lihat utas lengkap",
+  "myCommentsTitle": "Komentar Saya",
+  "myCommentsEmpty": "Belum ada komentar",
+  "myCommentsEmptyDesc": "Komentar Anda pada acara, film, episode, dan grup akan muncul di sini."
 }

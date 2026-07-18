@@ -27,6 +27,7 @@ import type {
   NotificationItemDto,
   NotificationPreferencesDto,
   Paginated,
+  PaginatedMyComments,
   ShowDetailDto,
   ShowStatsDto,
   StatsSummaryDto,
@@ -63,6 +64,7 @@ const qk = {
   statsMovies: ['statsMovies'] as const,
   badges: ['badges'] as const,
   notifications: (p: any) => ['notifications', p] as const,
+  myComments: ['myComments'] as const,
   notifPrefs: ['notifPrefs'] as const,
   comments: (p: any) => ['comments', p] as const,
   comment: (id: string) => ['comment', id] as const,
@@ -251,10 +253,26 @@ export const useBadges = () =>
     queryFn: () =>
       api.get<{ badges: UserBadgeDto[]; totalUnlocked: number; totalBadges: number }>('/me/badges'),
   });
-export const useNotifications = (p: { unreadOnly?: boolean; page?: number }) =>
-  useQuery({
+export const useNotifications = (p: { unreadOnly?: boolean }) =>
+  useInfiniteQuery({
     queryKey: qk.notifications(p),
-    queryFn: () => api.get<Paginated<NotificationItemDto>>('/me/notifications', p as any),
+    queryFn: ({ pageParam }) =>
+      api.get<Paginated<NotificationItemDto>>('/me/notifications', {
+        unreadOnly: p.unreadOnly,
+        page: pageParam as number,
+        pageSize: 30,
+      } as any),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
+  });
+/** Current user's comments across all threads, newest first (Profile → My comments). */
+export const useMyComments = () =>
+  useInfiniteQuery({
+    queryKey: qk.myComments,
+    queryFn: ({ pageParam }) =>
+      api.get<PaginatedMyComments>('/me/comments', { page: pageParam as number, pageSize: 20 }),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
   });
 export const useNotifPrefs = () =>
   useQuery({

@@ -48,7 +48,9 @@ export class ShowsService {
       // TVDB, and remaps user watch data. Cheap no-op when already fully TVDB-structured.
       // Animation shows NEVER refresh from TMDB: on failure keep last-known data; the
       // anime_tvdb_rehydrate job / Metadata Health fix redoes the switch.
-      const isAnimation = media.genres.some((g) => g.genre.slug === 'animation');
+      const isAnimation = media.genres.some(
+        (g) => g.genre.slug === 'animation' || g.genre.name?.toLowerCase() === 'animation',
+      );
       let animeFixed = false;
       if (isAnimation && this.tvdb?.enabled) {
         animeFixed = await this.metadataBackfill
@@ -83,7 +85,10 @@ export class ShowsService {
     // endpoint already returns TVDB data.
     if (this.tvdb?.enabled) {
       const animation = await this.prisma.mediaGenre.findFirst({
-        where: { mediaId: id, genre: { slug: 'animation' } },
+        where: {
+          mediaId: id,
+          genre: { OR: [{ slug: 'animation' }, { name: { equals: 'Animation', mode: 'insensitive' } }] },
+        },
         select: { mediaId: true },
       });
       if (animation) await this.metadataBackfill.fixAnimeShowFromTvdb(id).catch(() => undefined);

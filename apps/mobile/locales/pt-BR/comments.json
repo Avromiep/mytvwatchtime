@@ -64,5 +64,9 @@
   "timeJustNow": "agora",
   "timeMinutesAgo": "há {{count}} min",
   "timeHoursAgo": "há {{count}} h",
-  "timeDaysAgo": "há {{count}} d"
+  "timeDaysAgo": "há {{count}} d",
+  "viewFullThread": "Ver tópico completo",
+  "myCommentsTitle": "Meus comentários",
+  "myCommentsEmpty": "Ainda não há comentários",
+  "myCommentsEmptyDesc": "Seus comentários em séries, filmes, episódios e grupos aparecerão aqui."
 }

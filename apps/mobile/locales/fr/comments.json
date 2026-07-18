@@ -64,5 +64,9 @@
   "timeJustNow": "maintenant",
   "timeMinutesAgo": "il y a {{count}} min",
   "timeHoursAgo": "il y a {{count}} h",
-  "timeDaysAgo": "il y a {{count}} j"
+  "timeDaysAgo": "il y a {{count}} j",
+  "viewFullThread": "Voir le fil complet",
+  "myCommentsTitle": "Mes commentaires",
+  "myCommentsEmpty": "Aucun commentaire pour le moment",
+  "myCommentsEmptyDesc": "Vos commentaires sur les séries, films, épisodes et groupes apparaîtront ici."
 }

@@ -64,5 +64,9 @@
   "timeJustNow": "الآن",
   "timeMinutesAgo": "منذ {{count}} د",
   "timeHoursAgo": "منذ {{count}} س",
-  "timeDaysAgo": "منذ {{count}} ي"
+  "timeDaysAgo": "منذ {{count}} ي",
+  "viewFullThread": "عرض المحادثة الكاملة",
+  "myCommentsTitle": "تعليقاتي",
+  "myCommentsEmpty": "لا توجد تعليقات بعد",
+  "myCommentsEmptyDesc": "ستظهر هنا تعليقاتك على المسلسلات والأفلام والحلقات والمجموعات."
 }

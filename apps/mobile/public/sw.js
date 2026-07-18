@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tvwatchtime-v3';
+const CACHE_NAME = 'tvwatchtime-v4';
 const ASSETS = ['/', '/index.html', '/manifest.json'];
 
 // In dev the JS/CSS bundle is served from a stable URL (e.g. /index.bundle) whose
@@ -79,9 +79,17 @@ self.addEventListener('push', (event) => {
   );
 });
 
+// Convert app deep links (tvwatchtime://episode/123?x=y) to web routes (/episode/123?x=y).
+function toWebPath(url) {
+  if (!url || typeof url !== 'string') return '/';
+  if (url.startsWith('tvwatchtime://')) return '/' + url.slice('tvwatchtime://'.length);
+  if (url.startsWith('/')) return url;
+  return '/';
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = event.notification.data?.url || '/';
+  const url = toWebPath(event.notification.data?.url);
   event.waitUntil(
     self.clients.matchAll({ type: 'window' }).then((clients) => {
       const existing = clients.find((c) => c.url.includes(url));

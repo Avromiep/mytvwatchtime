@@ -64,5 +64,9 @@
   "timeJustNow": "şimdi",
   "timeMinutesAgo": "{{count}} dk önce",
   "timeHoursAgo": "{{count}} sa önce",
-  "timeDaysAgo": "{{count}} g önce"
+  "timeDaysAgo": "{{count}} g önce",
+  "viewFullThread": "Tüm konuyu gör",
+  "myCommentsTitle": "Yorumlarım",
+  "myCommentsEmpty": "Henüz yorum yok",
+  "myCommentsEmptyDesc": "Dizi, film, bölüm ve gruplardaki yorumların burada görünür."
 }

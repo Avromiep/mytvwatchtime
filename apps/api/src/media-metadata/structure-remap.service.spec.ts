@@ -301,4 +301,48 @@ describe('StructureRemapService', () => {
       where: { showId: 'sh1', episodes: { none: {} } },
     });
   });
+
+  it('remapEpisodesToMedia moves user data across entities (contamination split)', async () => {
+    prisma.show.findUnique.mockImplementation(({ where: { mediaId } }: any) =>
+      Promise.resolve(
+        mediaId === 'movie-1'
+          ? showWith([season('s1', 1, [ep({ id: 'old', number: 1, title: 'Pilot', airDate: D })])])
+          : showWith([
+              season('s2', 1, [
+                ep({
+                  id: 'new',
+                  number: 1,
+                  title: 'Pilot',
+                  airDate: D,
+                  externalIds: [{ provider: 'THE_TVDB' }],
+                }),
+              ]),
+            ]),
+      ),
+    );
+    prisma.userEpisodeStatus.findMany.mockResolvedValue([
+      {
+        id: 'ues1',
+        userId: 'u1',
+        episodeId: 'old',
+        watched: true,
+        watchedAt: D2,
+        watchCount: 1,
+        device: null,
+      },
+    ]);
+
+    const res = await service.remapEpisodesToMedia('movie-1', 'show-new');
+
+    expect(res).toMatchObject({ stale: 1, mapped: 1, statusesMoved: 1, episodesRemoved: 1 });
+    expect(prisma.userEpisodeStatus.update).toHaveBeenCalledWith({
+      where: { id: 'ues1' },
+      data: { episodeId: 'new' },
+    });
+    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'old' } });
+    // Progress cache recomputed on the TARGET show.
+    expect(prisma.userShowStatus.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId_mediaId: { userId: 'u1', mediaId: 'show-new' } } }),
+    );
+  });
 });

@@ -28,18 +28,25 @@ export function runAnnouncementAction(action: AnnouncementAction | null | undefi
 }
 
 /** Map a stored notification `link` / deep-link string to a route and navigate.
- *  Supports the legacy `tvwatchtime://...` scheme plus plain route paths. */
+ *  Supports the legacy `tvwatchtime://...` scheme plus plain route paths.
+ *  Query strings (`?highlight=...`, `?scroll=...`) are preserved onto the route. */
 export function navigateFromLink(link: string | null | undefined) {
   if (!link) return;
   let route = link;
   if (link.startsWith('tvwatchtime://')) {
     const path = link.slice('tvwatchtime://'.length);
-    const [seg, id] = path.split('/');
-    if (seg === 'episode' && id) route = `/episode/${id}`;
-    else if (seg === 'show' && id) route = `/show/${id}`;
-    else if (seg === 'list' && id) route = `/list/${id}`;
-    else if (seg === 'movie' && id) route = `/movie/${id}`;
-    else if (seg === 'contact') route = '/contact';
+    const qIndex = path.indexOf('?');
+    const pathname = qIndex >= 0 ? path.slice(0, qIndex) : path;
+    const query = qIndex >= 0 ? path.slice(qIndex) : '';
+    const [seg, id] = pathname.split('/');
+    if (seg === 'episode' && id) route = `/episode/${id}${query}`;
+    else if (seg === 'show' && id) route = `/show/${id}${query}`;
+    else if (seg === 'list' && id) route = `/list/${id}${query}`;
+    else if (seg === 'movie' && id) route = `/movie/${id}${query}`;
+    else if (seg === 'comment' && id) route = `/comment/${id}${query}`;
+    else if (seg === 'user' && id) route = `/user/${encodeURIComponent(id)}${query}`;
+    else if (seg === 'contact') route = id ? `/contact/${id}${query}` : '/contact';
+    else if (seg === 'stats') route = `/stats${query}`;
     else return;
   }
   if (route.startsWith('http://') || route.startsWith('https://')) {

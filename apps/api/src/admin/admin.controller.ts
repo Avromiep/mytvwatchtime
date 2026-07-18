@@ -56,6 +56,15 @@ export class AdminController {
     return { message: `Anime TVDB rehydration started (${n ?? 1000} items max). Check API logs.` };
   }
 
+  @Post('repair-type-mismatch/run')
+  @RequireRoles('ADMIN')
+  runRepairTypeMismatch() {
+    this.metadataBackfill.repairTypeMismatches().catch((e) => {
+      console.error('[Type Mismatch Repair] FAILED:', (e as Error)?.message ?? e);
+    });
+    return { message: 'Type mismatch repair started in background. Check API logs.' };
+  }
+
   @Post('tmdb-changes/run')
   @RequireRoles('ADMIN')
   runTmdbChanges() {
