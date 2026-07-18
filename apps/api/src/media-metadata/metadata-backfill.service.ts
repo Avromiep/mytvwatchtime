@@ -349,7 +349,7 @@ export class MetadataBackfillService {
         }
       }
       this.logger.log(
-        `Anime TVDB rehydration: ${succeeded}/${candidates.length} rehydrated, ${failed} failed, ${rateLimited} rate-limited, ${noTvdbId} without TVDB id, ${remapped} episodes remapped`,
+        `Anime TVDB rehydration: ${succeeded}/${candidates.length} rehydrated, ${failed} failed, ${rateLimited} rate-limited, ${noTvdbId} skipped (no TVDB id / already repaired), ${remapped} episodes remapped`,
       );
       return { processed: candidates.length, succeeded, failed, rateLimited, noTvdbId, remapped, sample };
     } finally {
@@ -387,7 +387,6 @@ export class MetadataBackfillService {
         externalIds: { some: { provider: ExternalProvider.TMDB } },
         NOT: { externalIds: { some: { provider: ExternalProvider.THE_TVDB } } },
       },
-      take: 1,
     });
     if (staleRows === 0) return notFixed;
 
@@ -396,6 +395,13 @@ export class MetadataBackfillService {
       include: { externalIds: true, show: { select: { yearStart: true } } },
     });
     if (!media) return notFixed;
+
+    // Skip when nothing new appeared since the last repair: rows KEPT by the remap
+    // (unmapped, but carrying user data) still look stale forever — without this gate
+    // every view re-runs a full TVDB hydration + remap for zero effect. A stale count
+    // that grew past the kept count means new contamination → re-arm the repair.
+    const keptBefore = (media.metadataProvenance as any)?.animeTvdbKeptUnmapped;
+    if (typeof keptBefore === 'number' && staleRows <= keptBefore) return notFixed;
 
     const tvdbId = await this.resolveAnimeTvdbId({
       id: media.id,
@@ -410,10 +416,21 @@ export class MetadataBackfillService {
     await this.prisma.mediaItem.update({ where: { id: mediaId }, data: { metadataRefreshedAt: null } });
     await this.meta.ensureShowFullTvdb(tvdbId);
     const remap = await this.structureRemap.remapShow(mediaId);
+    // Remember the kept-unmapped count so kept rows alone never re-arm this repair.
+    await this.prisma.mediaItem.update({
+      where: { id: mediaId },
+      data: {
+        metadataProvenance: {
+          ...((media.metadataProvenance as any) ?? {}),
+          animeTvdbKeptUnmapped: remap.unmapped,
+        },
+      },
+    });
     return { fixed: true, remapped: remap.mapped };
   }
 
   /**
+   * TVDB series id for an anime show, in trust order:
    *   1. the stored THE_TVDB external id;
    *   2. TMDB's `/tv/{id}/external_ids` lookup (authoritative cross-id — no wrong-match risk);
    *   3. a STRICT TVDB search fallback (exact normalized title + matching year — a wrong

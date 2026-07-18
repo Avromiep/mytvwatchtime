@@ -273,6 +273,11 @@ describe('MetadataBackfillService', () => {
       });
       expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
       expect(structureRemap.remapShow).toHaveBeenCalledWith('m1');
+      // Kept-unmapped count persisted so kept rows alone never re-arm the repair.
+      expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+        where: { id: 'm1' },
+        data: { metadataProvenance: { animeTvdbKeptUnmapped: 2 } },
+      });
       expect(res).toEqual({ fixed: true, remapped: 50 });
     });
 
@@ -286,6 +291,27 @@ describe('MetadataBackfillService', () => {
       expect(res.fixed).toBe(false);
       expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
       expect(structureRemap.remapShow).not.toHaveBeenCalled();
+    });
+
+    it('skips when only previously-kept unmapped rows remain (no re-hydration loop)', async () => {
+      prisma.mediaItem.findUnique.mockResolvedValue(
+        animeShow({ metadataProvenance: { animeTvdbKeptUnmapped: 27 } }),
+      );
+      prisma.episode.count.mockResolvedValue(27); // == kept count → nothing new
+      const res = await service.fixAnimeShowFromTvdb('m1');
+      expect(res.fixed).toBe(false);
+      expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+      expect(tvdb.searchShows).not.toHaveBeenCalled();
+    });
+
+    it('re-arms the repair when new stale rows appear (count grew past kept count)', async () => {
+      prisma.mediaItem.findUnique.mockResolvedValue(
+        animeShow({ metadataProvenance: { animeTvdbKeptUnmapped: 27 } }),
+      );
+      prisma.episode.count.mockResolvedValue(28); // new contamination
+      const res = await service.fixAnimeShowFromTvdb('m1');
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
+      expect(res.fixed).toBe(true);
     });
 
     it('coalesces concurrent repairs for the same show (detail + episodes race)', async () => {

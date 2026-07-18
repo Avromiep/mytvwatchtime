@@ -207,13 +207,12 @@ export class StructureRemapService {
     }
 
     // Unmapped rows: delete only when they carry NO user data; keep (and report) the rest.
+    const keptLabels: string[] = [];
     for (const s of unmapped) {
       try {
         if (await this.hasUserData(s.id)) {
           stats.unmapped++;
-          this.logger.warn(
-            `remap: kept unmapped episode ${s.id} (S${s.seasonNumber}E${s.number}) — has user data`,
-          );
+          keptLabels.push(`S${s.seasonNumber}E${s.number}`);
         } else {
           await this.prisma.episode.delete({ where: { id: s.id } });
           stats.episodesRemoved++;
@@ -222,6 +221,15 @@ export class StructureRemapService {
         stats.unmapped++;
         this.logger.warn(`remap: failed to clean stale episode ${s.id}: ${(e as Error).message}`);
       }
+    }
+    // One aggregated line instead of a warning per kept episode (long-running shows can
+    // keep dozens — per-row logs flood the API log on every re-run).
+    if (keptLabels.length > 0) {
+      const preview = keptLabels.slice(0, 8).join(', ');
+      const more = keptLabels.length > 8 ? `, … +${keptLabels.length - 8} more` : '';
+      this.logger.warn(
+        `remap: kept ${keptLabels.length} unmapped episodes with user data (${preview}${more})`,
+      );
     }
 
     // Recompute per-user progress caches for everyone touched.
