@@ -1,10 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ExternalProvider } from '@tvwatch/shared';
+import { ExternalProvider, ProviderEntityKind } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { MediaMetadataService } from './media-metadata.service';
 import { HydrationQueue } from './hydration/hydration.queue';
 import { TmdbClient } from './providers/tmdb.client';
+import { TvdbProvider } from './providers/tvdb.provider';
+import { isProviderError } from './providers/shared/provider-errors';
+import { ProviderThrottled } from './providers/shared/provider-http';
+import { StructureRemapService } from './structure-remap.service';
+import { slugify } from './util/slugify';
 
 /**
  * Metadata health stats + background backfill.
@@ -23,6 +28,8 @@ export class MetadataBackfillService {
   private readonly defaultBatchSize = 1000;
   /** Prevents concurrent batches from picking the same items. */
   private backfillRunning = false;
+  /** Prevents concurrent anime→TVDB rehydration batches. */
+  private animeFixRunning = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -30,30 +37,72 @@ export class MetadataBackfillService {
     private readonly hydration: HydrationQueue,
     private readonly redis: RedisService,
     private readonly tmdb: TmdbClient,
+    private readonly tvdb: TvdbProvider,
+    private readonly structureRemap: StructureRemapService,
   ) {}
 
   /** Counts of media needing attention — powers the admin "metadata health" view. */
   async getHealthStats() {
     // Optimized queries: avoid NOT EXISTS on episodes (573k rows); check at the season level.
-    const [total, neverHydrated, showsNoSeasons, moviesMissingOverview, tvdbOnly, stale, classification] =
-      await Promise.all([
-        this.prisma.mediaItem.count(),
-        this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
-        this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
+    const [
+      total,
+      neverHydrated,
+      showsNoSeasons,
+      moviesMissingOverview,
+      tvdbOnly,
+      stale,
+      classification,
+      animeOnTmdb,
+      animeOnTmdbNoTvdbId,
+    ] = await Promise.all([
+      this.prisma.mediaItem.count(),
+      this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
+      this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
           JOIN shows sh ON sh.media_id = m.id
           WHERE m.type='SHOW' AND NOT EXISTS (SELECT 1 FROM seasons s WHERE s.show_id = sh.id)`,
-        this.prisma.mediaItem.count({ where: { type: 'MOVIE', overview: null } }),
-        this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
+      this.prisma.mediaItem.count({ where: { type: 'MOVIE', overview: null } }),
+      this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
           WHERE EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=m.id AND e.provider='THE_TVDB')
             AND NOT EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=m.id AND e.provider='TMDB')`,
-        this.prisma.mediaItem.count({
-          where: { metadataRefreshedAt: { lt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 30) } },
-        }),
-        this.prisma.mediaItem.groupBy({
-          by: ['contentClassification'],
-          _count: { _all: true },
-        }),
-      ]);
+      this.prisma.mediaItem.count({
+        where: { metadataRefreshedAt: { lt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 30) } },
+      }),
+      this.prisma.mediaItem.groupBy({
+        by: ['contentClassification'],
+        _count: { _all: true },
+      }),
+      // Animation-genre shows whose STRUCTURE came from TMDB (TMDB anime structures are
+      // often wrong — these should be TVDB-hydrated). "TMDB-structured" = has TMDB
+      // episode external ids and no TVDB episode external ids.
+      this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
+          JOIN shows sh ON sh.media_id = m.id
+          WHERE m.type='SHOW'
+            AND EXISTS (SELECT 1 FROM media_genres mg JOIN genres g ON g.id = mg.genre_id
+                        WHERE mg.media_id = m.id AND g.slug = 'animation')
+            AND EXISTS (SELECT 1 FROM seasons s
+                        JOIN episodes e ON e.season_id = s.id
+                        JOIN episode_external_ids ee ON ee.episode_id = e.id
+                        WHERE s.show_id = sh.id AND ee.provider = 'TMDB')
+            AND NOT EXISTS (SELECT 1 FROM seasons s
+                        JOIN episodes e ON e.season_id = s.id
+                        JOIN episode_external_ids ee ON ee.episode_id = e.id
+                        WHERE s.show_id = sh.id AND ee.provider = 'THE_TVDB')`,
+      // Same set, but missing the series-level TVDB id (the fix needs a strict TVDB search).
+      this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
+          JOIN shows sh ON sh.media_id = m.id
+          WHERE m.type='SHOW'
+            AND EXISTS (SELECT 1 FROM media_genres mg JOIN genres g ON g.id = mg.genre_id
+                        WHERE mg.media_id = m.id AND g.slug = 'animation')
+            AND EXISTS (SELECT 1 FROM seasons s
+                        JOIN episodes e ON e.season_id = s.id
+                        JOIN episode_external_ids ee ON ee.episode_id = e.id
+                        WHERE s.show_id = sh.id AND ee.provider = 'TMDB')
+            AND NOT EXISTS (SELECT 1 FROM seasons s
+                        JOIN episodes e ON e.season_id = s.id
+                        JOIN episode_external_ids ee ON ee.episode_id = e.id
+                        WHERE s.show_id = sh.id AND ee.provider = 'THE_TVDB')
+            AND NOT EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id AND x.provider = 'THE_TVDB')`,
+    ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     return {
       total,
@@ -68,6 +117,8 @@ export class MetadataBackfillService {
           c._count._all,
         ]),
       ),
+      animeOnTmdb: toNum(animeOnTmdb as any),
+      animeOnTmdbNoTvdbId: toNum(animeOnTmdbNoTvdbId as any),
     };
   }
 
@@ -93,7 +144,7 @@ export class MetadataBackfillService {
       },
       orderBy: { createdAt: 'asc' }, // oldest first
       take: limit,
-      include: { externalIds: true },
+      include: { externalIds: true, genres: { include: { genre: true } } },
     });
 
     let succeeded = 0;
@@ -102,7 +153,12 @@ export class MetadataBackfillService {
     for (let i = 0; i < candidates.length; i++) {
       const m = candidates[i];
       try {
-        await this.hydrateOne(m.id, m.externalIds as unknown as { provider: ExternalProvider; value: string }[], m.type);
+        await this.hydrateOne(
+          m.id,
+          m.externalIds as unknown as { provider: ExternalProvider; value: string }[],
+          m.type,
+          m.genres.map((g) => g.genre.slug),
+        );
         succeeded++;
         if (sample.length < 5) sample.push(m.title);
       } catch (e) {
@@ -133,18 +189,31 @@ export class MetadataBackfillService {
    * season/episode structure that the user's watch history is built on. TMDB is only used for:
    *   - media with no existing structure (never-hydrated stubs)
    *   - media with no TVDB id (TMDB is the only source)
+   *
+   * Animation-genre shows with a TVDB id are TVDB-authoritative: they re-hydrate from TVDB
+   * even when their current structure came from TMDB (the bulk fix is owned by
+   * rehydrateAnimeFromTvdb / the anime_tvdb_rehydrate cron).
    */
-  private async hydrateOne(mediaId: string, externals: { provider: ExternalProvider; value: string }[], type: string) {
+  private async hydrateOne(
+    mediaId: string,
+    externals: { provider: ExternalProvider; value: string }[],
+    type: string,
+    genreSlugs: string[] = [],
+  ) {
     const tmdb = externals.find((e) => e.provider === ExternalProvider.TMDB);
     const tvdb = externals.find((e) => e.provider === ExternalProvider.THE_TVDB);
     const isShow = type === 'SHOW';
+    const hasAnimation = genreSlugs.includes('animation');
 
     // Detect existing structure: shows with ≥1 episode, movies with overview.
     const hasStructure = isShow
       ? (await this.prisma.episode.count({ where: { season: { show: { mediaId } } }, take: 1 })) > 0
       : (await this.prisma.mediaItem.count({ where: { id: mediaId, type: 'MOVIE', overview: { not: null } } })) > 0;
 
-    if (hasStructure && tvdb) {
+    if (isShow && hasAnimation && tvdb) {
+      // Animation show with a TVDB id → TVDB, even if currently TMDB-structured.
+      await this.meta.ensureShowFullTvdb(Number(tvdb.value)).catch(() => undefined);
+    } else if (hasStructure && tvdb) {
       // Already has TVDB-sourced structure → keep TVDB. NEVER override with TMDB.
       if (isShow) await this.meta.ensureShowFullTvdb(Number(tvdb.value)).catch(() => undefined);
       else await this.meta.ensureMovieFullTvdb(Number(tvdb.value)).catch(() => undefined);
@@ -163,21 +232,216 @@ export class MetadataBackfillService {
     await this.meta.scheduleClassification(mediaId).catch(() => undefined);
   }
 
+  // ---- Anime → TVDB rehydration (admin button + anime_tvdb_rehydrate cron) ----
+
+  /**
+   * Re-hydrate Animation-genre shows whose structure came from TMDB. TMDB anime
+   * season/episode structures are often wrong, so these shows are TVDB-authoritative.
+   *
+   * Selection mirrors the `animeOnTmdb` health stat: genre slug `animation`, has TMDB
+   * episode external ids, no TVDB episode external ids. Per show: resolve the TVDB series
+   * id (stored external id → TMDB /external_ids cross-id → STRICT exact-title+year TVDB
+   * search), clear `metadataRefreshedAt` to bypass the 24h staleness gate, then
+   * ensureShowFullTvdb (union upsert — never deletes existing structure or watch history).
+   * Afterwards StructureRemapService transfers user watch data from any stale TMDB-only
+   * episode rows onto the fresh TVDB structure.
+   *
+   * When TVDB rate-limits us the batch stops early — remaining shows stay on TMDB until
+   * the next cron run or a manual "Fix Anime → TVDB" click.
+   */
+  async rehydrateAnimeFromTvdb(limit?: number): Promise<{
+    processed: number;
+    succeeded: number;
+    failed: number;
+    rateLimited: number;
+    noTvdbId: number;
+    remapped: number;
+    sample: string[];
+  }> {
+    const empty = {
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      rateLimited: 0,
+      noTvdbId: 0,
+      remapped: 0,
+      sample: [] as string[],
+    };
+    if (this.animeFixRunning) {
+      this.logger.log('Anime TVDB rehydration already running — skipping');
+      return empty;
+    }
+    if (!this.tvdb.enabled) {
+      this.logger.warn('TVDB not configured — skipping anime TVDB rehydration');
+      return empty;
+    }
+    this.animeFixRunning = true;
+    try {
+      const candidates = await this.prisma.mediaItem.findMany({
+        where: {
+          type: 'SHOW',
+          genres: { some: { genre: { slug: 'animation' } } },
+          // TMDB-structured: has TMDB episode external ids…
+          show: {
+            seasons: { some: { episodes: { some: { externalIds: { some: { provider: ExternalProvider.TMDB } } } } } },
+          },
+          // …and NOT already TVDB-structured.
+          NOT: {
+            show: {
+              seasons: { some: { episodes: { some: { externalIds: { some: { provider: ExternalProvider.THE_TVDB } } } } } },
+            },
+          },
+        },
+        orderBy: { title: 'asc' },
+        take: Math.max(1, Math.min(limit ?? 1000, 100000)),
+        include: { externalIds: true, show: { select: { yearStart: true } } },
+      });
+
+      let succeeded = 0;
+      let failed = 0;
+      let rateLimited = 0;
+      let noTvdbId = 0;
+      let remapped = 0;
+      const sample: string[] = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const m = candidates[i];
+        try {
+          const tvdbId = await this.resolveAnimeTvdbId({
+            id: m.id,
+            title: m.title,
+            externalIds: m.externalIds as unknown as { provider: ExternalProvider; value: string }[],
+            show: m.show,
+          });
+          if (!tvdbId) {
+            noTvdbId++;
+            continue;
+          }
+          // Bypass the 24h isStale gate inside ensureShowFullTvdb — this is a forced
+          // provider switch, not a routine refresh.
+          await this.prisma.mediaItem.update({ where: { id: m.id }, data: { metadataRefreshedAt: null } });
+          await this.meta.ensureShowFullTvdb(tvdbId);
+          // Transfer user watch data from stale TMDB-only episode rows to the TVDB structure.
+          const remap = await this.structureRemap.remapShow(m.id);
+          remapped += remap.mapped;
+          succeeded++;
+          if (sample.length < 5) sample.push(m.title);
+        } catch (e) {
+          if (this.isRateLimitError(e)) {
+            rateLimited++;
+            this.logger.warn(`Anime TVDB rehydration rate-limited after ${i} items — deferring the rest`);
+            break;
+          }
+          failed++;
+          this.logger.debug(`anime tvdb rehydration failed for ${m.title}: ${(e as Error).message}`);
+        }
+        if ((i + 1) % 25 === 0) {
+          this.logger.log(`Anime TVDB rehydration progress: ${i + 1}/${candidates.length} (${succeeded} ok, ${failed} fail, ${noTvdbId} no-tvdb-id)`);
+        }
+      }
+      this.logger.log(
+        `Anime TVDB rehydration: ${succeeded}/${candidates.length} rehydrated, ${failed} failed, ${rateLimited} rate-limited, ${noTvdbId} without TVDB id, ${remapped} episodes remapped`,
+      );
+      return { processed: candidates.length, succeeded, failed, rateLimited, noTvdbId, remapped, sample };
+    } finally {
+      this.animeFixRunning = false;
+    }
+  }
+
+  /**
+   * TVDB series id for an anime show, in trust order:
+   *   1. the stored THE_TVDB external id;
+   *   2. TMDB's `/tv/{id}/external_ids` lookup (authoritative cross-id — no wrong-match risk);
+   *   3. a STRICT TVDB search fallback (exact normalized title + matching year — a wrong
+   *      match would corrupt the show's structure).
+   * Returns null when no id can be trusted.
+   */
+  private async resolveAnimeTvdbId(media: {
+    id: string;
+    title: string;
+    externalIds: { provider: ExternalProvider; value: string }[];
+    show: { yearStart: number | null } | null;
+  }): Promise<number | null> {
+    const existing = media.externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB);
+    if (existing) return Number(existing.value);
+
+    // TMDB cross-id lookup: TMDB knows the equivalent TVDB series id for most shows.
+    const tmdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
+    if (tmdbExt) {
+      const ext = await this.tmdb.get<{ tvdb_id?: number | null }>(`/tv/${tmdbExt.value}/external_ids`, {});
+      if (ext?.tvdb_id) {
+        // TMDB's own cross-id is authoritative: when it is already claimed by another
+        // media row this show is a duplicate — never title-search past it (a wrong
+        // search hit would merge structures).
+        const claimed = await this.claimTvdbId(media.id, ext.tvdb_id);
+        return claimed ? ext.tvdb_id : null;
+      }
+    }
+
+    const res = await this.tvdb.searchShows(media.title, 1);
+    const want = slugify(media.title);
+    const year = media.show?.yearStart ?? null;
+    const hit = res.items.find(
+      (it) =>
+        it.tvdbId &&
+        slugify(it.title) === want &&
+        (year == null || (it.year != null && Math.abs(it.year - year) <= 1)),
+    );
+    if (!hit?.tvdbId) return null;
+    const claimed = await this.claimTvdbId(media.id, hit.tvdbId);
+    return claimed ? hit.tvdbId : null;
+  }
+
+  /**
+   * Link a TVDB series id to our media row (required before ensureShowFullTvdb, which
+   * resolves the row via this external id). Never hijacks an id already linked to a
+   * different media row — that would merge this show's structure into the other row.
+   * Returns false when the id cannot be claimed.
+   */
+  private async claimTvdbId(mediaId: string, tvdbId: number): Promise<boolean> {
+    const linked = await this.prisma.externalId.findFirst({
+      where: { provider: ExternalProvider.THE_TVDB, value: String(tvdbId) },
+      select: { mediaId: true },
+    });
+    if (linked) return linked.mediaId === mediaId;
+    await this.prisma.externalId.create({
+      data: {
+        mediaId,
+        provider: ExternalProvider.THE_TVDB,
+        providerEntityKind: ProviderEntityKind.SERIES,
+        value: String(tvdbId),
+      },
+    });
+    return true;
+  }
+
+  /** Real TVDB 429 (ProviderError) or internal fixed-window throttle (ProviderThrottled). */
+  private isRateLimitError(e: unknown): boolean {
+    return e instanceof ProviderThrottled || (isProviderError(e) && e.category === 'rate_limited');
+  }
+
   // ---- TMDB Changes sync (daily cron) ----
 
   /**
    * Call TMDB's /tv/changes and /movie/changes to detect media whose TMDB data changed
    * since the last run. For each changed ID that exists in our DB: clear the TMDB provider
    * cache, then ACTUALLY re-hydrate (ensureShowFull/ensureMovieFull) so the data is updated
-   * immediately — not just marked stale.
+   * immediately — not just marked stale. Animation-genre shows are skipped: they are
+   * TVDB-authoritative and owned by the anime TVDB rehydration job.
    *
    * First run goes back 14 days; subsequent runs use the date stored in Redis.
    * Fully paginated (no arbitrary cap).
    */
-  async syncTmdbChanges(): Promise<{ tvChanged: number; movieChanged: number; matched: number; hydrated: number; failed: number }> {
+  async syncTmdbChanges(): Promise<{
+    tvChanged: number;
+    movieChanged: number;
+    matched: number;
+    hydrated: number;
+    failed: number;
+    skippedAnime: number;
+  }> {
     if (!this.tmdb.enabled) {
       this.logger.warn('TMDB not configured — skipping changes sync');
-      return { tvChanged: 0, movieChanged: 0, matched: 0, hydrated: 0, failed: 0 };
+      return { tvChanged: 0, movieChanged: 0, matched: 0, hydrated: 0, failed: 0, skippedAnime: 0 };
     }
 
     // Start date: since last sync (Redis), or 14 days ago on first run.
@@ -197,7 +461,8 @@ export class MetadataBackfillService {
     // Store the end date so the next run starts from here.
     await this.redis.set('TMDB_CHANGES_LAST_RUN', endDate.toISOString(), 86400 * 30);
 
-    if (allIds.length === 0) return { tvChanged: 0, movieChanged: 0, matched: 0, hydrated: 0, failed: 0 };
+    if (allIds.length === 0)
+      return { tvChanged: 0, movieChanged: 0, matched: 0, hydrated: 0, failed: 0, skippedAnime: 0 };
 
     // Match against our DB in chunks (PostgreSQL has a 32767 bind-variable limit).
     const matched: { mediaId: string; value: string; media: { type: string; externalIds: any[] } }[] = [];
@@ -216,11 +481,24 @@ export class MetadataBackfillService {
     // The caches re-populate on next access; this ensures re-hydration gets fresh TMDB data.
     await this.bulkClearTmdbCache();
 
+    // Animation-genre shows are TVDB-authoritative — never re-hydrate them from TMDB here.
+    // The anime_tvdb_rehydrate cron (and the Metadata Health fix button) owns them.
+    const animationRows = await this.prisma.mediaItem.findMany({
+      where: { type: 'SHOW', genres: { some: { genre: { slug: 'animation' } } } },
+      select: { id: true },
+    });
+    const animationShows = new Set(animationRows.map((r) => r.id));
+
     // Actually re-hydrate each matched media from TMDB (rate-limited by the gateway).
     let hydrated = 0;
     let failed = 0;
+    let skippedAnime = 0;
     for (let i = 0; i < matched.length; i++) {
       const m = matched[i];
+      if (m.media.type === 'SHOW' && animationShows.has(m.mediaId)) {
+        skippedAnime++;
+        continue;
+      }
       try {
         if (m.media.type === 'SHOW') {
           await this.meta.ensureShowFull(Number(m.value));
@@ -235,12 +513,23 @@ export class MetadataBackfillService {
       }
       // Progress log every 500 items so the admin can see it's working.
       if ((i + 1) % 500 === 0) {
-        this.logger.log(`TMDB changes sync progress: ${i + 1}/${matched.length} processed (${hydrated} ok, ${failed} fail)`);
+        this.logger.log(
+          `TMDB changes sync progress: ${i + 1}/${matched.length} processed (${hydrated} ok, ${failed} fail, ${skippedAnime} anime-skipped)`,
+        );
       }
     }
 
-    this.logger.log(`TMDB changes sync complete: ${hydrated} re-hydrated, ${failed} failed`);
-    return { tvChanged: tvIds.length, movieChanged: movieIds.length, matched: matched.length, hydrated, failed };
+    this.logger.log(
+      `TMDB changes sync complete: ${hydrated} re-hydrated, ${failed} failed, ${skippedAnime} anime shows skipped`,
+    );
+    return {
+      tvChanged: tvIds.length,
+      movieChanged: movieIds.length,
+      matched: matched.length,
+      hydrated,
+      failed,
+      skippedAnime,
+    };
   }
 
   /** Bulk-clear all cached TMDB responses (one SCAN pass, non-blocking). */

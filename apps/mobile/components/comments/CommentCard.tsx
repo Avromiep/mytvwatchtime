@@ -7,6 +7,7 @@ import type { CommentDto, CommentListRefDto, CommentMediaRefDto } from '@tvwatch
 import { formatDateTime } from '@tvwatch/shared';
 import { PosterImage, T, APP_ICON } from '../primitives';
 import { CommentMedia } from './CommentMedia';
+import { threadIndent } from './thread-utils';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
 
@@ -29,6 +30,14 @@ export interface CommentCardProps {
   interactive?: boolean;
   /** Compact avatar (used for replies). */
   compact?: boolean;
+  /** Nesting depth below the thread root — indents the card and draws the thread line. */
+  depth?: number;
+  /** Collapsed state of this comment's sub-thread (chevron shown when it has replies). */
+  collapsed?: boolean;
+  /** Toggle the collapsed state of this comment's sub-thread. */
+  onToggleCollapse?: (c: CommentDto) => void;
+  /** When provided, the reply action sets the composer target instead of navigating. */
+  onReply?: (c: CommentDto) => void;
 }
 
 /** Stop a press from bubbling into the card's open-thread handler (web). */
@@ -45,204 +54,256 @@ export function CommentCard({
   showReplyAction = false,
   interactive = false,
   compact = false,
+  depth = 0,
+  collapsed = false,
+  onToggleCollapse,
+  onReply,
 }: CommentCardProps) {
   const { tokens, resolvedLocale } = useAppearance();
   const { t } = useTranslation(['comments', 'common']);
   const tombstone = comment.deletedByUser;
   const avatar = compact ? AVATAR_COMPACT : AVATAR;
   const author = comment.author;
+  const nested = depth > 0;
+  const showCollapse = !!onToggleCollapse && comment.repliesCount > 0;
 
   const openThread = () => onOpenThread?.(comment);
+  const pressReply = () => (onReply ? onReply(comment) : openThread());
   const openMedia = (media: CommentMediaRefDto) =>
     router.push(`/${media.mediaType === 'SHOW' ? 'show' : 'movie'}/${media.mediaId}` as any);
   const openList = (list: CommentListRefDto) => router.push(`/list/${list.id}` as any);
 
   return (
-    <Pressable
-      style={({ pressed }) => [
-        styles.card,
-        { backgroundColor: tokens.cardBackground },
-        compact && styles.cardCompact,
-        interactive && pressed && styles.cardPressed,
-      ]}
-      onPress={interactive ? openThread : undefined}
-      disabled={!interactive}
+    <View
+      style={
+        nested
+          ? {
+              marginLeft: threadIndent(depth),
+              borderLeftWidth: 2,
+              borderColor: tokens.border,
+              paddingLeft: spacing.sm,
+            }
+          : undefined
+      }
     >
-      {/* Header: avatar · name/date · overflow (top-right) */}
-      <View style={styles.header}>
-        <Pressable
-          onPress={(e) => {
-            stop(e);
-            onPressAuthor?.(comment);
-          }}
-          hitSlop={6}
-          accessibilityRole="button"
-          accessibilityLabel={author?.username}
-        >
-          <PosterImage uri={author?.avatarUrl} fallback={APP_ICON} style={{ width: avatar, height: avatar, borderRadius: avatar / 2 }} />
-        </Pressable>
-
-        <View style={styles.nameCol}>
-          <View style={styles.nameRow}>
-            <T variant="caption" style={{ fontWeight: '700', color: tokens.textPrimary }}>
-              {author?.username}
-            </T>
-            {comment.isEdited && !tombstone ? (
-              <T variant="micro" muted style={{ marginLeft: spacing.xs }}>
-                · {t('comments:edited')}
-              </T>
-            ) : null}
-          </View>
-          <T variant="micro" muted style={{ marginTop: 2 }}>
-            {formatDateTime(comment.createdAt, resolvedLocale)}
-          </T>
-        </View>
-
-        <Pressable
-          onPress={(e) => {
-            stop(e);
-            onOverflow(comment);
-          }}
-          hitSlop={10}
-          style={styles.overflowBtn}
-          accessibilityRole="button"
-          accessibilityLabel={t('common:moreOptions')}
-        >
-          <Ionicons name="ellipsis-horizontal" size={20} color={tokens.textMuted} />
-        </Pressable>
-      </View>
-
-      {/* Body */}
-      {tombstone ? (
-        <T variant="body" muted style={[styles.body, { fontStyle: 'italic' }]}>
-          {t('comments:deleted')}
-        </T>
-      ) : comment.body ? (
-        <T variant="body" style={styles.body}>
-          {comment.body}
-        </T>
-      ) : null}
-
-      {/* Media (image/GIF) — fills card width, opens full-screen viewer */}
-      {!tombstone ? <CommentMedia image={comment.image} gifUrl={comment.gifUrl} /> : null}
-
-      {/* Attached show/movie card — opens the media detail page */}
-      {!tombstone && comment.media ? (
-        <Pressable
-          onPress={(e) => {
-            stop(e);
-            openMedia(comment.media!);
-          }}
-          style={({ pressed }) => [
-            styles.mediaCard,
-            { backgroundColor: tokens.surfaceElevated, opacity: pressed ? 0.85 : 1 },
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel={comment.media.title}
-        >
-          <PosterImage uri={comment.media.posterUrl} style={styles.mediaPoster} />
-          <View style={styles.mediaMeta}>
-            <T variant="caption" style={{ fontWeight: '700' }} numberOfLines={2}>
-              {comment.media.title}
-            </T>
-            <View style={styles.mediaMetaRow}>
+      <Pressable
+        style={({ pressed }) => [
+          styles.card,
+          { backgroundColor: tokens.cardBackground },
+          compact && styles.cardCompact,
+          interactive && pressed && styles.cardPressed,
+        ]}
+        onPress={interactive ? openThread : undefined}
+        disabled={!interactive}
+      >
+        {/* Header: avatar · name/date · overflow (top-right) */}
+        <View style={styles.header}>
+          {showCollapse ? (
+            <Pressable
+              onPress={(e) => {
+                stop(e);
+                onToggleCollapse?.(comment);
+              }}
+              hitSlop={8}
+              style={styles.collapseBtn}
+              accessibilityRole="button"
+              accessibilityLabel={t(
+                collapsed ? 'comments:expandThread' : 'comments:collapseThread',
+              )}
+            >
               <Ionicons
-                name={comment.media.mediaType === 'SHOW' ? 'tv-outline' : 'film-outline'}
-                size={12}
+                name={collapsed ? 'chevron-forward' : 'chevron-down'}
+                size={16}
                 color={tokens.textMuted}
               />
-              {comment.media.year ? (
-                <T variant="micro" muted style={{ marginLeft: 4 }}>
-                  {comment.media.year}
-                </T>
-              ) : null}
-            </View>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={tokens.textMuted} />
-        </Pressable>
-      ) : null}
-
-      {/* Attached list card — opens the list page */}
-      {!tombstone && comment.list ? (
-        <Pressable
-          onPress={(e) => {
-            stop(e);
-            openList(comment.list!);
-          }}
-          style={({ pressed }) => [
-            styles.mediaCard,
-            { backgroundColor: tokens.surfaceElevated, opacity: pressed ? 0.85 : 1 },
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel={comment.list.title}
-        >
-          {comment.list.coverUrl ? (
-            <PosterImage uri={comment.list.coverUrl} style={styles.listCover} />
-          ) : (
-            <View style={[styles.listCover, styles.listCoverFallback, { backgroundColor: tokens.surface }]}>
-              <Ionicons name="list-outline" size={20} color={tokens.primary} />
-            </View>
-          )}
-          <View style={styles.mediaMeta}>
-            <T variant="caption" style={{ fontWeight: '700' }} numberOfLines={2}>
-              {comment.list.title}
-            </T>
-            <T variant="micro" muted style={{ marginTop: 2 }}>
-              {comment.list.movieCount > 0 ? `🎬 ${comment.list.movieCount}` : ''}
-              {comment.list.movieCount > 0 && comment.list.showCount > 0 ? '  ' : ''}
-              {comment.list.showCount > 0 ? `📺 ${comment.list.showCount}` : ''}
-            </T>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={tokens.textMuted} />
-        </Pressable>
-      ) : null}
-
-      {/* Action row: like · reply (overflow is in the header) */}
-      <View style={styles.actions}>
-        <Pressable
-          onPress={(e) => {
-            stop(e);
-            if (!tombstone) onLike(comment);
-          }}
-          disabled={tombstone}
-          hitSlop={8}
-          style={styles.actionBtn}
-          accessibilityRole="button"
-          accessibilityLabel={t('comments:like')}
-        >
-          <Ionicons
-            name={comment.likedByMe ? 'heart' : 'heart-outline'}
-            size={18}
-            color={comment.likedByMe ? tokens.favorite : tombstone ? tokens.textDim : tokens.textMuted}
-          />
-          <T variant="micro" muted style={{ marginLeft: 4 }}>
-            {comment.likesCount}
-          </T>
-        </Pressable>
-
-        {showReplyAction ? (
+            </Pressable>
+          ) : null}
           <Pressable
             onPress={(e) => {
               stop(e);
-              openThread();
+              onPressAuthor?.(comment);
             }}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel={author?.username}
+          >
+            <PosterImage
+              uri={author?.avatarUrl}
+              fallback={APP_ICON}
+              style={{ width: avatar, height: avatar, borderRadius: avatar / 2 }}
+            />
+          </Pressable>
+
+          <View style={styles.nameCol}>
+            <View style={styles.nameRow}>
+              <T variant="caption" style={{ fontWeight: '700', color: tokens.textPrimary }}>
+                {author?.username}
+              </T>
+              {comment.isEdited && !tombstone ? (
+                <T variant="micro" muted style={{ marginLeft: spacing.xs }}>
+                  · {t('comments:edited')}
+                </T>
+              ) : null}
+            </View>
+            <T variant="micro" muted style={{ marginTop: 2 }}>
+              {formatDateTime(comment.createdAt, resolvedLocale)}
+            </T>
+          </View>
+
+          <Pressable
+            onPress={(e) => {
+              stop(e);
+              onOverflow(comment);
+            }}
+            hitSlop={10}
+            style={styles.overflowBtn}
+            accessibilityRole="button"
+            accessibilityLabel={t('common:moreOptions')}
+          >
+            <Ionicons name="ellipsis-horizontal" size={20} color={tokens.textMuted} />
+          </Pressable>
+        </View>
+
+        {/* Body */}
+        {tombstone ? (
+          <T variant="body" muted style={[styles.body, { fontStyle: 'italic' }]}>
+            {t('comments:deleted')}
+          </T>
+        ) : comment.body ? (
+          <T variant="body" style={styles.body}>
+            {comment.body}
+          </T>
+        ) : null}
+
+        {/* Media (image/GIF) — fills card width, opens full-screen viewer */}
+        {!tombstone ? <CommentMedia image={comment.image} gifUrl={comment.gifUrl} /> : null}
+
+        {/* Attached show/movie card — opens the media detail page */}
+        {!tombstone && comment.media ? (
+          <Pressable
+            onPress={(e) => {
+              stop(e);
+              openMedia(comment.media!);
+            }}
+            style={({ pressed }) => [
+              styles.mediaCard,
+              { backgroundColor: tokens.surfaceElevated, opacity: pressed ? 0.85 : 1 },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={comment.media.title}
+          >
+            <PosterImage uri={comment.media.posterUrl} style={styles.mediaPoster} />
+            <View style={styles.mediaMeta}>
+              <T variant="caption" style={{ fontWeight: '700' }} numberOfLines={2}>
+                {comment.media.title}
+              </T>
+              <View style={styles.mediaMetaRow}>
+                <Ionicons
+                  name={comment.media.mediaType === 'SHOW' ? 'tv-outline' : 'film-outline'}
+                  size={12}
+                  color={tokens.textMuted}
+                />
+                {comment.media.year ? (
+                  <T variant="micro" muted style={{ marginLeft: 4 }}>
+                    {comment.media.year}
+                  </T>
+                ) : null}
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={tokens.textMuted} />
+          </Pressable>
+        ) : null}
+
+        {/* Attached list card — opens the list page */}
+        {!tombstone && comment.list ? (
+          <Pressable
+            onPress={(e) => {
+              stop(e);
+              openList(comment.list!);
+            }}
+            style={({ pressed }) => [
+              styles.mediaCard,
+              { backgroundColor: tokens.surfaceElevated, opacity: pressed ? 0.85 : 1 },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={comment.list.title}
+          >
+            {comment.list.coverUrl ? (
+              <PosterImage uri={comment.list.coverUrl} style={styles.listCover} />
+            ) : (
+              <View
+                style={[
+                  styles.listCover,
+                  styles.listCoverFallback,
+                  { backgroundColor: tokens.surface },
+                ]}
+              >
+                <Ionicons name="list-outline" size={20} color={tokens.primary} />
+              </View>
+            )}
+            <View style={styles.mediaMeta}>
+              <T variant="caption" style={{ fontWeight: '700' }} numberOfLines={2}>
+                {comment.list.title}
+              </T>
+              <T variant="micro" muted style={{ marginTop: 2 }}>
+                {comment.list.movieCount > 0 ? `🎬 ${comment.list.movieCount}` : ''}
+                {comment.list.movieCount > 0 && comment.list.showCount > 0 ? '  ' : ''}
+                {comment.list.showCount > 0 ? `📺 ${comment.list.showCount}` : ''}
+              </T>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={tokens.textMuted} />
+          </Pressable>
+        ) : null}
+
+        {/* Action row: like · reply (overflow is in the header) */}
+        <View style={styles.actions}>
+          <Pressable
+            onPress={(e) => {
+              stop(e);
+              if (!tombstone) onLike(comment);
+            }}
+            disabled={tombstone}
             hitSlop={8}
             style={styles.actionBtn}
             accessibilityRole="button"
-            accessibilityLabel={t('comments:openThread')}
+            accessibilityLabel={t('comments:like')}
           >
-            <Ionicons name="chatbubble-outline" size={18} color={tokens.textMuted} />
+            <Ionicons
+              name={comment.likedByMe ? 'heart' : 'heart-outline'}
+              size={18}
+              color={
+                comment.likedByMe ? tokens.favorite : tombstone ? tokens.textDim : tokens.textMuted
+              }
+            />
             <T variant="micro" muted style={{ marginLeft: 4 }}>
-              {comment.repliesCount > 0
-                ? comment.repliesCount === 1
-                  ? t('common:replySingular', { count: 1 })
-                  : t('common:replyPlural', { count: comment.repliesCount })
-                : t('comments:reply')}
+              {comment.likesCount}
             </T>
           </Pressable>
-        ) : null}
-      </View>
-    </Pressable>
+
+          {showReplyAction || (onReply && !tombstone) ? (
+            <Pressable
+              onPress={(e) => {
+                stop(e);
+                pressReply();
+              }}
+              hitSlop={8}
+              style={styles.actionBtn}
+              accessibilityRole="button"
+              accessibilityLabel={t('comments:openThread')}
+            >
+              <Ionicons name="chatbubble-outline" size={18} color={tokens.textMuted} />
+              <T variant="micro" muted style={{ marginLeft: 4 }}>
+                {comment.repliesCount > 0
+                  ? comment.repliesCount === 1
+                    ? t('common:replySingular', { count: 1 })
+                    : t('common:replyPlural', { count: comment.repliesCount })
+                  : t('comments:reply')}
+              </T>
+            </Pressable>
+          ) : null}
+        </View>
+      </Pressable>
+    </View>
   );
 }
 
@@ -251,6 +312,7 @@ const styles = StyleSheet.create({
   cardCompact: { padding: spacing.sm, borderRadius: radius.md },
   cardPressed: { opacity: 0.97 },
   header: { flexDirection: 'row', alignItems: 'center' },
+  collapseBtn: { padding: spacing.xs, marginRight: spacing.xs, marginLeft: -spacing.xs },
   nameCol: { flex: 1, marginLeft: spacing.md },
   nameRow: { flexDirection: 'row', alignItems: 'center' },
   overflowBtn: { padding: spacing.xs, marginLeft: spacing.xs },

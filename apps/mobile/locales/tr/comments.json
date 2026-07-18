@@ -54,5 +54,11 @@
   "mediaSearchPlaceholder": "Dizi veya film ara…",
   "mediaNoResults": "Sonuç yok.",
   "listsSectionTitle": "Listeleriniz",
-  "attachList": "Liste ekle"
+  "attachList": "Liste ekle",
+  "showMoreReplies": "Daha fazla yanıt göster ({{count}})",
+  "continueThread": "Bu başlığı sürdür",
+  "collapseThread": "Başlığı daralt",
+  "expandThread": "Başlığı genişlet",
+  "replyingTo": "@{{username}} yanıtlanıyor",
+  "cancelReply": "Yanıtı iptal et"
 }

@@ -18,7 +18,10 @@ export class ShowsService {
   ) {}
 
   async getShow(id: string, userId?: string) {
-    const media = await this.prisma.mediaItem.findUnique({ where: { id }, include: { externalIds: true } });
+    const media = await this.prisma.mediaItem.findUnique({
+      where: { id },
+      include: { externalIds: true, genres: { include: { genre: true } } },
+    });
     if (!media) {
       // allow fetching by tmdb numeric id when live metadata available
       if (this.tmdb.enabled && /^\d+$/.test(id)) {
@@ -37,8 +40,15 @@ export class ShowsService {
         localeMissing;
       const tmdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
       const tvdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB);
+      // Animation-genre shows are TVDB-authoritative (TMDB anime structures are often
+      // wrong): refresh from TVDB only — never re-poison from TMDB. On TVDB
+      // rate-limit/outage keep last-known data; the anime_tvdb_rehydrate job redoes it.
+      const isAnimation = media.genres.some((g) => g.genre.slug === 'animation');
       if (needsHydration) {
-        if (this.tmdb.enabled && tmdbExt) {
+        if (isAnimation && this.tvdb?.enabled && tvdbExt) {
+          // Degrade gracefully on hydration failure (don't 500 the detail page).
+          await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
+        } else if (this.tmdb.enabled && tmdbExt) {
           // Degrade gracefully on hydration failure (don't 500 the detail page).
           await this.meta.ensureShowFull(Number(tmdbExt.value)).catch(() => undefined);
         } else if (this.tvdb?.enabled && tvdbExt) {

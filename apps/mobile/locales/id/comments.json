@@ -54,5 +54,11 @@
   "mediaSearchPlaceholder": "Cari acara atau film…",
   "mediaNoResults": "Tidak ada hasil.",
   "listsSectionTitle": "Daftar Anda",
-  "attachList": "Lampirkan daftar"
+  "attachList": "Lampirkan daftar",
+  "showMoreReplies": "Tampilkan lebih banyak balasan ({{count}})",
+  "continueThread": "Lanjutkan thread ini",
+  "collapseThread": "Ciutkan thread",
+  "expandThread": "Luaskan thread",
+  "replyingTo": "Membalas @{{username}}",
+  "cancelReply": "Batalkan balasan"
 }

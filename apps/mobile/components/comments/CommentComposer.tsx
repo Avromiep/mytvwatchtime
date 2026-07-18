@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useTranslation } from 'react-i18next';
+import type { CommentDto } from '@tvwatch/shared';
 import { TextField } from '../TextField';
 import { GiphyPicker } from '../GiphyPicker';
 import { MediaPickerModal, type AttachedList, type AttachedMedia } from './MediaPickerModal';
@@ -36,9 +37,21 @@ export interface CommentComposerProps {
   parentId?: string | null;
   placeholder?: string;
   onSent?: (commentId: string) => void;
+  /** The comment being replied to inside a thread — shows a dismissible chip. */
+  replyTarget?: CommentDto | null;
+  /** Cancel replying to replyTarget (falls back to the thread root). */
+  onCancelReply?: () => void;
 }
 
-export function CommentComposer({ threadType, threadId, parentId = null, placeholder, onSent }: CommentComposerProps) {
+export function CommentComposer({
+  threadType,
+  threadId,
+  parentId = null,
+  placeholder,
+  onSent,
+  replyTarget = null,
+  onCancelReply,
+}: CommentComposerProps) {
   const { tokens, resolvedLocale } = useAppearance();
   const giphyLang = giphyLangFromLocale(resolvedLocale);
   const { t } = useTranslation(['comments', 'lists', 'common']);
@@ -67,7 +80,9 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
   const suggestions = useMemo(
     () =>
       mentionQuery
-        ? participants.filter((p: Participant) => p.username.toLowerCase().includes(mentionQuery)).slice(0, 5)
+        ? participants
+            .filter((p: Participant) => p.username.toLowerCase().includes(mentionQuery))
+            .slice(0, 5)
         : [],
     [mentionQuery, participants],
   );
@@ -193,7 +208,10 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
         setImageUri(null);
         setImageProcessing(true);
         try {
-          const imgRes = await api.post<{ commentImageId: string }>(`/comments/${comment.id}/image`, fd);
+          const imgRes = await api.post<{ commentImageId: string }>(
+            `/comments/${comment.id}/image`,
+            fd,
+          );
           const imageId = imgRes.commentImageId;
           for (let i = 0; i < 15; i++) {
             await new Promise((r) => setTimeout(r, 2000));
@@ -201,7 +219,10 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
             if (['ready', 'rejected', 'failed'].includes(st.status)) break;
           }
         } catch (e: any) {
-          showError({ title: t('comments:imageUploadFailed'), description: e?.message ?? t('common:pleaseTryAgain') });
+          showError({
+            title: t('comments:imageUploadFailed'),
+            description: e?.message ?? t('common:pleaseTryAgain'),
+          });
         } finally {
           setImageProcessing(false);
           qc.invalidateQueries({ queryKey: ['comments'] });
@@ -215,18 +236,50 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
       }
       onSent?.(comment?.id);
     } catch (e: any) {
-      showError({ title: t('comments:failedToPost'), description: e?.message ?? t('common:pleaseTryAgain') });
+      showError({
+        title: t('comments:failedToPost'),
+        description: e?.message ?? t('common:pleaseTryAgain'),
+      });
     }
   };
 
   return (
     <View style={styles.bottomBar}>
       <View style={feedColumn.root}>
+        {replyTarget ? (
+          <View style={[styles.previewBar, { backgroundColor: tokens.surfaceAlt }]}>
+            <Ionicons name="return-down-forward-outline" size={18} color={tokens.primary} />
+            <T
+              variant="micro"
+              style={{ color: tokens.primary, flex: 1, marginLeft: spacing.sm }}
+              numberOfLines={1}
+            >
+              {t('comments:replyingTo', { username: replyTarget.author?.username })}
+            </T>
+            <Pressable
+              onPress={onCancelReply}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={t('comments:cancelReply')}
+            >
+              <Ionicons name="close-circle" size={20} color={tokens.textMuted} />
+            </Pressable>
+          </View>
+        ) : null}
         {suggestions.length > 0 ? (
-          <View style={[styles.suggestions, { backgroundColor: tokens.surface, borderTopColor: tokens.border }]}>
+          <View
+            style={[
+              styles.suggestions,
+              { backgroundColor: tokens.surface, borderTopColor: tokens.border },
+            ]}
+          >
             {suggestions.map((p: Participant) => (
               <Pressable key={p.id} style={styles.suggestion} onPress={() => insertMention(p)}>
-                <PosterImage uri={p.avatarUrl} fallback={APP_ICON} style={{ width: 22, height: 22, borderRadius: 11 }} />
+                <PosterImage
+                  uri={p.avatarUrl}
+                  fallback={APP_ICON}
+                  style={{ width: 22, height: 22, borderRadius: 11 }}
+                />
                 <T variant="caption">@{p.username}</T>
               </Pressable>
             ))}
@@ -253,7 +306,10 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
         ) : null}
         {selectedGif ? (
           <View style={[styles.previewBar, { backgroundColor: tokens.surfaceAlt }]}>
-            <PosterImage uri={selectedGif.previewUrl} style={{ width: 50, height: 50, borderRadius: 8 }} />
+            <PosterImage
+              uri={selectedGif.previewUrl}
+              style={{ width: 50, height: 50, borderRadius: 8 }}
+            />
             <T variant="micro" muted style={{ flex: 1, marginLeft: spacing.sm }}>
               {t('comments:gif')}
             </T>
@@ -269,7 +325,10 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
         ) : null}
         {attachedMedia ? (
           <View style={[styles.previewBar, { backgroundColor: tokens.surfaceAlt }]}>
-            <PosterImage uri={attachedMedia.posterUrl} style={{ width: 34, height: 50, borderRadius: 6 }} />
+            <PosterImage
+              uri={attachedMedia.posterUrl}
+              style={{ width: 34, height: 50, borderRadius: 6 }}
+            />
             <View style={{ flex: 1, marginLeft: spacing.sm }}>
               <T variant="caption" numberOfLines={1}>
                 {attachedMedia.title}
@@ -293,7 +352,10 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
         {attachedList ? (
           <View style={[styles.previewBar, { backgroundColor: tokens.surfaceAlt }]}>
             {attachedList.coverUrl ? (
-              <PosterImage uri={attachedList.coverUrl} style={{ width: 50, height: 34, borderRadius: 6 }} />
+              <PosterImage
+                uri={attachedList.coverUrl}
+                style={{ width: 50, height: 34, borderRadius: 6 }}
+              />
             ) : (
               <Ionicons name="list-outline" size={24} color={tokens.primary} />
             )}
@@ -319,7 +381,12 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
           </View>
         ) : null}
       </View>
-      <View style={[styles.composer, { backgroundColor: tokens.surface, borderTopColor: tokens.border }]}>
+      <View
+        style={[
+          styles.composer,
+          { backgroundColor: tokens.surface, borderTopColor: tokens.border },
+        ]}
+      >
         <View style={[feedColumn.root, styles.composerRow]}>
           <Pressable
             onPress={pickImage}
@@ -337,19 +404,37 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
           </Pressable>
           <Pressable
             onPress={openGifPicker}
-            disabled={sending || imageCompressing || !!selectedGif || !!imageUri || hasCardAttachment}
+            disabled={
+              sending || imageCompressing || !!selectedGif || !!imageUri || hasCardAttachment
+            }
             hitSlop={8}
-            style={[styles.gifButton, { borderColor: selectedGif || imageUri || hasCardAttachment ? tokens.border : tokens.primary }, { marginRight: spacing.sm }]}
+            style={[
+              styles.gifButton,
+              {
+                borderColor:
+                  selectedGif || imageUri || hasCardAttachment ? tokens.border : tokens.primary,
+              },
+              { marginRight: spacing.sm },
+            ]}
             accessibilityRole="button"
             accessibilityLabel={t('comments:addGif')}
           >
-            <T variant="micro" style={{ color: selectedGif || imageUri || hasCardAttachment ? tokens.textDim : tokens.primary, fontWeight: '700' }}>
+            <T
+              variant="micro"
+              style={{
+                color:
+                  selectedGif || imageUri || hasCardAttachment ? tokens.textDim : tokens.primary,
+                fontWeight: '700',
+              }}
+            >
               {t('comments:gif')}
             </T>
           </Pressable>
           <Pressable
             onPress={() => setMediaPickerOpen(true)}
-            disabled={sending || imageCompressing || !!selectedGif || !!imageUri || hasCardAttachment}
+            disabled={
+              sending || imageCompressing || !!selectedGif || !!imageUri || hasCardAttachment
+            }
             hitSlop={8}
             style={{ marginRight: spacing.sm }}
             accessibilityRole="button"
@@ -376,7 +461,12 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
           />
         </View>
       </View>
-      <GiphyPicker visible={pickerOpen} lang={giphyLang} onClose={() => setPickerOpen(false)} onSelect={onSelectGif} />
+      <GiphyPicker
+        visible={pickerOpen}
+        lang={giphyLang}
+        onClose={() => setPickerOpen(false)}
+        onSelect={onSelectGif}
+      />
       <MediaPickerModal
         visible={mediaPickerOpen}
         onClose={() => setMediaPickerOpen(false)}
@@ -399,9 +489,19 @@ const styles = StyleSheet.create({
   bottomBar: {},
   suggestions: { borderTopWidth: 1, paddingHorizontal: spacing.lg },
   suggestion: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, gap: spacing.sm },
-  previewBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
+  previewBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
   composer: { borderTopWidth: 1 },
-  composerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
+  composerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
   gifButton: {
     borderWidth: 1,
     borderRadius: radius.sm,

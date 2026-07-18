@@ -45,5 +45,8 @@ describe('HydrationQueue — stable deterministic job ids (dedup)', () => {
     await q.enqueueAnimeHydrate('m9');
     expect(calls[0].name).toBe('anime-hydrate');
     expect(calls[0].opts.jobId).toBe('anime-hydrate-media-m9');
+    // Transient anime-match failures retry instead of persisting a degraded classification.
+    expect(calls[0].opts.attempts).toBe(3);
+    expect(calls[0].opts.backoff).toEqual({ type: 'exponential', delay: 30000 });
   });
 });

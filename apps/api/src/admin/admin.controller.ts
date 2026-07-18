@@ -45,6 +45,17 @@ export class AdminController {
     return { message: `Backfill started (${n ?? 200} items, ${r ? r + ' items/s' : 'full speed'}). Check API logs.` };
   }
 
+  @Post('anime-tvdb-rehydrate/run')
+  @RequireRoles('ADMIN')
+  runAnimeTvdbRehydrate(@Query('count') count?: string) {
+    const n = count ? Number(count) : undefined;
+    this.metadataBackfill.rehydrateAnimeFromTvdb(n).catch((e) => {
+      // Log the error so the admin can see it in API logs (fire-and-forget otherwise swallows).
+      console.error('[Anime TVDB Rehydration] FAILED:', (e as Error)?.message ?? e);
+    });
+    return { message: `Anime TVDB rehydration started (${n ?? 1000} items max). Check API logs.` };
+  }
+
   @Post('tmdb-changes/run')
   @RequireRoles('ADMIN')
   runTmdbChanges() {

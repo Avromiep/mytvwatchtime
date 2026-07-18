@@ -30,9 +30,10 @@ Full endpoint reference: see `docs/DOCUMENTATION.md` → Section 8.
 
 **Import:** `/imports/upload` · `/imports/:id` · `/imports/:id/items` · `/imports/:id/confirm` · `/imports/:id/rollback`
 
-**Comments:** `/comments` · `/comments/:id/like` · `/comments/:commentId/image` · `/comment-images/:id`
+**Comments:** `/comments` · `/comments/:id/replies` · `/comments/:id/like` · `/comments/:commentId/image` · `/comment-images/:id`
 
 > `POST /comments` accepts an optional `gifUrl` (final GIPHY media URL, https, `*.giphy.com`). Comment responses include `gifUrl`. A comment may carry at most one attachment: an uploaded image XOR a GIPHY gif.
+> Replies nest to any depth (`parentId`, capped at 25 levels). Comment responses include `depth` (0 = top-level). `GET /comments/:id/replies?depth=2` returns each direct child's first 10 children flat in `items` alongside the paginated direct children (`total` counts direct children only; `repliesCount` counts direct children).
 
 **Admin:** `/admin/stats` · `/admin/media` · `/admin/users` · `/admin/jobs/hydrate` · `/admin/cron` · `/admin/settings` · `/admin/feature-flags` · `/admin/scheduled-hydrations` · `/admin/audit-logs`
 

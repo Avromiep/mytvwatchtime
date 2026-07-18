@@ -78,5 +78,11 @@
   "mediaSearchPlaceholder": "Search shows or movies…",
   "mediaNoResults": "No results.",
   "listsSectionTitle": "Your Lists",
-  "attachList": "Attach a list"
+  "attachList": "Attach a list",
+  "showMoreReplies": "Show more replies ({{count}})",
+  "continueThread": "Continue this thread",
+  "collapseThread": "Collapse thread",
+  "expandThread": "Expand thread",
+  "replyingTo": "Replying to @{{username}}",
+  "cancelReply": "Cancel reply"
 }

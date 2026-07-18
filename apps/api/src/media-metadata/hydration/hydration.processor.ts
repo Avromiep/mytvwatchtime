@@ -97,22 +97,25 @@ export class HydrationProcessor implements OnModuleInit {
   }
 
   /** Stage 3 (terminal, mediaId): detect → match → classify → persist. Reuses cached
-   *  provider search so it is cheap + idempotent. */
+   *  provider search so it is cheap + idempotent.
+   *
+   *  A FAILED anime match (Kitsu/Jikan outage, rate limit) must NOT persist a degraded
+   *  classification — the check stays pending and the job is retried (attempts/backoff),
+   *  then re-triggered wholesale by the next hydration-versioned classify. A SUCCESSFUL
+   *  match with a negative result is a real answer: it persists (GENERAL) and is not
+   *  re-checked until new hydration data arrives. */
   async animeHydrate(mediaId: string): Promise<void> {
     const media = await this.loadMedia(mediaId);
     if (!media || media.manualClassification) return;
     const candidate = this.detector.detect(this.inputFromMedia(media));
     let match = null;
     if (candidate.isCandidate) {
-      try {
-        match = await this.animeMatch.matchAnime({
-          title: media.title,
-          year: media.show?.yearStart ?? media.movie?.releaseYear ?? null,
-          structuralType: media.type,
-        });
-      } catch (e) {
-        this.logger.debug(`anime-match for ${mediaId} failed: ${(e as Error).message}`);
-      }
+      // Let the error propagate (BullMQ retry) instead of classifying on missing evidence.
+      match = await this.animeMatch.matchAnime({
+        title: media.title,
+        year: media.show?.yearStart ?? media.movie?.releaseYear ?? null,
+        structuralType: media.type,
+      });
     }
     const result = this.classifier.classify(candidate, match);
     await this.persist(mediaId, result.classification as ContentClassification, result.tier, result.confidence, result.evidence, media.manualClassification);

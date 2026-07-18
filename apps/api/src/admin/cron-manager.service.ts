@@ -20,6 +20,7 @@ const DEFAULTS: { name: string; label: string; schedule: string }[] = [
   { name: 'push_dispatch', label: 'Push Notification Dispatch', schedule: CronExpression.EVERY_5_MINUTES },
   { name: 'metadata_backfill', label: 'Metadata Backfill', schedule: '0 4 * * *' },
   { name: 'tmdb_changes', label: 'TMDB Changes Sync', schedule: '0 5 * * *' },
+  { name: 'anime_tvdb_rehydrate', label: 'Anime TVDB Rehydration', schedule: '0 6 * * *' },
 ];
 
 @Injectable()
@@ -43,6 +44,7 @@ export class CronManagerService implements OnModuleInit {
     this.handlers.set('push_dispatch', { label: 'Push Notification Dispatch', defaultSchedule: CronExpression.EVERY_5_MINUTES, fn: async () => { /* handled by PushService cron directly */ } });
     this.handlers.set('metadata_backfill', { label: 'Metadata Backfill', defaultSchedule: '0 4 * * *', fn: async () => { await this.metadataBackfill.backfillBatch(); } });
     this.handlers.set('tmdb_changes', { label: 'TMDB Changes Sync', defaultSchedule: '0 5 * * *', fn: async () => { await this.metadataBackfill.syncTmdbChanges(); } });
+    this.handlers.set('anime_tvdb_rehydrate', { label: 'Anime TVDB Rehydration', defaultSchedule: '0 6 * * *', fn: async () => { await this.metadataBackfill.rehydrateAnimeFromTvdb(); } });
 
     // Scheduled hydration runner — runs every hour, executes enabled scheduled hydrations whose cron matches
     this.handlers.set('scheduled_hydrations', { label: 'Scheduled Hydrations', defaultSchedule: CronExpression.EVERY_HOUR, fn: () => this.runScheduledHydrations() });

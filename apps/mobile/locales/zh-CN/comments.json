@@ -54,5 +54,11 @@
   "mediaSearchPlaceholder": "搜索剧集或电影…",
   "mediaNoResults": "未找到结果。",
   "listsSectionTitle": "你的片单",
-  "attachList": "附加片单"
+  "attachList": "附加片单",
+  "showMoreReplies": "显示更多回复（{{count}}）",
+  "continueThread": "继续此话题",
+  "collapseThread": "收起话题",
+  "expandThread": "展开话题",
+  "replyingTo": "回复 @{{username}}",
+  "cancelReply": "取消回复"
 }

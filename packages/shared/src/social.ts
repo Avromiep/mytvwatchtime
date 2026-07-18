@@ -35,6 +35,8 @@ export interface CommentListRefDto {
 export interface CommentDto {
   id: string;
   parentId?: string | null;
+  /** Nesting level within the thread: 0 = top-level, 1 = direct reply, etc. */
+  depth: number;
   threadType: 'SHOW' | 'MOVIE' | 'EPISODE' | 'GROUP';
   threadId: string;
   author: PublicUserDto;
@@ -48,6 +50,7 @@ export interface CommentDto {
   /** Attached custom-list card (mutually exclusive with image/GIF/media attachments). */
   list?: CommentListRefDto | null;
   likesCount: number;
+  /** Direct children count (not descendants). */
   repliesCount: number;
   likedByMe: boolean;
   reportedByMe: boolean;
@@ -65,6 +68,13 @@ export interface CommentQuery extends PaginationQuery {
 
 export interface CommentRepliesQuery extends PaginationQuery {
   sort?: CommentSort;
+  /**
+   * How many levels of descendants to return, relative to the requested comment.
+   * 1 (default) = direct children only (paginated). 2 = additionally each direct
+   * child's first children (capped per parent), flat in the same items array;
+   * `total` always counts direct children only.
+   */
+  depth?: 1 | 2;
 }
 
 export interface CreateCommentDto {

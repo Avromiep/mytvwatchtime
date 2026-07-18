@@ -1,6 +1,12 @@
 import Constants from 'expo-constants';
 import { useEffect, useMemo } from 'react';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  keepPreviousData,
+} from '@tanstack/react-query';
 import type {
   CommentDto,
   CommentSort,
@@ -59,7 +65,8 @@ const qk = {
   notifPrefs: ['notifPrefs'] as const,
   comments: (p: any) => ['comments', p] as const,
   comment: (id: string) => ['comment', id] as const,
-  commentReplies: (id: string, sort: string) => ['commentReplies', id, sort] as const,
+  commentReplies: (id: string, sort: string, depth: number = 1) =>
+    ['commentReplies', id, sort, depth] as const,
   commentParticipants: (p: any) => ['commentParticipants', p] as const,
   lists: ['lists'] as const,
   list: (id: string) => ['list', id] as const,
@@ -67,14 +74,38 @@ const qk = {
   contactThread: (id: string) => ['contactThread', id] as const,
 };
 
-export const useMe = () => useQuery({ queryKey: qk.me, queryFn: () => api.get<CurrentUserDto>('/me') });
-export const useWatchNext = () => useQuery({ queryKey: qk.watchNext, queryFn: () => api.get<{ items: WatchNextItemDto[] }>('/me/watch-next') });
-export const useUpcoming = () => useQuery({ queryKey: qk.upcoming, queryFn: () => api.get<{ groups: any[] }>('/me/upcoming') });
+export const useMe = () =>
+  useQuery({ queryKey: qk.me, queryFn: () => api.get<CurrentUserDto>('/me') });
+export const useWatchNext = () =>
+  useQuery({
+    queryKey: qk.watchNext,
+    queryFn: () => api.get<{ items: WatchNextItemDto[] }>('/me/watch-next'),
+  });
+export const useUpcoming = () =>
+  useQuery({ queryKey: qk.upcoming, queryFn: () => api.get<{ groups: any[] }>('/me/upcoming') });
 export const useHistory = (p: { mediaType?: MediaType; page?: number }) =>
-  useQuery({ queryKey: qk.history(p), queryFn: () => api.get<Paginated<HistoryItemDto>>('/me/history', { ...p, pageSize: 500 }) });
-export const useShow = (id: string) => useQuery({ queryKey: qk.show(id), queryFn: () => api.get<ShowDetailDto>(`/shows/${id}`), enabled: !!id });
-export const useShowEpisodes = (id: string) => useQuery({ queryKey: qk.showEpisodes(id), queryFn: () => api.get<any[]>(`/shows/${id}/episodes`), enabled: !!id });
-export const useEpisode = (id: string) => useQuery({ queryKey: qk.episode(id), queryFn: () => api.get<EpisodeDetailDto>(`/episodes/${id}`), enabled: !!id });
+  useQuery({
+    queryKey: qk.history(p),
+    queryFn: () => api.get<Paginated<HistoryItemDto>>('/me/history', { ...p, pageSize: 500 }),
+  });
+export const useShow = (id: string) =>
+  useQuery({
+    queryKey: qk.show(id),
+    queryFn: () => api.get<ShowDetailDto>(`/shows/${id}`),
+    enabled: !!id,
+  });
+export const useShowEpisodes = (id: string) =>
+  useQuery({
+    queryKey: qk.showEpisodes(id),
+    queryFn: () => api.get<any[]>(`/shows/${id}/episodes`),
+    enabled: !!id,
+  });
+export const useEpisode = (id: string) =>
+  useQuery({
+    queryKey: qk.episode(id),
+    queryFn: () => api.get<EpisodeDetailDto>(`/episodes/${id}`),
+    enabled: !!id,
+  });
 // Ordered ids of the episode's season siblings — powers the episode pager without
 // downloading the show's entire season structure.
 export const useEpisodeSiblings = (id: string) =>
@@ -83,28 +114,74 @@ export const useEpisodeSiblings = (id: string) =>
     queryFn: () => api.get<{ seasonId: string; episodeIds: string[] }>(`/episodes/${id}/siblings`),
     enabled: !!id,
   });
-export const useMovie = (id: string) => useQuery({ queryKey: qk.movie(id), queryFn: () => api.get<MovieDetailDto>(`/movies/${id}`), enabled: !!id });
+export const useMovie = (id: string) =>
+  useQuery({
+    queryKey: qk.movie(id),
+    queryFn: () => api.get<MovieDetailDto>(`/movies/${id}`),
+    enabled: !!id,
+  });
 // Server-paginated search (20/page): the API keeps the merged ordering in a short-lived
 // cache and expands it on demand, so onEndReached reveals results beyond the first page.
 export const useSearch = (q: string, type?: MediaType) =>
   useInfiniteQuery({
     queryKey: qk.search(q, type),
-    queryFn: ({ pageParam = 1 }) => api.get<Paginated<MediaCardDto>>('/search', { q, type, page: pageParam, pageSize: 20 }),
+    queryFn: ({ pageParam = 1 }) =>
+      api.get<Paginated<MediaCardDto>>('/search', { q, type, page: pageParam, pageSize: 20 }),
     initialPageParam: 1,
     getNextPageParam: (last) => (last?.hasMore ? last.page + 1 : undefined),
     enabled: q.length > 1,
   });
-export const useDiscoverSections = () => useQuery({ queryKey: qk.discover(), queryFn: () => api.get<DiscoverSectionsDto>('/discover/sections') });
-export const useDiscoverShows = (p: any) => useQuery({ queryKey: qk.discoverShows(p), queryFn: () => api.get<Paginated<MediaCardDto>>('/discover/shows', p) });
-export const useDiscoverMovies = (p: any) => useQuery({ queryKey: qk.discoverMovies(p), queryFn: () => api.get<Paginated<MediaCardDto>>('/discover/movies', p) });
-export const useTrendingShows = () => useQuery({ queryKey: qk.trendingShows, queryFn: () => api.get<any>('/trending/shows').then(r => r.items ?? r) });
-export const useTrendingMovies = () => useQuery({ queryKey: qk.trendingMovies, queryFn: () => api.get<any>('/trending/movies').then(r => r.items ?? r) });
+export const useDiscoverSections = () =>
+  useQuery({
+    queryKey: qk.discover(),
+    queryFn: () => api.get<DiscoverSectionsDto>('/discover/sections'),
+  });
+export const useDiscoverShows = (p: any) =>
+  useQuery({
+    queryKey: qk.discoverShows(p),
+    queryFn: () => api.get<Paginated<MediaCardDto>>('/discover/shows', p),
+  });
+export const useDiscoverMovies = (p: any) =>
+  useQuery({
+    queryKey: qk.discoverMovies(p),
+    queryFn: () => api.get<Paginated<MediaCardDto>>('/discover/movies', p),
+  });
+export const useTrendingShows = () =>
+  useQuery({
+    queryKey: qk.trendingShows,
+    queryFn: () => api.get<any>('/trending/shows').then((r) => r.items ?? r),
+  });
+export const useTrendingMovies = () =>
+  useQuery({
+    queryKey: qk.trendingMovies,
+    queryFn: () => api.get<any>('/trending/movies').then((r) => r.items ?? r),
+  });
 export const useTrendingShowsPaginated = (page: number) =>
-  useQuery({ queryKey: ['trendingShowsPage', page], queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/shows?page=${page}`), enabled: page > 0 });
+  useQuery({
+    queryKey: ['trendingShowsPage', page],
+    queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/shows?page=${page}`),
+    enabled: page > 0,
+  });
 export const useTrendingMoviesPaginated = (page: number) =>
-  useQuery({ queryKey: ['trendingMoviesPage', page], queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/movies?page=${page}`), enabled: page > 0 });
-export const useWatchlist = (type?: MediaType) => useQuery({ queryKey: qk.watchlist(type), queryFn: () => api.get<Paginated<MediaCardLiteDto>>('/me/watchlist', { type, pageSize: 500 }) });
-export const useFavorites = (type: MediaType) => useQuery({ queryKey: qk.favorites(type), queryFn: () => api.get<Paginated<MediaCardLiteDto>>(type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies', { pageSize: 500 }) });
+  useQuery({
+    queryKey: ['trendingMoviesPage', page],
+    queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/movies?page=${page}`),
+    enabled: page > 0,
+  });
+export const useWatchlist = (type?: MediaType) =>
+  useQuery({
+    queryKey: qk.watchlist(type),
+    queryFn: () => api.get<Paginated<MediaCardLiteDto>>('/me/watchlist', { type, pageSize: 500 }),
+  });
+export const useFavorites = (type: MediaType) =>
+  useQuery({
+    queryKey: qk.favorites(type),
+    queryFn: () =>
+      api.get<Paginated<MediaCardLiteDto>>(
+        type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies',
+        { pageSize: 500 },
+      ),
+  });
 
 /**
  * Fetch EVERY page of a paginated endpoint (500/page chunks), auto-chaining until the
@@ -115,7 +192,8 @@ export const useFavorites = (type: MediaType) => useQuery({ queryKey: qk.favorit
 function useAllPages<T>(key: readonly unknown[], path: string, params: Record<string, unknown>) {
   const query = useInfiniteQuery({
     queryKey: key,
-    queryFn: ({ pageParam = 1 }) => api.get<Paginated<T>>(path, { ...params, page: pageParam, pageSize: 500 }),
+    queryFn: ({ pageParam = 1 }) =>
+      api.get<Paginated<T>>(path, { ...params, page: pageParam, pageSize: 500 }),
     initialPageParam: 1,
     getNextPageParam: (last) => (last?.hasMore ? last.page + 1 : undefined),
   });
@@ -128,23 +206,60 @@ function useAllPages<T>(key: readonly unknown[], path: string, params: Record<st
 }
 
 export const useAllWatchlist = (type?: MediaType) =>
-  useAllPages<MediaCardLiteDto>(['watchlist', 'all', type] as const, '/me/watchlist', type ? { type } : {});
+  useAllPages<MediaCardLiteDto>(
+    ['watchlist', 'all', type] as const,
+    '/me/watchlist',
+    type ? { type } : {},
+  );
 export const useAllFavorites = (type: MediaType) =>
-  useAllPages<MediaCardLiteDto>(['favorites', 'all', type] as const, type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies', {});
+  useAllPages<MediaCardLiteDto>(
+    ['favorites', 'all', type] as const,
+    type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies',
+    {},
+  );
 export const useAllHistory = (p: { mediaType?: MediaType }) =>
   useAllPages<HistoryItemDto>(['history', 'all', p.mediaType] as const, '/me/history', p);
 // Poll while the server reports stats are being recomputed (SWR stale flag); stop once fresh.
 const statsRefetchInterval = (query: any) => (query.state.data?.stale ? 2500 : false);
 
-export const useStatsSummary = () => useQuery({ queryKey: qk.statsSummary, queryFn: () => api.get<StatsSummaryDto>('/me/stats/summary'), refetchInterval: statsRefetchInterval });
+export const useStatsSummary = () =>
+  useQuery({
+    queryKey: qk.statsSummary,
+    queryFn: () => api.get<StatsSummaryDto>('/me/stats/summary'),
+    refetchInterval: statsRefetchInterval,
+  });
 // `enabled` gates by the visible tab on the stats screen — previously both heavy
 // payloads (plus their stale-flag pollers) mounted regardless of the selected tab.
-export const useStatsShows = (enabled = true) => useQuery({ queryKey: qk.statsShows, queryFn: () => api.get<ShowStatsDto>('/me/stats/shows'), refetchInterval: statsRefetchInterval, enabled });
-export const useStatsMovies = (enabled = true) => useQuery({ queryKey: qk.statsMovies, queryFn: () => api.get<MovieStatsDto>('/me/stats/movies'), refetchInterval: statsRefetchInterval, enabled });
-export const useBadges = () => useQuery({ queryKey: qk.badges, queryFn: () => api.get<{ badges: UserBadgeDto[]; totalUnlocked: number; totalBadges: number }>('/me/badges') });
+export const useStatsShows = (enabled = true) =>
+  useQuery({
+    queryKey: qk.statsShows,
+    queryFn: () => api.get<ShowStatsDto>('/me/stats/shows'),
+    refetchInterval: statsRefetchInterval,
+    enabled,
+  });
+export const useStatsMovies = (enabled = true) =>
+  useQuery({
+    queryKey: qk.statsMovies,
+    queryFn: () => api.get<MovieStatsDto>('/me/stats/movies'),
+    refetchInterval: statsRefetchInterval,
+    enabled,
+  });
+export const useBadges = () =>
+  useQuery({
+    queryKey: qk.badges,
+    queryFn: () =>
+      api.get<{ badges: UserBadgeDto[]; totalUnlocked: number; totalBadges: number }>('/me/badges'),
+  });
 export const useNotifications = (p: { unreadOnly?: boolean; page?: number }) =>
-  useQuery({ queryKey: qk.notifications(p), queryFn: () => api.get<Paginated<NotificationItemDto>>('/me/notifications', p as any) });
-export const useNotifPrefs = () => useQuery({ queryKey: qk.notifPrefs, queryFn: () => api.get<NotificationPreferencesDto>('/me/notification-preferences') });
+  useQuery({
+    queryKey: qk.notifications(p),
+    queryFn: () => api.get<Paginated<NotificationItemDto>>('/me/notifications', p as any),
+  });
+export const useNotifPrefs = () =>
+  useQuery({
+    queryKey: qk.notifPrefs,
+    queryFn: () => api.get<NotificationPreferencesDto>('/me/notification-preferences'),
+  });
 
 // ---------------- Contact / Support threads ----------------
 export interface ContactThreadListItem {
@@ -173,11 +288,16 @@ export const useContactThreads = () =>
     queryFn: () => api.get<Paginated<ContactThreadListItem>>('/me/contacts', { pageSize: 100 }),
   });
 export const useContactThread = (id: string) =>
-  useQuery({ queryKey: qk.contactThread(id), queryFn: () => api.get<ContactThreadDetail>(`/me/contacts/${id}`), enabled: !!id });
+  useQuery({
+    queryKey: qk.contactThread(id),
+    queryFn: () => api.get<ContactThreadDetail>(`/me/contacts/${id}`),
+    enabled: !!id,
+  });
 export const useCreateContactThread = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { reason: string; subject: string; body: string }) => api.post<ContactThreadDetail>('/me/contacts', input),
+    mutationFn: (input: { reason: string; subject: string; body: string }) =>
+      api.post<ContactThreadDetail>('/me/contacts', input),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.contactThreads }),
   });
 };
@@ -193,7 +313,8 @@ export const useReplyContactThread = (id: string) => {
 };
 export type CommentSortMode = CommentSort;
 
-const COMMENT_POLL_INTERVAL = Number((Constants?.expoConfig?.extra as any)?.commentPollInterval) || 15000;
+const COMMENT_POLL_INTERVAL =
+  Number((Constants?.expoConfig?.extra as any)?.commentPollInterval) || 15000;
 const COMMENT_PAGE_SIZE = 20;
 
 /** Infinite-scrolling feed of top-level comments for a thread. */
@@ -225,19 +346,20 @@ export const useComment = (id: string, polling = false) =>
     refetchInterval: polling ? COMMENT_POLL_INTERVAL : false,
   });
 
-/** Infinite-scrolling replies for a comment. */
+/** Infinite-scrolling replies for a comment. depth=2 also returns each direct child's first children. */
 export const useCommentReplies = (
   commentId: string,
   sort: CommentSortMode,
-  opts?: { pageSize?: number; polling?: boolean },
+  opts?: { pageSize?: number; polling?: boolean; depth?: 1 | 2 },
 ) =>
   useInfiniteQuery({
-    queryKey: qk.commentReplies(commentId, sort),
+    queryKey: qk.commentReplies(commentId, sort, opts?.depth ?? 1),
     queryFn: ({ pageParam }) =>
       api.get<Paginated<CommentDto>>(`/comments/${commentId}/replies`, {
         page: pageParam as number,
         pageSize: opts?.pageSize ?? COMMENT_PAGE_SIZE,
         sort,
+        depth: opts?.depth ?? 1,
       }),
     initialPageParam: 1,
     getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
@@ -250,10 +372,13 @@ export const useCommentParticipants = (threadType: string, threadId: string) =>
   useQuery({
     queryKey: qk.commentParticipants({ threadType, threadId }),
     queryFn: () =>
-      api.get<{ id: string; username: string; avatarUrl?: string | null }[]>('/comments/participants', {
-        threadType,
-        threadId,
-      }),
+      api.get<{ id: string; username: string; avatarUrl?: string | null }[]>(
+        '/comments/participants',
+        {
+          threadType,
+          threadId,
+        },
+      ),
     enabled: !!threadId,
     staleTime: 60_000,
   });
@@ -265,7 +390,9 @@ function patchCommentInCaches(
   patch: (c: CommentDto) => CommentDto,
 ) {
   const mapPage = (pg: any) =>
-    pg && Array.isArray(pg.items) ? { ...pg, items: pg.items.map((c: CommentDto) => (c.id === commentId ? patch(c) : c)) } : pg;
+    pg && Array.isArray(pg.items)
+      ? { ...pg, items: pg.items.map((c: CommentDto) => (c.id === commentId ? patch(c) : c)) }
+      : pg;
   const mapInfinite = (old: any) =>
     old && Array.isArray(old.pages) ? { ...old, pages: old.pages.map(mapPage) } : old;
 
@@ -358,8 +485,10 @@ export const useDeleteComment = () => {
     },
   });
 };
-export const useLists = () => useQuery({ queryKey: qk.lists, queryFn: () => api.get<any[]>('/me/lists') });
-export const useList = (id: string) => useQuery({ queryKey: qk.list(id), queryFn: () => api.get<any>(`/lists/${id}`), enabled: !!id });
+export const useLists = () =>
+  useQuery({ queryKey: qk.lists, queryFn: () => api.get<any[]>('/me/lists') });
+export const useList = (id: string) =>
+  useQuery({ queryKey: qk.list(id), queryFn: () => api.get<any>(`/lists/${id}`), enabled: !!id });
 
 // ---------------- Mutations ----------------
 export function useInvalidate(keys: readonly unknown[][]) {
@@ -398,14 +527,21 @@ export const useMarkEpisodeWatched = () => {
       const prevShowEpisodes = qc.getQueriesData({ queryKey: ['showEpisodes'] });
       prevShowEpisodes.forEach(([key, data]: [any, any]) => {
         if (!Array.isArray(data)) return;
-        qc.setQueryData(key, data.map((s: any) => ({
-          ...s,
-          episodes: s.episodes?.map((e: any) => (e.id === id ? { ...e, watched: on, watchCount: on ? 1 : 0 } : e)),
-        })));
+        qc.setQueryData(
+          key,
+          data.map((s: any) => ({
+            ...s,
+            episodes: s.episodes?.map((e: any) =>
+              e.id === id ? { ...e, watched: on, watchCount: on ? 1 : 0 } : e,
+            ),
+          })),
+        );
       });
 
       const prevEpisode = qc.getQueryData(qk.episode(id));
-      qc.setQueryData(qk.episode(id), (old: any) => (old ? { ...old, watched: on, watchCount: on ? 1 : 0 } : old));
+      qc.setQueryData(qk.episode(id), (old: any) =>
+        old ? { ...old, watched: on, watchCount: on ? 1 : 0 } : old,
+      );
 
       return { prevWatchNext, prevShowEpisodes, prevEpisode };
     },
@@ -460,25 +596,34 @@ export const useRewatchEpisode = () => {
       qc.setQueryData(qk.watchNext, (old: any) =>
         old
           ? {
-            ...old,
-            items: old.items.map((it: any) =>
-              it.episode?.id === id ? { ...it, episode: { ...it.episode, watchCount: bump(it.episode) } } : it,
-            ),
-          }
+              ...old,
+              items: old.items.map((it: any) =>
+                it.episode?.id === id
+                  ? { ...it, episode: { ...it.episode, watchCount: bump(it.episode) } }
+                  : it,
+              ),
+            }
           : old,
       );
 
       const prevShowEpisodes = qc.getQueriesData({ queryKey: ['showEpisodes'] });
       prevShowEpisodes.forEach(([key, data]: [any, any]) => {
         if (!Array.isArray(data)) return;
-        qc.setQueryData(key, data.map((s: any) => ({
-          ...s,
-          episodes: s.episodes?.map((e: any) => (e.id === id ? { ...e, watchCount: bump(e) } : e)),
-        })));
+        qc.setQueryData(
+          key,
+          data.map((s: any) => ({
+            ...s,
+            episodes: s.episodes?.map((e: any) =>
+              e.id === id ? { ...e, watchCount: bump(e) } : e,
+            ),
+          })),
+        );
       });
 
       const prevEpisode = qc.getQueryData(qk.episode(id));
-      qc.setQueryData(qk.episode(id), (old: any) => (old ? { ...old, watchCount: bump(old) } : old));
+      qc.setQueryData(qk.episode(id), (old: any) =>
+        old ? { ...old, watchCount: bump(old) } : old,
+      );
 
       return { prevWatchNext, prevShowEpisodes, prevEpisode };
     },
@@ -509,17 +654,27 @@ function recomputeVoteSection(section: VoteSectionDto, to: string | null): VoteS
 }
 
 /** Recompute the character section (options keyed by castId, not `value`). */
-function recomputeCharacterSection(section: CharacterVoteSectionDto, to: string | null): CharacterVoteSectionDto {
+function recomputeCharacterSection(
+  section: CharacterVoteSectionDto,
+  to: string | null,
+): CharacterVoteSectionDto {
   const valueOpts = section.options.map((o) => ({ value: o.castId, count: o.count }));
   const { options, total } = applyVoteChange(valueOpts, section.total, section.userVote, to);
-  return { userVote: to, total, options: options.map((o) => ({ castId: o.value, count: o.count })) };
+  return {
+    userVote: to,
+    total,
+    options: options.map((o) => ({ castId: o.value, count: o.count })),
+  };
 }
 
 /**
  * Recompute the multi-select reaction section after toggling one reaction.
  * `total` (distinct users) only changes when the user crosses zero<->nonzero.
  */
-function recomputeReactionSection(section: ReactionVoteSectionDto, toggle: string): ReactionVoteSectionDto {
+function recomputeReactionSection(
+  section: ReactionVoteSectionDto,
+  toggle: string,
+): ReactionVoteSectionDto {
   // Defensive: tolerate an older single-select payload where userVotes is absent.
   const prevVotes = section.userVotes ?? [];
   const has = prevVotes.includes(toggle);
@@ -543,7 +698,11 @@ function recomputeReactionSection(section: ReactionVoteSectionDto, toggle: strin
 function normalizeReactionSection(data: any): ReactionVoteSectionDto {
   if (data && Array.isArray(data.userVotes)) return data;
   const userVote = data?.userVote;
-  return { userVotes: userVote ? [userVote] : [], total: data?.total ?? 0, options: data?.options ?? [] };
+  return {
+    userVotes: userVote ? [userVote] : [],
+    total: data?.total ?? 0,
+    options: data?.options ?? [],
+  };
 }
 
 export function useEpisodeVotes(episodeId: string) {
@@ -563,28 +722,40 @@ export function useEpisodeVotes(episodeId: string) {
   };
 
   const device = useMutation({
-    mutationFn: (value: string) => api.put<VoteSectionDto>(`/episodes/${episodeId}/vote/device`, { value }),
+    mutationFn: (value: string) =>
+      api.put<VoteSectionDto>(`/episodes/${episodeId}/vote/device`, { value }),
     onMutate: async (value) => {
       await qc.cancelQueries({ queryKey: key });
       return apply((old) => ({
         ...old,
-        interactions: { ...old.interactions, device: recomputeVoteSection(old.interactions.device, value) },
+        interactions: {
+          ...old.interactions,
+          device: recomputeVoteSection(old.interactions.device, value),
+        },
       }));
     },
-    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(key, ctx.prev); },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+    },
     onSuccess: (data) => merge('device', data),
   });
 
   const rating = useMutation({
-    mutationFn: (value: number) => api.put<VoteSectionDto>(`/episodes/${episodeId}/vote/rating`, { value }),
+    mutationFn: (value: number) =>
+      api.put<VoteSectionDto>(`/episodes/${episodeId}/vote/rating`, { value }),
     onMutate: async (value) => {
       await qc.cancelQueries({ queryKey: key });
       return apply((old) => ({
         ...old,
-        interactions: { ...old.interactions, rating: recomputeVoteSection(old.interactions.rating, String(value)) },
+        interactions: {
+          ...old.interactions,
+          rating: recomputeVoteSection(old.interactions.rating, String(value)),
+        },
       }));
     },
-    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(key, ctx.prev); },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+    },
     onSuccess: (data) => merge('rating', data),
   });
 
@@ -595,10 +766,15 @@ export function useEpisodeVotes(episodeId: string) {
       await qc.cancelQueries({ queryKey: key });
       return apply((old) => ({
         ...old,
-        interactions: { ...old.interactions, reaction: recomputeReactionSection(old.interactions.reaction, value) },
+        interactions: {
+          ...old.interactions,
+          reaction: recomputeReactionSection(old.interactions.reaction, value),
+        },
       }));
     },
-    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(key, ctx.prev); },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+    },
     onSuccess: (data) => {
       // Adopt the server's authoritative counts/total, but keep the client's
       // userVotes so a server snapshot can never wipe an in-flight/optimistic
@@ -610,7 +786,10 @@ export function useEpisodeVotes(episodeId: string) {
         const userVotes = current?.userVotes ?? norm.userVotes;
         return {
           ...old,
-          interactions: { ...old.interactions, reaction: { userVotes, total: norm.total, options: norm.options } },
+          interactions: {
+            ...old.interactions,
+            reaction: { userVotes, total: norm.total, options: norm.options },
+          },
         };
       });
     },
@@ -625,11 +804,16 @@ export function useEpisodeVotes(episodeId: string) {
         if (!old.interactions.character) return old;
         return {
           ...old,
-          interactions: { ...old.interactions, character: recomputeCharacterSection(old.interactions.character, value) },
+          interactions: {
+            ...old.interactions,
+            character: recomputeCharacterSection(old.interactions.character, value),
+          },
         };
       });
     },
-    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(key, ctx.prev); },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+    },
     onSuccess: (data) => merge('character', data),
   });
 
@@ -655,7 +839,9 @@ export const useMarkMovieWatched = () => {
       on ? api.post(`/movies/${id}/watched`, {}) : api.del(`/movies/${id}/watched`),
     onMutate: async ({ id, on }) => {
       const prevMovie = qc.getQueryData(qk.movie(id));
-      qc.setQueryData(qk.movie(id), (old: any) => (old ? { ...old, watched: on, watchCount: on ? 1 : 0 } : old));
+      qc.setQueryData(qk.movie(id), (old: any) =>
+        old ? { ...old, watched: on, watchCount: on ? 1 : 0 } : old,
+      );
 
       // watchlist entries carry { id, ... } keyed by mediaId; flip watched optimistically.
       const prevWatchlist = qc.getQueriesData({ queryKey: ['watchlist'] });
@@ -694,7 +880,9 @@ export const useRewatchMovie = () => {
     mutationFn: (id: string) => api.post<{ watchCount: number }>(`/movies/${id}/rewatch`, {}),
     onMutate: async (id: string) => {
       const prevMovie = qc.getQueryData(qk.movie(id));
-      qc.setQueryData(qk.movie(id), (old: any) => (old ? { ...old, watchCount: Math.max(1, (Number(old.watchCount) || 1) + 1) } : old));
+      qc.setQueryData(qk.movie(id), (old: any) =>
+        old ? { ...old, watchCount: Math.max(1, (Number(old.watchCount) || 1) + 1) } : old,
+      );
       return { prevMovie };
     },
     onError: (_e, id, ctx) => {
@@ -780,7 +968,9 @@ export const useMarkNotificationRead = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, all }: { id?: string; all?: boolean }) =>
-      all ? api.post('/me/notifications/mark-all-read', {}) : api.patch(`/me/notifications/${id}/read`, {}),
+      all
+        ? api.post('/me/notifications/mark-all-read', {})
+        : api.patch(`/me/notifications/${id}/read`, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
   });
 };
@@ -789,7 +979,10 @@ export const useMarkNotificationRead = () => {
 const TERMINAL = ['READY_FOR_REVIEW', 'COMPLETED', 'FAILED', 'CANCELLED', 'ROLLED_BACK'];
 
 export const useUploadImport = () =>
-  useMutation({ mutationFn: (fd: FormData) => api.post<{ importId: string; status: string }>('/imports/upload', fd) });
+  useMutation({
+    mutationFn: (fd: FormData) =>
+      api.post<{ importId: string; status: string }>('/imports/upload', fd),
+  });
 
 export const useImport = (id?: string) =>
   useQuery({
@@ -828,16 +1021,23 @@ export const useActiveAnnouncement = () =>
 
 // A single large page instead of an infinite query: the review list's underlying set shifts
 // as items change status, which breaks offset pagination and causes stale/duplicate rows.
-export const useImportItems = (id: string, status: string | undefined, entity: string | undefined) =>
+export const useImportItems = (
+  id: string,
+  status: string | undefined,
+  entity: string | undefined,
+) =>
   useQuery({
     queryKey: ['importItems', id, status ?? 'all', entity ?? 'all'],
     queryFn: () =>
-      api.get<{ items: any[]; total: number; page: number; pageSize: number }>(`/imports/${id}/items`, {
-        status,
-        entity,
-        page: 1,
-        pageSize: 500,
-      }),
+      api.get<{ items: any[]; total: number; page: number; pageSize: number }>(
+        `/imports/${id}/items`,
+        {
+          status,
+          entity,
+          page: 1,
+          pageSize: 500,
+        },
+      ),
     enabled: !!id,
     // No placeholderData: after a status change / filter switch we'd otherwise briefly show the
     // previous (wrong) filter's rows. Correctness over flicker for the review list.
@@ -865,11 +1065,14 @@ export const useResolveAllForShow = (importId: string) => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (args: { matchedMediaId: string; sourceTitle: string; season?: number | null }) =>
-      api.post<{ resolved: number; matched: number; needsReview: number }>(`/imports/${importId}/resolve-episodes`, {
-        matchedMediaId: args.matchedMediaId,
-        sourceTitle: args.sourceTitle,
-        season: args.season ?? undefined,
-      }),
+      api.post<{ resolved: number; matched: number; needsReview: number }>(
+        `/imports/${importId}/resolve-episodes`,
+        {
+          matchedMediaId: args.matchedMediaId,
+          sourceTitle: args.sourceTitle,
+          season: args.season ?? undefined,
+        },
+      ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['importItems'] });
       qc.invalidateQueries({ queryKey: ['import'] });
@@ -880,14 +1083,21 @@ export const useResolveAllForShow = (importId: string) => {
 export const useConfirmImport = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.post<{ importId: string; created: number; skipped: number }>(`/imports/${id}/confirm`, {}),
+    mutationFn: (id: string) =>
+      api.post<{ importId: string; created: number; skipped: number }>(
+        `/imports/${id}/confirm`,
+        {},
+      ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['import'] }),
   });
 };
 
 export const useCancelImport = () => {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: (id: string) => api.post(`/imports/${id}/cancel`, {}), onSuccess: () => qc.invalidateQueries({ queryKey: ['import'] }) });
+  return useMutation({
+    mutationFn: (id: string) => api.post(`/imports/${id}/cancel`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['import'] }),
+  });
 };
 
 // ---------------- Comment images ----------------
@@ -897,7 +1107,10 @@ export const useUploadCommentImage = () => {
     mutationFn: ({ commentId, uri }: { commentId: string; uri: string }) => {
       const fd = new FormData();
       fd.append('file', { uri, name: 'image.jpg', type: 'image/jpeg' } as any);
-      return api.post<{ commentImageId: string; status: string }>(`/comments/${commentId}/image`, fd);
+      return api.post<{ commentImageId: string; status: string }>(
+        `/comments/${commentId}/image`,
+        fd,
+      );
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['comments'] }),
   });
@@ -910,7 +1123,9 @@ export const useCommentImageStatus = (imageId: string | null) =>
     enabled: !!imageId,
     refetchInterval: (q) => {
       const s = (q.state.data as any)?.status;
-      return s && !['ready', 'rejected', 'failed', 'deleted', 'needs_manual_review'].includes(s) ? 2000 : false;
+      return s && !['ready', 'rejected', 'failed', 'deleted', 'needs_manual_review'].includes(s)
+        ? 2000
+        : false;
     },
   });
 
@@ -919,7 +1134,9 @@ export const useLeaderboard = (type: LeaderboardType, page: number, pageSize = 1
   useQuery({
     queryKey: ['leaderboard', type, page, pageSize],
     queryFn: () =>
-      api.get<LeaderboardPageDto>(`/me/stats/leaderboard?type=${type}&page=${page}&pageSize=${pageSize}`),
+      api.get<LeaderboardPageDto>(
+        `/me/stats/leaderboard?type=${type}&page=${page}&pageSize=${pageSize}`,
+      ),
     placeholderData: keepPreviousData,
     // No refetchInterval: tab screens stay mounted, so a timer would poll every minute
     // for the rest of the session. The component refetches on focus instead (covers the
@@ -927,14 +1144,21 @@ export const useLeaderboard = (type: LeaderboardType, page: number, pageSize = 1
   });
 
 /** Prefetch the next page (if any) so arrow/swipe navigation is instant. */
-export const usePrefetchLeaderboard = (type: LeaderboardType, page: number, totalPages: number, pageSize = 10) => {
+export const usePrefetchLeaderboard = (
+  type: LeaderboardType,
+  page: number,
+  totalPages: number,
+  pageSize = 10,
+) => {
   const qc = useQueryClient();
   useEffect(() => {
     if (page + 1 <= totalPages) {
       qc.prefetchQuery({
         queryKey: ['leaderboard', type, page + 1, pageSize],
         queryFn: () =>
-          api.get<LeaderboardPageDto>(`/me/stats/leaderboard?type=${type}&page=${page + 1}&pageSize=${pageSize}`),
+          api.get<LeaderboardPageDto>(
+            `/me/stats/leaderboard?type=${type}&page=${page + 1}&pageSize=${pageSize}`,
+          ),
       });
     }
   }, [type, page, totalPages, pageSize, qc]);
@@ -976,7 +1200,10 @@ export const useToggleListLike = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post(`/lists/${id}/like`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['list'] }); qc.invalidateQueries({ queryKey: ['myLists'] }); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['list'] });
+      qc.invalidateQueries({ queryKey: ['myLists'] });
+    },
   });
 };
 
@@ -984,7 +1211,10 @@ export const useToggleListSub = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post(`/lists/${id}/subscribe`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['list'] }); qc.invalidateQueries({ queryKey: ['followedLists'] }); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['list'] });
+      qc.invalidateQueries({ queryKey: ['followedLists'] });
+    },
   });
 };
 
@@ -999,8 +1229,12 @@ export const useToggleListNotify = () => {
 export const useCreateList = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (dto: { title: string; description?: string; visibility?: string; items?: string[] }) =>
-      api.post<any>('/me/lists', dto),
+    mutationFn: (dto: {
+      title: string;
+      description?: string;
+      visibility?: string;
+      items?: string[];
+    }) => api.post<any>('/me/lists', dto),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['myLists'] }),
   });
 };
@@ -1010,7 +1244,10 @@ export const useAddListItem = () => {
   return useMutation({
     mutationFn: ({ listId, mediaId }: { listId: string; mediaId: string }) =>
       api.post(`/lists/${listId}/items`, { mediaId }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['listItems'] }); qc.invalidateQueries({ queryKey: ['list'] }); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['listItems'] });
+      qc.invalidateQueries({ queryKey: ['list'] });
+    },
   });
 };
 
@@ -1019,7 +1256,10 @@ export const useRemoveListItem = () => {
   return useMutation({
     mutationFn: ({ listId, itemId }: { listId: string; itemId: string }) =>
       api.del(`/lists/${listId}/items/${itemId}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['listItems'] }); qc.invalidateQueries({ queryKey: ['list'] }); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['listItems'] });
+      qc.invalidateQueries({ queryKey: ['list'] });
+    },
   });
 };
 
@@ -1032,16 +1272,28 @@ export const useSearchUsers = (q: string) =>
   });
 
 export const usePublicProfile = (username: string) =>
-  useQuery({ queryKey: ['profile', username], queryFn: () => api.get<any>(`/users/${username}`), enabled: !!username });
+  useQuery({
+    queryKey: ['profile', username],
+    queryFn: () => api.get<any>(`/users/${username}`),
+    enabled: !!username,
+  });
 
 export const useFollows = (username: string, type: 'followers' | 'following') =>
-  useQuery({ queryKey: ['follows', username, type], queryFn: () => api.get<any[]>(`/users/${username}/follows?type=${type}`), enabled: !!username });
+  useQuery({
+    queryKey: ['follows', username, type],
+    queryFn: () => api.get<any[]>(`/users/${username}/follows?type=${type}`),
+    enabled: !!username,
+  });
 
 export const useFollowUser = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (userId: string) => api.post(`/users/${userId}/follow`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['profile'] }); qc.invalidateQueries({ queryKey: ['userSearch'] }); qc.invalidateQueries({ queryKey: ['follows'] }); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['profile'] });
+      qc.invalidateQueries({ queryKey: ['userSearch'] });
+      qc.invalidateQueries({ queryKey: ['follows'] });
+    },
   });
 };
 
@@ -1049,6 +1301,10 @@ export const useUnfollowUser = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (userId: string) => api.del(`/users/${userId}/follow`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['profile'] }); qc.invalidateQueries({ queryKey: ['userSearch'] }); qc.invalidateQueries({ queryKey: ['follows'] }); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['profile'] });
+      qc.invalidateQueries({ queryKey: ['userSearch'] });
+      qc.invalidateQueries({ queryKey: ['follows'] });
+    },
   });
 };

@@ -20,6 +20,7 @@ import { MediaPromotionService } from './reconcile/media-promotion.service';
 import { HydrationQueue } from './hydration/hydration.queue';
 import { HydrationProcessor } from './hydration/hydration.processor';
 import { MetadataBackfillService } from './metadata-backfill.service';
+import { StructureRemapService } from './structure-remap.service';
 
 @Module({
   controllers: [MediaController],
@@ -37,6 +38,7 @@ import { MetadataBackfillService } from './metadata-backfill.service';
     HydrationQueue,
     HydrationProcessor,
     MetadataBackfillService,
+    StructureRemapService,
     TmdbClient,
     TmdbProvider,
     TvdbClient,

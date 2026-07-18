@@ -54,5 +54,11 @@
   "mediaSearchPlaceholder": "番組や映画を検索…",
   "mediaNoResults": "結果がありません。",
   "listsSectionTitle": "あなたのリスト",
-  "attachList": "リストを添付"
+  "attachList": "リストを添付",
+  "showMoreReplies": "さらに返信を表示（{{count}}）",
+  "continueThread": "このスレッドを続ける",
+  "collapseThread": "スレッドを折りたたむ",
+  "expandThread": "スレッドを展開",
+  "replyingTo": "@{{username}} に返信",
+  "cancelReply": "返信をキャンセル"
 }

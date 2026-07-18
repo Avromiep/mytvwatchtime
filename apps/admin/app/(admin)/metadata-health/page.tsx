@@ -13,6 +13,8 @@ interface MetadataHealth {
   tvdbOnly: number;
   stale: number;
   byClassification: Record<string, number>;
+  animeOnTmdb: number;
+  animeOnTmdbNoTvdbId: number;
 }
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -30,6 +32,8 @@ export default function MetadataHealthPage() {
   const [backfillResult, setBackfillResult] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [fixingAnime, setFixingAnime] = useState(false);
+  const [animeResult, setAnimeResult] = useState<string | null>(null);
   const [batchCount, setBatchCount] = useState('200');
   const [batchRps, setBatchRps] = useState('');
 
@@ -73,6 +77,19 @@ export default function MetadataHealthPage() {
       .finally(() => setSyncing(false));
   };
 
+  const runAnimeFix = () => {
+    setFixingAnime(true);
+    setAnimeResult(null);
+    api
+      .post('/admin/anime-tvdb-rehydrate/run')
+      .then(() => {
+        setAnimeResult('Anime TVDB rehydration started in background. Stats refresh in 30s.');
+        setTimeout(() => load(), 30000); // auto-refresh stats after 30s
+      })
+      .catch(() => setAnimeResult('Anime TVDB rehydration failed to start.'))
+      .finally(() => setFixingAnime(false));
+  };
+
   if (!canView) return <p className="p-6 text-sm text-zinc-500">Admins only.</p>;
 
   const pct = (n: number) => (stats && stats.total > 0 ? Math.round((n / stats.total) * 100) : 0);
@@ -91,6 +108,13 @@ export default function MetadataHealthPage() {
             className="rounded border border-blue-600 px-3 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
           >
             {syncing ? 'Syncing…' : 'TMDB Changes Sync'}
+          </button>
+          <button
+            onClick={runAnimeFix}
+            disabled={fixingAnime}
+            className="rounded border border-blue-600 px-3 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+          >
+            {fixingAnime ? 'Starting…' : 'Fix Anime → TVDB'}
           </button>
           <button
             onClick={runBackfill}
@@ -127,6 +151,11 @@ export default function MetadataHealthPage() {
           {backfillResult}
         </div>
       )}
+      {animeResult && (
+        <div className="rounded-lg border border-purple-200 bg-purple-50 p-3 text-sm text-purple-800 dark:border-purple-800 dark:bg-purple-950 dark:text-purple-200">
+          {animeResult}
+        </div>
+      )}
 
       {loading || !stats ? (
         <p className="text-sm text-zinc-500">Loading…</p>
@@ -139,6 +168,12 @@ export default function MetadataHealthPage() {
             <MetricCard label="Shows Missing Episodes" value={stats.showsMissingEpisodes} sub={`${pct(stats.showsMissingEpisodes)}% of total`} highlight={stats.showsMissingEpisodes > 0} />
             <MetricCard label="Movies Missing Overview" value={stats.moviesMissingOverview} sub={`${pct(stats.moviesMissingOverview)}% of total`} highlight={stats.moviesMissingOverview > 0} />
             <MetricCard label="TVDB-Only (no TMDB)" value={stats.tvdbOnly} sub={`${pct(stats.tvdbOnly)}% of total`} />
+            <MetricCard
+              label="Anime on TMDB"
+              value={stats.animeOnTmdb}
+              sub={`should be TVDB · ${stats.animeOnTmdbNoTvdbId} missing TVDB id`}
+              highlight={stats.animeOnTmdb > 0}
+            />
             <MetricCard label="Stale (30+ days)" value={stats.stale} sub={`${pct(stats.stale)}% of total`} highlight={stats.stale > 0} />
           </div>
 
@@ -162,7 +197,9 @@ export default function MetadataHealthPage() {
           <p className="text-xs text-zinc-400">
             Backfill processes 20 items per run (oldest/never-hydrated first). It hydrates from TMDB (or TVDB for
             TVDB-only media), respects global rate limits, and enqueues anime classification (Kitsu &gt; Jikan &gt; TVDB
-            &gt; TMDB). Watch history is never affected.
+            &gt; TMDB). Watch history is never affected. Animation-genre shows are TVDB-authoritative: the daily Anime
+            TVDB Rehydration job (Scheduled Jobs) and the Fix Anime button re-hydrate any TMDB-structured ones from
+            TVDB, and TMDB Changes Sync skips them.
           </p>
         </>
       )}

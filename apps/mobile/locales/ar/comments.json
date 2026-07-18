@@ -54,5 +54,11 @@
   "mediaSearchPlaceholder": "ابحث عن مسلسلات أو أفلام…",
   "mediaNoResults": "لا توجد نتائج.",
   "listsSectionTitle": "قوائمك",
-  "attachList": "إرفاق قائمة"
+  "attachList": "إرفاق قائمة",
+  "showMoreReplies": "عرض المزيد من الردود ({{count}})",
+  "continueThread": "متابعة هذه السلسلة",
+  "collapseThread": "طي السلسلة",
+  "expandThread": "توسيع السلسلة",
+  "replyingTo": "رد على @{{username}}",
+  "cancelReply": "إلغاء الرد"
 }

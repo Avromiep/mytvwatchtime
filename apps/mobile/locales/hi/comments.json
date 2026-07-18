@@ -54,5 +54,11 @@
   "mediaSearchPlaceholder": "शो या फ़िल्म खोजें…",
   "mediaNoResults": "कोई परिणाम नहीं.",
   "listsSectionTitle": "आपकी सूचियां",
-  "attachList": "सूची संलग्न करें"
+  "attachList": "सूची संलग्न करें",
+  "showMoreReplies": "और जवाब दिखाएँ ({{count}})",
+  "continueThread": "यह थ्रेड जारी रखें",
+  "collapseThread": "थ्रेड छोटा करें",
+  "expandThread": "थ्रेड फैलाएँ",
+  "replyingTo": "@{{username}} को जवाब",
+  "cancelReply": "जवाब रद्द करें"
 }

@@ -1,4 +1,9 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { CommentThreadType, ListVisibility, NotificationCategory, Prisma } from '@prisma/client';
 import { isCommunityGroupId } from '@tvwatch/shared';
@@ -8,7 +13,20 @@ import { localized } from '../common/utils/localization.util';
 import { paginate } from '../common/dto/pagination.dto';
 import { NotificationService } from '../notifications/notification.service';
 import { CommentImageService } from '../comment-images/comment-image.service';
-import { CommentQueryDto, CreateCommentDto, RepliesQueryDto, UpdateCommentDto, isAllowedGiphyUrl } from './dto/comment.dto';
+import {
+  CommentQueryDto,
+  CreateCommentDto,
+  RepliesQueryDto,
+  UpdateCommentDto,
+  isAllowedGiphyUrl,
+  type CommentSort,
+} from './dto/comment.dto';
+
+/** Hard cap on reply nesting depth (top-level = 0) to prevent pathological threads. */
+export const MAX_COMMENT_DEPTH = 25;
+
+/** Children previewed per parent when a thread is fetched with depth=2. */
+export const CHILD_PREVIEW_LIMIT = 10;
 
 @Injectable()
 export class CommentsService {
@@ -36,7 +54,9 @@ export class CommentsService {
       ...(blockedIds.length ? { userId: { notIn: blockedIds } } : {}),
     };
     const orderBy =
-      q.resolvedSort === 'MOST_LIKED' ? { likesCount: 'desc' as const } : { createdAt: 'desc' as const };
+      q.resolvedSort === 'MOST_LIKED'
+        ? { likesCount: 'desc' as const }
+        : { createdAt: 'desc' as const };
     const page = q.page || 1;
     const pageSize = q.pageSize || 20;
     const [rows, total] = await Promise.all([
@@ -52,7 +72,10 @@ export class CommentsService {
 
     const authorIds = [...new Set(rows.map((r) => r.userId))];
     const counts = await this.authorCounts(authorIds);
-    const likedIds = await this.likedIds(userId, rows.map((r) => r.id));
+    const likedIds = await this.likedIds(
+      userId,
+      rows.map((r) => r.id),
+    );
     const mediaMap = await this.mediaRefs(rows.map((r) => r.mediaId).filter(Boolean) as string[]);
     const listMap = await this.listRefs(rows.map((r) => r.listId).filter(Boolean) as string[]);
 
@@ -71,13 +94,17 @@ export class CommentsService {
       throw new BadRequestException('Unknown group');
     }
 
-    // Enforce a single level of replies: a reply's parent must be top-level.
+    // Replies nest to any depth (Reddit-style threads): the parent must exist,
+    // live in the SAME thread, and not be a tombstone.
     let parent: any = null;
     if (dto.parentId) {
       parent = await this.prisma.comment.findUnique({ where: { id: dto.parentId } });
       if (!parent) throw new NotFoundException('Parent comment not found');
-      if (parent.parentId) {
-        throw new BadRequestException('You can only reply to top-level comments');
+      if (parent.threadType !== dto.threadType || parent.threadId !== dto.threadId) {
+        throw new BadRequestException('Reply must belong to the same thread as its parent');
+      }
+      if ((parent.depth ?? 0) >= MAX_COMMENT_DEPTH) {
+        throw new BadRequestException('This thread is too deep to reply to');
       }
       if (parent.deletedByUser) {
         throw new BadRequestException('Cannot reply to a deleted comment');
@@ -90,7 +117,10 @@ export class CommentsService {
       throw new BadRequestException('Media attachment requires both mediaType and mediaId');
     }
     if (hasMedia) {
-      const media = await this.prisma.mediaItem.findUnique({ where: { id: dto.mediaId }, select: { type: true } });
+      const media = await this.prisma.mediaItem.findUnique({
+        where: { id: dto.mediaId },
+        select: { type: true },
+      });
       if (!media || media.type !== dto.mediaType) throw new BadRequestException('Unknown media');
     }
 
@@ -126,6 +156,8 @@ export class CommentsService {
       data: {
         userId,
         parentId: dto.parentId,
+        depth: parent ? (parent.depth ?? 0) + 1 : 0,
+        rootId: parent ? (parent.rootId ?? parent.id) : null,
         threadType: dto.threadType,
         threadId: dto.threadId,
         body: dto.body ?? '',
@@ -202,7 +234,9 @@ export class CommentsService {
       ...(blockedIds.length ? { userId: { notIn: blockedIds } } : {}),
     };
     const orderBy =
-      q.resolvedSort === 'MOST_LIKED' ? { likesCount: 'desc' as const } : { createdAt: 'desc' as const };
+      q.resolvedSort === 'MOST_LIKED'
+        ? { likesCount: 'desc' as const }
+        : { createdAt: 'desc' as const };
     const page = q.page || 1;
     const pageSize = q.pageSize || 20;
 
@@ -217,18 +251,72 @@ export class CommentsService {
       this.prisma.comment.count({ where }),
     ]);
 
-    const authorIds = [...new Set(rows.map((r) => r.userId))];
+    // depth=2: also return each direct child's first CHILD_PREVIEW_LIMIT children (same
+    // sort), flat in the same items array. The client groups by parentId to build the
+    // tree; `total` keeps counting direct children only.
+    let children: typeof rows = [];
+    if (q.depth === 2 && rows.length > 0) {
+      children = await this.childPreview(
+        rows.map((r) => r.id),
+        blockedIds,
+        q.resolvedSort,
+      );
+    }
+
+    const allRows = [...rows, ...children];
+    const authorIds = [...new Set(allRows.map((r) => r.userId))];
     const counts = await this.authorCounts(authorIds);
-    const likedIds = await this.likedIds(userId, rows.map((r) => r.id));
-    const mediaMap = await this.mediaRefs(rows.map((r) => r.mediaId).filter(Boolean) as string[]);
-    const listMap = await this.listRefs(rows.map((r) => r.listId).filter(Boolean) as string[]);
-    const items = rows.map((r) =>
+    const likedIds = await this.likedIds(
+      userId,
+      allRows.map((r) => r.id),
+    );
+    const mediaMap = await this.mediaRefs(
+      allRows.map((r) => r.mediaId).filter(Boolean) as string[],
+    );
+    const listMap = await this.listRefs(allRows.map((r) => r.listId).filter(Boolean) as string[]);
+    const items = allRows.map((r) =>
       this.toDto(r, counts.get(r.userId)!, likedIds.has(r.id), {
         media: r.mediaId ? mediaMap.get(r.mediaId) : null,
         list: r.listId ? listMap.get(r.listId) : null,
       }),
     );
     return paginate(items, page, pageSize, total);
+  }
+
+  /**
+   * First CHILD_PREVIEW_LIMIT children of each given parent (visibility-filtered,
+   * same sort as the parent page), ordered per parent by rank. Used by depth=2
+   * replies so a thread page shows two layers without one query per comment.
+   */
+  private async childPreview(parentIds: string[], blockedIds: string[], sort: CommentSort) {
+    const orderSql =
+      sort === 'MOST_LIKED'
+        ? Prisma.sql`ORDER BY likes_count DESC, created_at DESC, id`
+        : Prisma.sql`ORDER BY created_at DESC, id`;
+    const blockedSql = blockedIds.length
+      ? Prisma.sql`AND user_id NOT IN (${Prisma.join(blockedIds)})`
+      : Prisma.empty;
+    const metas = await this.prisma.$queryRaw<{ id: string; parent_id: string }[]>`
+      SELECT id, parent_id FROM (
+        SELECT id, parent_id,
+               ROW_NUMBER() OVER (PARTITION BY parent_id ${orderSql}) AS rn
+        FROM comments
+        WHERE parent_id IN (${Prisma.join(parentIds)})
+          AND hidden = false
+          AND admin_deleted = false
+          ${blockedSql}
+      ) t
+      WHERE rn <= ${CHILD_PREVIEW_LIMIT}
+      ORDER BY t.parent_id, t.rn
+    `;
+    if (metas.length === 0) return [];
+    const rows = await this.prisma.comment.findMany({
+      where: { id: { in: metas.map((m) => m.id) } },
+      include: { user: { include: { profile: true } }, image: true },
+    });
+    // Re-apply the raw query's (parent, rank) ordering lost by the id-IN hydration.
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return metas.map((m) => byId.get(m.id)!).filter(Boolean);
   }
 
   /** Distinct participants in a thread (for @mention suggestions). */
@@ -251,11 +339,15 @@ export class CommentsService {
 
   async like(userId: string, commentId: string) {
     const comment = await this.prisma.comment.findUnique({ where: { id: commentId } });
-    if (!comment || comment.hidden || comment.adminDeleted) throw new NotFoundException('Comment not found');
+    if (!comment || comment.hidden || comment.adminDeleted)
+      throw new NotFoundException('Comment not found');
     if (comment.deletedByUser) throw new BadRequestException('Cannot like a deleted comment');
     try {
       await this.prisma.commentLike.create({ data: { userId, commentId } });
-      await this.prisma.comment.update({ where: { id: commentId }, data: { likesCount: { increment: 1 } } });
+      await this.prisma.comment.update({
+        where: { id: commentId },
+        data: { likesCount: { increment: 1 } },
+      });
       if (comment.userId !== userId) {
         await this.notifications.createForUser(comment.userId, {
           category: NotificationCategory.COMMENT_LIKE,
@@ -275,7 +367,10 @@ export class CommentsService {
   async unlike(userId: string, commentId: string) {
     const deleted = await this.prisma.commentLike.deleteMany({ where: { userId, commentId } });
     if (deleted.count > 0) {
-      await this.prisma.comment.update({ where: { id: commentId }, data: { likesCount: { decrement: 1 } } });
+      await this.prisma.comment.update({
+        where: { id: commentId },
+        data: { likesCount: { decrement: 1 } },
+      });
     }
     return { liked: false };
   }
@@ -286,8 +381,10 @@ export class CommentsService {
       where: { id: commentId },
       include: { user: { include: { profile: true } }, image: true },
     });
-    if (!comment || comment.hidden || comment.adminDeleted) throw new NotFoundException('Comment not found');
-    if (comment.userId !== userId) throw new ForbiddenException('You can only edit your own comments');
+    if (!comment || comment.hidden || comment.adminDeleted)
+      throw new NotFoundException('Comment not found');
+    if (comment.userId !== userId)
+      throw new ForbiddenException('You can only edit your own comments');
     if (comment.deletedByUser) throw new BadRequestException('Cannot edit a deleted comment');
 
     const data: any = { editedAt: new Date() };
@@ -316,7 +413,11 @@ export class CommentsService {
     // image while setting a GIF in the same call is allowed; setting a GIF while an image
     // is still attached is rejected.
     const willHaveGif = dto.gifUrl !== undefined ? dto.gifUrl !== null : !!comment.gifUrl;
-    const willHaveImage = dto.detachImage ? false : !!comment.image && comment.image.status !== 'deleted' && comment.image.status !== 'rejected';
+    const willHaveImage = dto.detachImage
+      ? false
+      : !!comment.image &&
+        comment.image.status !== 'deleted' &&
+        comment.image.status !== 'rejected';
     if (willHaveGif && willHaveImage) {
       throw new BadRequestException('A comment cannot contain both an image and a GIF');
     }
@@ -345,8 +446,10 @@ export class CommentsService {
   /** Owner soft-delete: tombstone. Body/attachments are hidden but the thread is preserved. */
   async softDelete(userId: string, commentId: string) {
     const comment = await this.prisma.comment.findUnique({ where: { id: commentId } });
-    if (!comment || comment.hidden || comment.adminDeleted) throw new NotFoundException('Comment not found');
-    if (comment.userId !== userId) throw new ForbiddenException('You can only delete your own comments');
+    if (!comment || comment.hidden || comment.adminDeleted)
+      throw new NotFoundException('Comment not found');
+    if (comment.userId !== userId)
+      throw new ForbiddenException('You can only delete your own comments');
     if (comment.deletedByUser) return { deleted: true };
     await this.prisma.comment.update({
       where: { id: commentId },
@@ -356,7 +459,9 @@ export class CommentsService {
   }
 
   async report(userId: string, commentId: string, reason: string) {
-    await this.prisma.report.create({ data: { reporterId: userId, commentId, reason: reason as any, status: 'OPEN' } });
+    await this.prisma.report.create({
+      data: { reporterId: userId, commentId, reason: reason as any, status: 'OPEN' },
+    });
     return { reported: true };
   }
 
@@ -364,11 +469,18 @@ export class CommentsService {
   private toDto(r: any, counts: any, likedByMe: boolean, refs?: { media?: any; list?: any }) {
     const tombstone = !!r.deletedByUser;
     const image = r.image
-      ? { id: r.image.id, status: r.image.status, width: r.image.width, height: r.image.height, blurhash: r.image.blurhash }
+      ? {
+          id: r.image.id,
+          status: r.image.status,
+          width: r.image.width,
+          height: r.image.height,
+          blurhash: r.image.blurhash,
+        }
       : null;
     return {
       id: r.id,
       parentId: r.parentId,
+      depth: r.depth ?? 0,
       threadType: r.threadType,
       threadId: r.threadId,
       author: mapPublicUser({ ...r.user, ...counts }),
@@ -457,9 +569,21 @@ export class CommentsService {
     // 3 GROUP BY queries for the whole author set — the old loop ran 3 COUNTs PER
     // AUTHOR (up to ~60 queries for a 20-comment page).
     const [followers, following, comments] = await Promise.all([
-      this.prisma.follow.groupBy({ by: ['targetId'], where: { targetId: { in: ids } }, _count: { _all: true } }),
-      this.prisma.follow.groupBy({ by: ['followerId'], where: { followerId: { in: ids } }, _count: { _all: true } }),
-      this.prisma.comment.groupBy({ by: ['userId'], where: { userId: { in: ids } }, _count: { _all: true } }),
+      this.prisma.follow.groupBy({
+        by: ['targetId'],
+        where: { targetId: { in: ids } },
+        _count: { _all: true },
+      }),
+      this.prisma.follow.groupBy({
+        by: ['followerId'],
+        where: { followerId: { in: ids } },
+        _count: { _all: true },
+      }),
+      this.prisma.comment.groupBy({
+        by: ['userId'],
+        where: { userId: { in: ids } },
+        _count: { _all: true },
+      }),
     ]);
     const f1 = new Map(followers.map((r) => [r.targetId, r._count._all]));
     const f2 = new Map(following.map((r) => [r.followerId, r._count._all]));
@@ -476,7 +600,10 @@ export class CommentsService {
 
   private async likedIds(userId: string, commentIds: string[]) {
     if (commentIds.length === 0) return new Set<string>();
-    const likes = await this.prisma.commentLike.findMany({ where: { userId, commentId: { in: commentIds } }, select: { commentId: true } });
+    const likes = await this.prisma.commentLike.findMany({
+      where: { userId, commentId: { in: commentIds } },
+      select: { commentId: true },
+    });
     return new Set(likes.map((l) => l.commentId));
   }
 }

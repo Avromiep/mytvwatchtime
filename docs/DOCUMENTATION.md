@@ -263,7 +263,7 @@ myshows.tsx               → To watch / Not started / Finished (virtualized, st
 notifications.tsx         → Center with read/unread
 settings.tsx              → Profile edit + account
 import.tsx                → File picker → compress → upload → review → confirm
-comments.tsx              → Composer + image picker + one-level replies + @mentions
+comments.tsx              → Composer + image picker + nested threads + @mentions
 ```
 
 ### Theme
@@ -425,9 +425,9 @@ All endpoints under `/api`. Auth: `Authorization: Bearer <token>`.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/comments?threadType=&threadId=` | List comments |
-| POST | `/comments` | Create (one-level replies) |
+| POST | `/comments` | Create (nested replies, any depth) |
 | GET | `/comments/participants` | @mention suggestions |
-| GET | `/comments/:id/replies` | Replies |
+| GET | `/comments/:id/replies?depth=1\|2` | Replies (depth=2 adds each child's first children) |
 | POST/DELETE | `/comments/:id/like` | Like/unlike |
 | POST | `/comments/:id/report` | Report |
 | POST/DELETE | `/users/:id/follow` | Follow/unfollow |
@@ -655,8 +655,18 @@ Ratings live inside the JSON files as a nullable 1–10 `rating` field (shows/mo
 ## 13. Comments & Images
 
 ### Comment System
-- One level deep: top-level + replies (no reply-to-reply)
-- Thread types: SHOW, MOVIE, EPISODE (threadId = media or episode ID)
+- Reddit-style nested threads: replies nest to any depth (server cap `MAX_COMMENT_DEPTH = 25`).
+  Each comment stores `depth` (0 = top-level) and `rootId` (top-level ancestor id); both are
+  set at creation and were backfilled for legacy one-level replies.
+- `repliesCount` counts DIRECT children only. Tombstones keep their subtree visible.
+- `GET /comments/:id/replies?depth=2` returns a page of direct children PLUS each child's
+  first 10 children (`CHILD_PREVIEW_LIMIT`, same sort), flat in `items` — the client groups
+  by `parentId` to render two layers; `total` counts direct children only. Default `depth=1`
+  is unchanged (direct children only).
+- Thread screen UX: two layers by default, "Show more replies" inline-expands a node's next
+  two layers (one fetch, pageSize 100), then "Continue this thread" opens `/comment/:id`
+  focused on that node. Any sub-thread can be collapsed/expanded.
+- Thread types: SHOW, MOVIE, EPISODE, GROUP (threadId = media/episode ID or group slug)
 - @mention suggestions: distinct participants in thread
 - Likes, reports (SPAM, ABUSE, OFF_TOPIC, OTHER)
 - Image support: one image per comment

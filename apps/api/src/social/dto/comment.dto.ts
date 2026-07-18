@@ -1,7 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CommentThreadType, MediaType } from '@prisma/client';
 import { Type } from 'class-transformer';
-import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import { PaginationDto } from '../../common/dto/pagination.dto';
 
 /** Max stored length for a GIPHY media URL. */
@@ -58,17 +67,24 @@ export class CreateCommentDto {
   @MaxLength(GIF_URL_MAX_LENGTH)
   gifUrl?: string;
 
-  @ApiPropertyOptional({ enum: MediaType, description: 'Attached show/movie card type. Requires mediaId.' })
+  @ApiPropertyOptional({
+    enum: MediaType,
+    description: 'Attached show/movie card type. Requires mediaId.',
+  })
   @IsOptional()
   @IsEnum(MediaType)
   mediaType?: MediaType;
 
-  @ApiPropertyOptional({ description: 'Attached show/movie card id (media_items id). Requires mediaType.' })
+  @ApiPropertyOptional({
+    description: 'Attached show/movie card id (media_items id). Requires mediaType.',
+  })
   @IsOptional()
   @IsString()
   mediaId?: string;
 
-  @ApiPropertyOptional({ description: 'Attached custom-list card id. Exclusive with other attachments.' })
+  @ApiPropertyOptional({
+    description: 'Attached custom-list card id. Exclusive with other attachments.',
+  })
   @IsOptional()
   @IsString()
   listId?: string;
@@ -91,7 +107,9 @@ export class UpdateCommentDto {
   @MaxLength(GIF_URL_MAX_LENGTH)
   gifUrl?: string | null;
 
-  @ApiPropertyOptional({ description: 'When true, detaches (deletes) the current image attachment.' })
+  @ApiPropertyOptional({
+    description: 'When true, detaches (deletes) the current image attachment.',
+  })
   @IsOptional()
   @IsBoolean()
   detachImage?: boolean;
@@ -139,6 +157,21 @@ export class RepliesQueryDto extends PaginationDto {
   @IsOptional()
   @IsString()
   sort?: string;
+
+  @ApiPropertyOptional({
+    enum: [1, 2],
+    default: 1,
+    description:
+      'Levels of descendants returned relative to the requested comment. 1 = direct children only ' +
+      "(paginated). 2 = additionally each direct child's first children (capped per parent), flat " +
+      'in the same items array; total always counts direct children only.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(2)
+  depth?: number = 1;
 
   get resolvedSort(): CommentSort {
     return normalizeSort(this.sort);

@@ -54,5 +54,11 @@
   "mediaSearchPlaceholder": "Rechercher des séries ou des films…",
   "mediaNoResults": "Aucun résultat.",
   "listsSectionTitle": "Vos listes",
-  "attachList": "Joindre une liste"
+  "attachList": "Joindre une liste",
+  "showMoreReplies": "Afficher plus de réponses ({{count}})",
+  "continueThread": "Continuer ce fil",
+  "collapseThread": "Réduire le fil",
+  "expandThread": "Développer le fil",
+  "replyingTo": "Réponse à @{{username}}",
+  "cancelReply": "Annuler la réponse"
 }
