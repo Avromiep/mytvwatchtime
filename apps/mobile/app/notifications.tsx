@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, View } from 'react-native';
+import { FlatList, RefreshControl, View } from 'react-native';
 import { Header } from '../components/Header';
 import { NotificationItem } from '../components/cards';
 import { Button, Chip, EmptyState, Screen, Spinner, T } from '../components/primitives';
@@ -90,14 +90,13 @@ export default function NotificationsScreen() {
             ) : null
           }
           renderItem={({ item }) => (
-            <Pressable
+            <NotificationItem
+              item={item}
               onPress={() => {
                 if (!item.read) mark.mutate({ id: item.id });
                 navigateFromLink(item.link);
               }}
-            >
-              <NotificationItem item={item} />
-            </Pressable>
+            />
           )}
         />
       )}
