@@ -17,6 +17,7 @@ export function TextField({
   style,
   containerStyle,
   trailingIcon,
+  onContentSizeChange,
 }: {
   label?: string;
   value?: string;
@@ -29,6 +30,7 @@ export function TextField({
   style?: any;
   containerStyle?: any;
   trailingIcon?: { name: string; onPress: () => void };
+  onContentSizeChange?: (e: any) => void;
 }) {
   const { tokens } = useAppearance();
   return (
@@ -48,6 +50,7 @@ export function TextField({
           placeholder={placeholder}
           placeholderTextColor={tokens.placeholder}
           multiline={multiline}
+          onContentSizeChange={onContentSizeChange}
           style={[
             styles.input,
             { backgroundColor: tokens.inputBackground, color: tokens.textPrimary, borderColor: tokens.border },

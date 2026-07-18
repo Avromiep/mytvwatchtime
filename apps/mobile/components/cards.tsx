@@ -185,10 +185,12 @@ function EpisodeCardImpl({
         ) : null}
       </View>
 
-      {/* Body: tapping the still or episode info navigates to the episode. */}
+      {/* Body: tapping the still or episode info navigates to the episode. No flex here:
+          the card's height is content-driven (inside Swipeable), and a flex child in an
+          auto-height column parent collapses to 0 on Android. */}
       <Pressable
         onPress={() => router.push(`/episode/${item.episode.id}` as any)}
-        style={{ flex: 1, flexDirection: 'row' }}
+        style={{ flexDirection: 'row' }}
       >
         <View style={styles.epStillWrap}>
           <PosterImage uri={item.episode.stillUrl ?? item.backdropUrl} style={styles.epStill} transition={0} />

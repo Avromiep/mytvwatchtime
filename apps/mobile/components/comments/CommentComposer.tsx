@@ -61,6 +61,8 @@ export function CommentComposer({
   const { data: participants = [] } = useCommentParticipants(threadType, threadId);
 
   const [body, setBody] = useState('');
+  // Auto-growing input: measured content height, clamped between one row and ~5 rows.
+  const [inputH, setInputH] = useState<number | null>(null);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageCompressing, setImageCompressing] = useState(false);
   const [imageProcessing, setImageProcessing] = useState(false);
@@ -192,6 +194,7 @@ export function CommentComposer({
         listId: attachedList?.id,
       });
       setBody('');
+      setInputH(null);
       setSelectedGif(null);
       setAttachedMedia(null);
       setAttachedList(null);
@@ -392,7 +395,7 @@ export function CommentComposer({
             onPress={pickImage}
             disabled={imageCompressing || !!imageUri || !!selectedGif || hasCardAttachment}
             hitSlop={8}
-            style={{ marginRight: spacing.sm }}
+            style={[styles.actionBtn, { marginRight: spacing.sm }]}
             accessibilityRole="button"
             accessibilityLabel={t('comments:imageAttached')}
           >
@@ -436,7 +439,7 @@ export function CommentComposer({
               sending || imageCompressing || !!selectedGif || !!imageUri || hasCardAttachment
             }
             hitSlop={8}
-            style={{ marginRight: spacing.sm }}
+            style={[styles.actionBtn, { marginRight: spacing.sm }]}
             accessibilityRole="button"
             accessibilityLabel={t('comments:attachMedia')}
           >
@@ -451,14 +454,26 @@ export function CommentComposer({
             onChangeText={setBody}
             placeholder={placeholder ?? t('comments:addComment')}
             containerStyle={{ flex: 1, marginBottom: 0 }}
+            multiline
+            onContentSizeChange={(e: any) =>
+              setInputH(e?.nativeEvent?.contentSize?.height ?? null)
+            }
+            style={[
+              styles.composerInput,
+              inputH != null
+                ? { height: Math.min(INPUT_MAX_H, Math.max(INPUT_MIN_H, Math.ceil(inputH))) }
+                : null,
+            ]}
           />
-          <Ionicons
-            name="send"
-            size={24}
-            color={tokens.primary}
+          <Pressable
             onPress={send}
-            style={{ marginLeft: spacing.sm, opacity: sending ? 0.5 : 1 }}
-          />
+            disabled={sending}
+            hitSlop={8}
+            style={[styles.actionBtn, { marginLeft: spacing.sm, opacity: sending ? 0.5 : 1 }]}
+            accessibilityRole="button"
+          >
+            <Ionicons name="send" size={24} color={tokens.primary} />
+          </Pressable>
         </View>
       </View>
       <GiphyPicker
@@ -485,6 +500,9 @@ export function CommentComposer({
   );
 }
 
+const INPUT_MIN_H = 44; // one row (padding 12×2 + ~20px text line)
+const INPUT_MAX_H = 132; // ~5 rows, then the input scrolls internally
+
 const styles = StyleSheet.create({
   bottomBar: {},
   suggestions: { borderTopWidth: 1, paddingHorizontal: spacing.lg },
@@ -498,10 +516,12 @@ const styles = StyleSheet.create({
   composer: { borderTopWidth: 1 },
   composerRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-end', // buttons stay pinned to the bottom as the input grows
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
+  actionBtn: { height: INPUT_MIN_H, alignItems: 'center', justifyContent: 'center' },
+  composerInput: { minHeight: INPUT_MIN_H, maxHeight: INPUT_MAX_H },
   gifButton: {
     borderWidth: 1,
     borderRadius: radius.sm,

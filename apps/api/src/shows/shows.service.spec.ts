@@ -1,4 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { ExternalProvider } from '@tvwatch/shared';
 import { ShowsService } from './shows.service';
 
 type FnMap = Record<string, jest.Mock>;
@@ -26,7 +27,13 @@ describe('ShowsService voting', () => {
 
   beforeEach(() => {
     prisma = mockPrisma();
-    service = new ShowsService(prisma, undefined as any, undefined as any, undefined as any);
+    service = new ShowsService(
+      prisma,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+    );
   });
 
   describe('voteDevice', () => {
@@ -37,7 +44,9 @@ describe('ShowsService voting', () => {
 
     it('rejects an invalid device value', async () => {
       prisma.userEpisodeStatus.findUnique.mockResolvedValue({ id: 's1' });
-      await expect(service.voteDevice('u', 'e', 'WATCH')).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.voteDevice('u', 'e', 'WATCH')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
       expect(prisma.userEpisodeStatus.update).not.toHaveBeenCalled();
     });
 
@@ -92,7 +101,9 @@ describe('ShowsService voting', () => {
   describe('voteReaction', () => {
     it('rejects an invalid reaction', async () => {
       prisma.userEpisodeStatus.findUnique.mockResolvedValue({ id: 's1' });
-      await expect(service.voteReaction('u', 'e', 'HAPPY')).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.voteReaction('u', 'e', 'HAPPY')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
       expect(prisma.reaction.create).not.toHaveBeenCalled();
       expect(prisma.reaction.delete).not.toHaveBeenCalled();
     });
@@ -120,7 +131,9 @@ describe('ShowsService voting', () => {
       prisma.reaction.findMany.mockResolvedValue([]);
       prisma.reaction.groupBy.mockResolvedValue([]); // no reactions left
       await service.voteReaction('u', 'e', 'SAD');
-      expect(prisma.reaction.delete).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'r1' } }));
+      expect(prisma.reaction.delete).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'r1' } }),
+      );
       expect(prisma.reaction.create).not.toHaveBeenCalled();
     });
   });
@@ -130,7 +143,9 @@ describe('ShowsService voting', () => {
       prisma.userEpisodeStatus.findUnique.mockResolvedValue({ id: 's1' });
       prisma.episode.findUnique.mockResolvedValue({ season: { show: { mediaId: 'm1' } } });
       prisma.mediaCast.findFirst.mockResolvedValue(null);
-      await expect(service.voteFavoriteCharacter('u', 'e', 'foreign')).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.voteFavoriteCharacter('u', 'e', 'foreign')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
       expect(prisma.characterVote.upsert).not.toHaveBeenCalled();
     });
 
@@ -153,7 +168,104 @@ describe('ShowsService voting', () => {
       prisma.episode.findUnique.mockResolvedValue({ season: { show: { mediaId: 'm1' } } });
       prisma.characterVote.groupBy.mockResolvedValue([]);
       await service.voteFavoriteCharacter('u', 'e', null);
-      expect(prisma.characterVote.deleteMany).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: 'u', episodeId: 'e' } }));
+      expect(prisma.characterVote.deleteMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { userId: 'u', episodeId: 'e' } }),
+      );
     });
+  });
+});
+
+describe('ShowsService.getShow (anime repair)', () => {
+  let prisma: any;
+  let meta: any;
+  let backfill: any;
+  let service: ShowsService;
+
+  const stored = (over: Record<string, unknown> = {}) => ({
+    id: 'm1',
+    titles: { en: 'Naruto' },
+    metadataRefreshedAt: null, // → needsHydration
+    externalIds: [
+      { provider: ExternalProvider.TMDB, value: '11' },
+      { provider: ExternalProvider.THE_TVDB, value: '789' },
+    ],
+    genres: [{ genre: { slug: 'animation' } }],
+    ...over,
+  });
+
+  beforeEach(() => {
+    prisma = {
+      mediaItem: { findUnique: jest.fn() },
+      mediaGenre: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    meta = {
+      ensureShowFull: jest.fn().mockResolvedValue('m1'),
+      ensureShowFullTvdb: jest.fn().mockResolvedValue('m1'),
+      ensureAirtimes: jest.fn().mockResolvedValue(undefined),
+      scheduleClassification: jest.fn().mockResolvedValue(undefined),
+      getShowDetail: jest.fn().mockResolvedValue('detail'),
+      getShowSeasons: jest.fn().mockResolvedValue([]),
+    };
+    backfill = { fixAnimeShowFromTvdb: jest.fn() };
+    service = new ShowsService(
+      prisma,
+      meta,
+      { enabled: true } as any,
+      { enabled: true } as any,
+      backfill,
+    );
+  });
+
+  it('repairs TMDB-structured anime on the fly (no provider refresh afterwards)', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue(stored());
+    backfill.fixAnimeShowFromTvdb.mockResolvedValue({ fixed: true, remapped: 50 });
+    const res = await service.getShow('m1');
+    expect(backfill.fixAnimeShowFromTvdb).toHaveBeenCalledWith('m1');
+    expect(meta.ensureShowFull).not.toHaveBeenCalled();
+    expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+    expect(res).toBe('detail');
+  });
+
+  it('refreshes from TVDB when the repair no-ops and metadata is stale', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue(stored());
+    backfill.fixAnimeShowFromTvdb.mockResolvedValue({ fixed: false, remapped: 0 });
+    await service.getShow('m1');
+    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
+    expect(meta.ensureShowFull).not.toHaveBeenCalled();
+  });
+
+  it('never re-poisons animation shows from TMDB when the fix fails and no TVDB id exists', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue(
+      stored({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
+    );
+    backfill.fixAnimeShowFromTvdb.mockResolvedValue({ fixed: false, remapped: 0 });
+    await service.getShow('m1');
+    expect(meta.ensureShowFull).not.toHaveBeenCalled();
+    expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+  });
+
+  it('keeps the TMDB-first refresh for non-animation shows', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue(
+      stored({ genres: [{ genre: { slug: 'drama' } }] }),
+    );
+    await service.getShow('m1');
+    expect(backfill.fixAnimeShowFromTvdb).not.toHaveBeenCalled();
+    expect(meta.ensureShowFull).toHaveBeenCalledWith(11);
+  });
+
+  it('repairs anime structure on the episodes path too (no pre-fix seasons)', async () => {
+    prisma.mediaGenre.findFirst.mockResolvedValue({ mediaId: 'm1' });
+    backfill.fixAnimeShowFromTvdb.mockResolvedValue({ fixed: true, remapped: 50 });
+    await service.getSeasons('m1', 'u1');
+    expect(backfill.fixAnimeShowFromTvdb).toHaveBeenCalledWith('m1');
+    // Seasons are read AFTER the shared repair resolves.
+    expect(meta.getShowSeasons).toHaveBeenCalledWith('m1', 'u1');
+  });
+
+  it('does not touch the repair on the episodes path for non-animation shows', async () => {
+    prisma.mediaGenre.findFirst.mockResolvedValue(null);
+    await service.getSeasons('m1');
+    expect(backfill.fixAnimeShowFromTvdb).not.toHaveBeenCalled();
+    expect(meta.getShowSeasons).toHaveBeenCalledWith('m1', undefined);
   });
 });

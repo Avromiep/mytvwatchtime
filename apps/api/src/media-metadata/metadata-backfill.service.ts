@@ -30,6 +30,9 @@ export class MetadataBackfillService {
   private backfillRunning = false;
   /** Prevents concurrent anime→TVDB rehydration batches. */
   private animeFixRunning = false;
+  /** In-flight per-show repairs — concurrent callers (detail + episodes requests arriving
+   *  together, or a view racing the cron) share ONE repair instead of double-hydrating. */
+  private readonly animeFixInflight = new Map<string, Promise<{ fixed: boolean; remapped: number }>>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -71,9 +74,10 @@ export class MetadataBackfillService {
         by: ['contentClassification'],
         _count: { _all: true },
       }),
-      // Animation-genre shows whose STRUCTURE came from TMDB (TMDB anime structures are
-      // often wrong — these should be TVDB-hydrated). "TMDB-structured" = has TMDB
-      // episode external ids and no TVDB episode external ids.
+      // Animation-genre shows with stale TMDB-structured episode rows (TMDB anime
+      // structures are often wrong — these should be TVDB-hydrated). "Stale" = the row
+      // has a TMDB episode external id and no TVDB one; fresh rows carry both after the
+      // union upsert, so partially-switched shows are still counted.
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
           JOIN shows sh ON sh.media_id = m.id
           WHERE m.type='SHOW'
@@ -81,13 +85,11 @@ export class MetadataBackfillService {
                         WHERE mg.media_id = m.id AND g.slug = 'animation')
             AND EXISTS (SELECT 1 FROM seasons s
                         JOIN episodes e ON e.season_id = s.id
-                        JOIN episode_external_ids ee ON ee.episode_id = e.id
-                        WHERE s.show_id = sh.id AND ee.provider = 'TMDB')
-            AND NOT EXISTS (SELECT 1 FROM seasons s
-                        JOIN episodes e ON e.season_id = s.id
-                        JOIN episode_external_ids ee ON ee.episode_id = e.id
-                        WHERE s.show_id = sh.id AND ee.provider = 'THE_TVDB')`,
-      // Same set, but missing the series-level TVDB id (the fix needs a strict TVDB search).
+                        JOIN episode_external_ids ee ON ee.episode_id = e.id AND ee.provider = 'TMDB'
+                        WHERE s.show_id = sh.id
+                          AND NOT EXISTS (SELECT 1 FROM episode_external_ids tv
+                                          WHERE tv.episode_id = e.id AND tv.provider = 'THE_TVDB'))`,
+      // Same set, but missing the series-level TVDB id (the fix needs a cross-id lookup).
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
           JOIN shows sh ON sh.media_id = m.id
           WHERE m.type='SHOW'
@@ -95,12 +97,10 @@ export class MetadataBackfillService {
                         WHERE mg.media_id = m.id AND g.slug = 'animation')
             AND EXISTS (SELECT 1 FROM seasons s
                         JOIN episodes e ON e.season_id = s.id
-                        JOIN episode_external_ids ee ON ee.episode_id = e.id
-                        WHERE s.show_id = sh.id AND ee.provider = 'TMDB')
-            AND NOT EXISTS (SELECT 1 FROM seasons s
-                        JOIN episodes e ON e.season_id = s.id
-                        JOIN episode_external_ids ee ON ee.episode_id = e.id
-                        WHERE s.show_id = sh.id AND ee.provider = 'THE_TVDB')
+                        JOIN episode_external_ids ee ON ee.episode_id = e.id AND ee.provider = 'TMDB'
+                        WHERE s.show_id = sh.id
+                          AND NOT EXISTS (SELECT 1 FROM episode_external_ids tv
+                                          WHERE tv.episode_id = e.id AND tv.provider = 'THE_TVDB'))
             AND NOT EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id AND x.provider = 'THE_TVDB')`,
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
@@ -211,8 +211,10 @@ export class MetadataBackfillService {
       : (await this.prisma.mediaItem.count({ where: { id: mediaId, type: 'MOVIE', overview: { not: null } } })) > 0;
 
     if (isShow && hasAnimation && tvdb) {
-      // Animation show with a TVDB id → TVDB, even if currently TMDB-structured.
-      await this.meta.ensureShowFullTvdb(Number(tvdb.value)).catch(() => undefined);
+      // Animation show with a TVDB id → TVDB, even if currently TMDB-structured (the fix
+      // also remaps user watch data onto the TVDB structure).
+      const { fixed } = await this.fixAnimeShowFromTvdb(mediaId).catch(() => ({ fixed: false, remapped: 0 }));
+      if (!fixed) await this.meta.ensureShowFullTvdb(Number(tvdb.value)).catch(() => undefined);
     } else if (hasStructure && tvdb) {
       // Already has TVDB-sourced structure → keep TVDB. NEVER override with TMDB.
       if (isShow) await this.meta.ensureShowFullTvdb(Number(tvdb.value)).catch(() => undefined);
@@ -281,20 +283,25 @@ export class MetadataBackfillService {
         where: {
           type: 'SHOW',
           genres: { some: { genre: { slug: 'animation' } } },
-          // TMDB-structured: has TMDB episode external ids…
+          // At least one stale TMDB-only episode row. Fresh TVDB rows may coexist after a
+          // partial switch (e.g. an earlier detail-view hydration) — those shows still
+          // need the remap, so "has any TVDB id" does NOT exclude them.
           show: {
-            seasons: { some: { episodes: { some: { externalIds: { some: { provider: ExternalProvider.TMDB } } } } } },
-          },
-          // …and NOT already TVDB-structured.
-          NOT: {
-            show: {
-              seasons: { some: { episodes: { some: { externalIds: { some: { provider: ExternalProvider.THE_TVDB } } } } } },
+            seasons: {
+              some: {
+                episodes: {
+                  some: {
+                    externalIds: { some: { provider: ExternalProvider.TMDB } },
+                    NOT: { externalIds: { some: { provider: ExternalProvider.THE_TVDB } } },
+                  },
+                },
+              },
             },
           },
         },
         orderBy: { title: 'asc' },
         take: Math.max(1, Math.min(limit ?? 1000, 100000)),
-        include: { externalIds: true, show: { select: { yearStart: true } } },
+        select: { id: true, title: true },
       });
 
       let succeeded = 0;
@@ -306,23 +313,12 @@ export class MetadataBackfillService {
       for (let i = 0; i < candidates.length; i++) {
         const m = candidates[i];
         try {
-          const tvdbId = await this.resolveAnimeTvdbId({
-            id: m.id,
-            title: m.title,
-            externalIds: m.externalIds as unknown as { provider: ExternalProvider; value: string }[],
-            show: m.show,
-          });
-          if (!tvdbId) {
+          const { fixed, remapped: moved } = await this.fixAnimeShowFromTvdb(m.id);
+          if (!fixed) {
             noTvdbId++;
             continue;
           }
-          // Bypass the 24h isStale gate inside ensureShowFullTvdb — this is a forced
-          // provider switch, not a routine refresh.
-          await this.prisma.mediaItem.update({ where: { id: m.id }, data: { metadataRefreshedAt: null } });
-          await this.meta.ensureShowFullTvdb(tvdbId);
-          // Transfer user watch data from stale TMDB-only episode rows to the TVDB structure.
-          const remap = await this.structureRemap.remapShow(m.id);
-          remapped += remap.mapped;
+          remapped += moved;
           succeeded++;
           if (sample.length < 5) sample.push(m.title);
         } catch (e) {
@@ -348,7 +344,62 @@ export class MetadataBackfillService {
   }
 
   /**
-   * TVDB series id for an anime show, in trust order:
+   * Repair one Animation-genre show whose structure (partly) came from TMDB: resolve the
+   * TVDB series id, force a full TVDB hydration (bypassing the 24h staleness gate), then
+   * remap user watch data from stale TMDB-only episode rows onto the TVDB structure.
+   *
+   * Cheap no-op (`fixed: false`) when the show has no stale TMDB-only rows — safe to call
+   * on every anime detail/episodes view. Concurrent calls for the same show COALESCE into
+   * one repair, so the detail + episodes requests of one screen load both answer with the
+   * post-fix TVDB structure. Shared by the batch fix, the backfill, and the shows service.
+   */
+  async fixAnimeShowFromTvdb(mediaId: string): Promise<{ fixed: boolean; remapped: number }> {
+    const existing = this.animeFixInflight.get(mediaId);
+    if (existing) return existing;
+    const p = this.doFixAnimeShowFromTvdb(mediaId).finally(() => this.animeFixInflight.delete(mediaId));
+    this.animeFixInflight.set(mediaId, p);
+    return p;
+  }
+
+  private async doFixAnimeShowFromTvdb(mediaId: string): Promise<{ fixed: boolean; remapped: number }> {
+    const notFixed = { fixed: false, remapped: 0 };
+    if (!this.tvdb.enabled) return notFixed;
+
+    // Stale rows only the TMDB structure has (TMDB episode id, no TVDB one). None →
+    // already fully TVDB-structured; nothing to repair.
+    const staleRows = await this.prisma.episode.count({
+      where: {
+        season: { show: { mediaId } },
+        externalIds: { some: { provider: ExternalProvider.TMDB } },
+        NOT: { externalIds: { some: { provider: ExternalProvider.THE_TVDB } } },
+      },
+      take: 1,
+    });
+    if (staleRows === 0) return notFixed;
+
+    const media = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      include: { externalIds: true, show: { select: { yearStart: true } } },
+    });
+    if (!media) return notFixed;
+
+    const tvdbId = await this.resolveAnimeTvdbId({
+      id: media.id,
+      title: media.title,
+      externalIds: media.externalIds as unknown as { provider: ExternalProvider; value: string }[],
+      show: media.show,
+    });
+    if (!tvdbId) return notFixed;
+
+    // Bypass the 24h isStale gate inside ensureShowFullTvdb — this is a forced provider
+    // switch, not a routine refresh.
+    await this.prisma.mediaItem.update({ where: { id: mediaId }, data: { metadataRefreshedAt: null } });
+    await this.meta.ensureShowFullTvdb(tvdbId);
+    const remap = await this.structureRemap.remapShow(mediaId);
+    return { fixed: true, remapped: remap.mapped };
+  }
+
+  /**
    *   1. the stored THE_TVDB external id;
    *   2. TMDB's `/tv/{id}/external_ids` lookup (authoritative cross-id — no wrong-match risk);
    *   3. a STRICT TVDB search fallback (exact normalized title + matching year — a wrong

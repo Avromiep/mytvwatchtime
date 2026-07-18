@@ -13,7 +13,7 @@ function model(fns: string[]): FnMap {
 
 function mockPrisma() {
   return {
-    mediaItem: model(['count', 'findMany', 'groupBy', 'update']),
+    mediaItem: model(['count', 'findMany', 'findUnique', 'groupBy', 'update']),
     episode: model(['count']),
     externalId: model(['findMany', 'findFirst', 'create']),
     $queryRaw: jest.fn().mockResolvedValue([{ c: BigInt(0) }]),
@@ -61,11 +61,30 @@ describe('MetadataBackfillService', () => {
     };
     tmdb = { enabled: true, get: jest.fn().mockResolvedValue(undefined) };
     tvdb = { enabled: true, searchShows: jest.fn() };
-    structureRemap = { remapShow: jest.fn().mockResolvedValue({ stale: 0, mapped: 0, unmapped: 0 }) };
-    service = new MetadataBackfillService(prisma, meta, {} as any, redis, tmdb, tvdb, structureRemap);
+    structureRemap = {
+      remapShow: jest.fn().mockResolvedValue({ stale: 0, mapped: 0, unmapped: 0 }),
+    };
+    service = new MetadataBackfillService(
+      prisma,
+      meta,
+      {} as any,
+      redis,
+      tmdb,
+      tvdb,
+      structureRemap,
+    );
   });
 
   describe('rehydrateAnimeFromTvdb', () => {
+    /** Candidates for the batch: findMany (selection) + findUnique (fix reload) + ≥1 stale row. */
+    const mockCandidates = (list: any[]) => {
+      prisma.mediaItem.findMany.mockResolvedValue(list);
+      prisma.mediaItem.findUnique.mockImplementation(({ where: { id } }: any) =>
+        Promise.resolve(list.find((c) => c.id === id) ?? null),
+      );
+      prisma.episode.count.mockResolvedValue(1); // ≥1 stale TMDB-only episode row
+    };
+
     it('does nothing when TVDB is not configured', async () => {
       tvdb.enabled = false;
       const res = await service.rehydrateAnimeFromTvdb();
@@ -74,7 +93,7 @@ describe('MetadataBackfillService', () => {
     });
 
     it('rehydrates TMDB-structured animation shows from their stored TVDB id', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([animeShow()]);
+      mockCandidates([animeShow()]);
       const res = await service.rehydrateAnimeFromTvdb();
       // Stale gate bypassed so ensureShowFullTvdb cannot skip a recently-refreshed show.
       expect(prisma.mediaItem.update).toHaveBeenCalledWith({
@@ -92,7 +111,7 @@ describe('MetadataBackfillService', () => {
     });
 
     it('falls back to a strict exact-title+year TVDB search when no TVDB id is stored', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([
+      mockCandidates([
         animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
       ]);
       tvdb.searchShows.mockResolvedValue({
@@ -113,7 +132,7 @@ describe('MetadataBackfillService', () => {
     });
 
     it('rejects search hits whose title or year does not match', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([
+      mockCandidates([
         animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
       ]);
       tvdb.searchShows.mockResolvedValue({
@@ -130,7 +149,7 @@ describe('MetadataBackfillService', () => {
     });
 
     it('never hijacks a TVDB id already linked to a different media row', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([
+      mockCandidates([
         animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
       ]);
       tvdb.searchShows.mockResolvedValue({
@@ -145,7 +164,7 @@ describe('MetadataBackfillService', () => {
     });
 
     it('resolves a missing TVDB id via TMDB /external_ids before any title search', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([
+      mockCandidates([
         animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '65942' }] }),
       ]);
       tmdb.get.mockResolvedValue({ id: 65942, tvdb_id: 305089 });
@@ -165,7 +184,7 @@ describe('MetadataBackfillService', () => {
     });
 
     it('falls back to title search when TMDB /external_ids has no tvdb_id', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([
+      mockCandidates([
         animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
       ]);
       tmdb.get.mockResolvedValue({ id: 11, tvdb_id: null });
@@ -181,7 +200,7 @@ describe('MetadataBackfillService', () => {
     });
 
     it('skips the show when TMDB’s tvdb_id is claimed by another media row (duplicate)', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([
+      mockCandidates([
         animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
       ]);
       tmdb.get.mockResolvedValue({ id: 11, tvdb_id: 305089 });
@@ -194,18 +213,26 @@ describe('MetadataBackfillService', () => {
     });
 
     it('remaps stale TMDB episode rows onto the TVDB structure after a fix', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([animeShow()]);
+      mockCandidates([animeShow()]);
       structureRemap.remapShow.mockResolvedValue({ stale: 52, mapped: 50, unmapped: 2 });
       const res = await service.rehydrateAnimeFromTvdb();
       expect(structureRemap.remapShow).toHaveBeenCalledWith('m1');
       expect(res.remapped).toBe(50);
     });
 
+    it('short-circuits without provider calls when no stale rows remain', async () => {
+      mockCandidates([animeShow()]);
+      prisma.episode.count.mockResolvedValue(0); // already fully TVDB-structured
+      const res = await service.rehydrateAnimeFromTvdb();
+      expect(tmdb.get).not.toHaveBeenCalled();
+      expect(tvdb.searchShows).not.toHaveBeenCalled();
+      expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+      expect(res.succeeded).toBe(0);
+      expect(res.noTvdbId).toBe(1); // counted as not-fixed
+    });
+
     it('stops the batch early on a real TVDB 429', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([
-        animeShow(),
-        animeShow({ id: 'm2', title: 'Bleach' }),
-      ]);
+      mockCandidates([animeShow(), animeShow({ id: 'm2', title: 'Bleach' })]);
       meta.ensureShowFullTvdb.mockRejectedValue(
         new ProviderError('rate_limited', '429', 429, 5000),
       );
@@ -215,10 +242,7 @@ describe('MetadataBackfillService', () => {
     });
 
     it('stops the batch early on internal throttling', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([
-        animeShow(),
-        animeShow({ id: 'm2', title: 'Bleach' }),
-      ]);
+      mockCandidates([animeShow(), animeShow({ id: 'm2', title: 'Bleach' })]);
       meta.ensureShowFullTvdb.mockRejectedValue(new ProviderThrottled('tvdb', 1000));
       const res = await service.rehydrateAnimeFromTvdb();
       expect(meta.ensureShowFullTvdb).toHaveBeenCalledTimes(1);
@@ -226,13 +250,64 @@ describe('MetadataBackfillService', () => {
     });
 
     it('counts ordinary failures and continues', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([
-        animeShow(),
-        animeShow({ id: 'm2', title: 'Bleach' }),
-      ]);
+      mockCandidates([animeShow(), animeShow({ id: 'm2', title: 'Bleach' })]);
       meta.ensureShowFullTvdb.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce('m2');
       const res = await service.rehydrateAnimeFromTvdb();
       expect(res).toMatchObject({ processed: 2, succeeded: 1, failed: 1, rateLimited: 0 });
+    });
+  });
+
+  describe('fixAnimeShowFromTvdb', () => {
+    it('forces TVDB hydration and remaps when stale rows exist', async () => {
+      prisma.mediaItem.findUnique.mockResolvedValue(animeShow());
+      prisma.episode.count.mockResolvedValue(52);
+      structureRemap.remapShow.mockResolvedValue({ stale: 52, mapped: 50, unmapped: 2 });
+      const res = await service.fixAnimeShowFromTvdb('m1');
+      // Stale gate bypassed so ensureShowFullTvdb cannot skip a recently-refreshed show.
+      expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+        where: { id: 'm1' },
+        data: { metadataRefreshedAt: null },
+      });
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
+      expect(structureRemap.remapShow).toHaveBeenCalledWith('m1');
+      expect(res).toEqual({ fixed: true, remapped: 50 });
+    });
+
+    it('returns fixed=false when the TVDB id cannot be resolved', async () => {
+      prisma.mediaItem.findUnique.mockResolvedValue(
+        animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
+      );
+      prisma.episode.count.mockResolvedValue(1);
+      tvdb.searchShows.mockResolvedValue({ items: [], total: 0 });
+      const res = await service.fixAnimeShowFromTvdb('m1');
+      expect(res.fixed).toBe(false);
+      expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+      expect(structureRemap.remapShow).not.toHaveBeenCalled();
+    });
+
+    it('coalesces concurrent repairs for the same show (detail + episodes race)', async () => {
+      prisma.mediaItem.findUnique.mockResolvedValue(animeShow());
+      prisma.episode.count.mockResolvedValue(52);
+      let release!: (v: string) => void;
+      meta.ensureShowFullTvdb.mockImplementation(
+        () =>
+          new Promise<string>((r) => {
+            release = r;
+          }),
+      );
+      const p1 = service.fixAnimeShowFromTvdb('m1');
+      const p2 = service.fixAnimeShowFromTvdb('m1');
+      // Let the shared repair reach the (pending) TVDB hydration before releasing it.
+      await new Promise((r) => setImmediate(r));
+      release('m1');
+      const [r1, r2] = await Promise.all([p1, p2]);
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledTimes(1); // one shared repair
+      expect(r1.fixed).toBe(true);
+      expect(r2.fixed).toBe(true);
+      // After completion the next call is free to repair again if needed.
+      prisma.episode.count.mockResolvedValue(0);
+      const r3 = await service.fixAnimeShowFromTvdb('m1');
+      expect(r3.fixed).toBe(false);
     });
   });
 

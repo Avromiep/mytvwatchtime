@@ -3,6 +3,7 @@ import { ExternalProvider } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { currentLanguage } from '../common/language.context';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
+import { MetadataBackfillService } from '../media-metadata/metadata-backfill.service';
 import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
 import { TvdbProvider } from '../media-metadata/providers/tvdb.provider';
 import { mapEpisode } from '../common/utils/mapper.util';
@@ -15,6 +16,7 @@ export class ShowsService {
     private readonly meta: MediaMetadataService,
     private readonly tmdb: TmdbProvider,
     private readonly tvdb: TvdbProvider,
+    private readonly metadataBackfill: MetadataBackfillService,
   ) {}
 
   async getShow(id: string, userId?: string) {
@@ -41,14 +43,24 @@ export class ShowsService {
       const tmdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
       const tvdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB);
       // Animation-genre shows are TVDB-authoritative (TMDB anime structures are often
-      // wrong): refresh from TVDB only — never re-poison from TMDB. On TVDB
-      // rate-limit/outage keep last-known data; the anime_tvdb_rehydrate job redoes it.
+      // wrong). Repair on the fly whenever stale TMDB-structured rows remain — resolves
+      // the TVDB id on demand (stored → TMDB external_ids → strict search), hydrates from
+      // TVDB, and remaps user watch data. Cheap no-op when already fully TVDB-structured.
+      // Animation shows NEVER refresh from TMDB: on failure keep last-known data; the
+      // anime_tvdb_rehydrate job / Metadata Health fix redoes the switch.
       const isAnimation = media.genres.some((g) => g.genre.slug === 'animation');
-      if (needsHydration) {
+      let animeFixed = false;
+      if (isAnimation && this.tvdb?.enabled) {
+        animeFixed = await this.metadataBackfill
+          .fixAnimeShowFromTvdb(media.id)
+          .then((r) => r.fixed)
+          .catch(() => false);
+      }
+      if (!animeFixed && needsHydration) {
         if (isAnimation && this.tvdb?.enabled && tvdbExt) {
           // Degrade gracefully on hydration failure (don't 500 the detail page).
           await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
-        } else if (this.tmdb.enabled && tmdbExt) {
+        } else if (!isAnimation && this.tmdb.enabled && tmdbExt) {
           // Degrade gracefully on hydration failure (don't 500 the detail page).
           await this.meta.ensureShowFull(Number(tmdbExt.value)).catch(() => undefined);
         } else if (this.tvdb?.enabled && tvdbExt) {
@@ -65,6 +77,17 @@ export class ShowsService {
   }
 
   async getSeasons(id: string, userId?: string) {
+    // Repair TMDB-structured anime BEFORE reading the structure. The show-detail request
+    // fires the same repair in parallel; per-show coalescing makes both requests share one
+    // fix, so this endpoint never answers with the pre-fix TMDB structure while the detail
+    // endpoint already returns TVDB data.
+    if (this.tvdb?.enabled) {
+      const animation = await this.prisma.mediaGenre.findFirst({
+        where: { mediaId: id, genre: { slug: 'animation' } },
+        select: { mediaId: true },
+      });
+      if (animation) await this.metadataBackfill.fixAnimeShowFromTvdb(id).catch(() => undefined);
+    }
     const seasons = await this.meta.getShowSeasons(id, userId);
     const result = seasons.map((s) => ({
       id: s.id,
