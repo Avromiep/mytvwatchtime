@@ -97,16 +97,27 @@ export class LibraryService {
 
     // Watchlist shows that DON'T have a user_show_status yet (never watched)
     const statusMediaIds = new Set(statuses.map((s) => s.mediaId));
-    const watchlistShows = await this.prisma.watchlistItem.findMany({
-      where: {
-        userId,
-        media: { type: 'SHOW' },
-        ...(statusMediaIds.size ? { mediaId: { notIn: [...statusMediaIds] } } : {}),
-      },
-      include: { media: { include: { show: true } } },
-      orderBy: { createdAt: 'desc' },
-      take: 10,
-    });
+    const [watchlistShows, watchlistIdsRaw] = await Promise.all([
+      this.prisma.watchlistItem.findMany({
+        where: {
+          userId,
+          media: { type: 'SHOW' },
+          ...(statusMediaIds.size ? { mediaId: { notIn: [...statusMediaIds] } } : {}),
+        },
+        include: { media: { include: { show: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      // Ids of ALL watchlisted shows: a show that has a status row with watchedCount 0
+      // (every episode unmarked after watching, or import artifact) AND is in the
+      // watchlist must still be treated as watchlist-only — otherwise it vanished
+      // from watch-next entirely (neither "started" nor "start watching").
+      this.prisma.watchlistItem.findMany({
+        where: { userId, media: { type: 'SHOW' } },
+        select: { mediaId: true },
+      }),
+    ]);
+    const watchlistIds = new Set(watchlistIdsRaw.map((w) => w.mediaId));
 
     // Fallback: shows the user has watched episodes for but missing from user_show_status
     // (e.g. import didn't rebuild statuses, or status was lost)
@@ -149,6 +160,10 @@ export class LibraryService {
         ...s,
         watchedCount: Math.max(s.watchedCount ?? 0, watchedMap.get(s.mediaId)?.watchedCount ?? 0),
         lastWatchedAt: s.lastWatchedAt ?? watchedMap.get(s.mediaId)?.lastWatchedAt ?? null,
+        // Status-row shows with zero watched episodes still belong in Start Watching
+        // when they're watchlisted (e.g. user unmarked every episode).
+        isWatchlistOnly: watchlistIds.has(s.mediaId) &&
+          Math.max(s.watchedCount ?? 0, watchedMap.get(s.mediaId)?.watchedCount ?? 0) === 0,
       })),
       ...watchlistShows.map((w) => ({
         userId,
@@ -319,6 +334,16 @@ export class LibraryService {
       take: limit,
       include: { episode: { include: { season: { include: { show: { include: { media: { include: { show: true } } } } } } } } },
     });
+    // Real per-episode watch counts for the ×N rewatch badge — watch_history rows
+    // alone don't carry them (without this every history card showed a plain checkmark).
+    const epIds = [...new Set(rows.map((r) => r.episodeId).filter((x): x is string => !!x))];
+    const statuses = epIds.length
+      ? await this.prisma.userEpisodeStatus.findMany({
+          where: { userId, episodeId: { in: epIds } },
+          select: { episodeId: true, watchCount: true },
+        })
+      : [];
+    const countByEp = new Map(statuses.map((s) => [s.episodeId, s.watchCount]));
     return rows
       .filter((r) => r.episode)
       .map((r) => {
@@ -329,7 +354,11 @@ export class LibraryService {
           posterUrl: r.episode?.season.show.media.posterUrl ?? null,
           backdropUrl: r.episode?.season.show.media.backdropUrl ?? null,
           network: r.episode?.season.show.media.show?.network ?? null,
-          episode: mapEpisode(ep, { watched: true, watchedAt: r.watchedAt }),
+          episode: mapEpisode(ep, {
+            watched: true,
+            watchedAt: r.watchedAt,
+            watchCount: countByEp.get(r.episodeId!) ?? 1,
+          }),
           remainingUnwatched: 0,
           label: EpisodeLabel.AIRED,
           lastWatchedAt: r.watchedAt,
@@ -465,6 +494,11 @@ export class LibraryService {
   }
 
   async showsByStatus(userId: string) {
+    // Same 30s user+lang cache pattern as watchNext/upcoming (busted by tracking writes).
+    const cacheKey = `showsprogress:${userId}:${currentLanguage()}`;
+    const cached = await this.redis.get<any>(cacheKey);
+    if (cached) return cached;
+
     const [statuses, watchlist] = await Promise.all([
       this.prisma.userShowStatus.findMany({
         where: { userId },
@@ -518,7 +552,9 @@ export class LibraryService {
       this.localizeItems(notStarted, (i) => i.id),
     ]);
 
-    return { watching: watchingL, notStarted: notStartedL, finished: finishedL };
+    const result = { watching: watchingL, notStarted: notStartedL, finished: finishedL };
+    await this.redis.set(cacheKey, result, 30);
+    return result;
   }
 
   private upcomingBucket(date: Date): string {

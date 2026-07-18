@@ -30,12 +30,13 @@ function mockPrisma(commentRow: any = makeComment()) {
       findUnique: jest.fn().mockResolvedValue(commentRow),
       findMany: jest.fn().mockResolvedValue([commentRow]),
       count: jest.fn().mockResolvedValue(1),
+      groupBy: jest.fn().mockResolvedValue([]),
       create: jest.fn(async (args: any) => ({ ...commentRow, ...args.data, gifUrl: args.data.gifUrl ?? null })),
       update: jest.fn(async (args: any) => ({ ...commentRow, ...args.data })),
     },
     commentImage: { findUnique: jest.fn().mockResolvedValue(null) },
     commentLike: { findMany: jest.fn().mockResolvedValue([]) },
-    follow: { count: jest.fn().mockResolvedValue(0) },
+    follow: { count: jest.fn().mockResolvedValue(0), groupBy: jest.fn().mockResolvedValue([]) },
   };
 }
 

@@ -62,7 +62,7 @@ export function PosterCard({
     <Link href={`/${route}/${id}` as any} asChild>
       <Pressable style={cardStyle}>
         <View style={{ borderRadius: radius.md, overflow: 'hidden' }}>
-          <PosterImage uri={poster} style={{ width, height: h }} />
+          <PosterImage uri={poster} style={{ width, height: h }} transition={0} />
 
           {progress !== undefined ? (
             <View
@@ -166,7 +166,7 @@ function EpisodeCardImpl({
         style={{ flex: 1, flexDirection: 'row' }}
       >
         <View style={styles.epStillWrap}>
-          <PosterImage uri={item.episode.stillUrl ?? item.backdropUrl} style={styles.epStill} />
+          <PosterImage uri={item.episode.stillUrl ?? item.backdropUrl} style={styles.epStill} transition={0} />
         </View>
         <View style={{ flex: 1, marginLeft: spacing.md, justifyContent: 'space-between' }}>
           <View>
@@ -317,7 +317,7 @@ export function UpcomingCard({ item }: { item: any }) {
   return (
     <Link href={`/episode/${item.id}` as any} asChild>
       <Pressable style={StyleSheet.flatten([styles.upCard, { backgroundColor: tokens.surface }])}>
-        <PosterImage uri={item.posterUrl} style={{ width: 56, height: 84, borderRadius: radius.sm }} />
+        <PosterImage uri={item.posterUrl} style={{ width: 56, height: 84, borderRadius: radius.sm }} transition={0} />
         <View style={{ flex: 1, marginLeft: spacing.md }}>
           <View style={[styles.row, { alignItems: 'center' }]}>
             <T variant="h2" numberOfLines={1} style={{ flex: 1 }}>

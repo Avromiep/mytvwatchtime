@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import type {
   CommentDto,
@@ -43,7 +43,7 @@ const qk = {
   showEpisodes: (id: string) => ['showEpisodes', id] as const,
   episode: (id: string) => ['episode', id] as const,
   movie: (id: string) => ['movie', id] as const,
-  search: (q: string, type?: string, pageSize = 30) => ['search', q, type ?? 'all', pageSize] as const,
+  search: (q: string, type?: string) => ['search', q, type ?? 'all'] as const,
   discover: () => ['discoverSections'] as const,
   discoverShows: (p: any) => ['discoverShows', p] as const,
   discoverMovies: (p: any) => ['discoverMovies', p] as const,
@@ -75,9 +75,25 @@ export const useHistory = (p: { mediaType?: MediaType; page?: number }) =>
 export const useShow = (id: string) => useQuery({ queryKey: qk.show(id), queryFn: () => api.get<ShowDetailDto>(`/shows/${id}`), enabled: !!id });
 export const useShowEpisodes = (id: string) => useQuery({ queryKey: qk.showEpisodes(id), queryFn: () => api.get<any[]>(`/shows/${id}/episodes`), enabled: !!id });
 export const useEpisode = (id: string) => useQuery({ queryKey: qk.episode(id), queryFn: () => api.get<EpisodeDetailDto>(`/episodes/${id}`), enabled: !!id });
+// Ordered ids of the episode's season siblings — powers the episode pager without
+// downloading the show's entire season structure.
+export const useEpisodeSiblings = (id: string) =>
+  useQuery({
+    queryKey: ['episodeSiblings', id] as const,
+    queryFn: () => api.get<{ seasonId: string; episodeIds: string[] }>(`/episodes/${id}/siblings`),
+    enabled: !!id,
+  });
 export const useMovie = (id: string) => useQuery({ queryKey: qk.movie(id), queryFn: () => api.get<MovieDetailDto>(`/movies/${id}`), enabled: !!id });
-export const useSearch = (q: string, type?: MediaType, pageSize = 30) =>
-  useQuery({ queryKey: qk.search(q, type, pageSize), queryFn: () => api.get<Paginated<MediaCardDto>>('/search', { q, type, pageSize }), enabled: q.length > 1 });
+// Server-paginated search (20/page): the API keeps the merged ordering in a short-lived
+// cache and expands it on demand, so onEndReached reveals results beyond the first page.
+export const useSearch = (q: string, type?: MediaType) =>
+  useInfiniteQuery({
+    queryKey: qk.search(q, type),
+    queryFn: ({ pageParam = 1 }) => api.get<Paginated<MediaCardDto>>('/search', { q, type, page: pageParam, pageSize: 20 }),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last?.hasMore ? last.page + 1 : undefined),
+    enabled: q.length > 1,
+  });
 export const useDiscoverSections = () => useQuery({ queryKey: qk.discover(), queryFn: () => api.get<DiscoverSectionsDto>('/discover/sections') });
 export const useDiscoverShows = (p: any) => useQuery({ queryKey: qk.discoverShows(p), queryFn: () => api.get<Paginated<MediaCardDto>>('/discover/shows', p) });
 export const useDiscoverMovies = (p: any) => useQuery({ queryKey: qk.discoverMovies(p), queryFn: () => api.get<Paginated<MediaCardDto>>('/discover/movies', p) });
@@ -89,12 +105,42 @@ export const useTrendingMoviesPaginated = (page: number) =>
   useQuery({ queryKey: ['trendingMoviesPage', page], queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/movies?page=${page}`), enabled: page > 0 });
 export const useWatchlist = (type?: MediaType) => useQuery({ queryKey: qk.watchlist(type), queryFn: () => api.get<Paginated<MediaCardLiteDto>>('/me/watchlist', { type, pageSize: 500 }) });
 export const useFavorites = (type: MediaType) => useQuery({ queryKey: qk.favorites(type), queryFn: () => api.get<Paginated<MediaCardLiteDto>>(type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies', { pageSize: 500 }) });
+
+/**
+ * Fetch EVERY page of a paginated endpoint (500/page chunks), auto-chaining until the
+ * collection is complete — for screens that must show exactly what the user has
+ * (Movies tab, see-all grids). Keys stay under the standard prefixes so the existing
+ * mutation invalidations (['watchlist'] / ['favorites'] / ['history']) cover them.
+ */
+function useAllPages<T>(key: readonly unknown[], path: string, params: Record<string, unknown>) {
+  const query = useInfiniteQuery({
+    queryKey: key,
+    queryFn: ({ pageParam = 1 }) => api.get<Paginated<T>>(path, { ...params, page: pageParam, pageSize: 500 }),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last?.hasMore ? last.page + 1 : undefined),
+  });
+  const { hasNextPage, isFetchingNextPage, fetchNextPage, data } = query;
+  useEffect(() => {
+    if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage, data]);
+  const items = useMemo(() => (data?.pages ?? []).flatMap((p) => p.items ?? []), [data]);
+  return { ...query, items, fullyLoaded: !hasNextPage };
+}
+
+export const useAllWatchlist = (type?: MediaType) =>
+  useAllPages<MediaCardLiteDto>(['watchlist', 'all', type] as const, '/me/watchlist', type ? { type } : {});
+export const useAllFavorites = (type: MediaType) =>
+  useAllPages<MediaCardLiteDto>(['favorites', 'all', type] as const, type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies', {});
+export const useAllHistory = (p: { mediaType?: MediaType }) =>
+  useAllPages<HistoryItemDto>(['history', 'all', p.mediaType] as const, '/me/history', p);
 // Poll while the server reports stats are being recomputed (SWR stale flag); stop once fresh.
 const statsRefetchInterval = (query: any) => (query.state.data?.stale ? 2500 : false);
 
 export const useStatsSummary = () => useQuery({ queryKey: qk.statsSummary, queryFn: () => api.get<StatsSummaryDto>('/me/stats/summary'), refetchInterval: statsRefetchInterval });
-export const useStatsShows = () => useQuery({ queryKey: qk.statsShows, queryFn: () => api.get<ShowStatsDto>('/me/stats/shows'), refetchInterval: statsRefetchInterval });
-export const useStatsMovies = () => useQuery({ queryKey: qk.statsMovies, queryFn: () => api.get<MovieStatsDto>('/me/stats/movies'), refetchInterval: statsRefetchInterval });
+// `enabled` gates by the visible tab on the stats screen — previously both heavy
+// payloads (plus their stale-flag pollers) mounted regardless of the selected tab.
+export const useStatsShows = (enabled = true) => useQuery({ queryKey: qk.statsShows, queryFn: () => api.get<ShowStatsDto>('/me/stats/shows'), refetchInterval: statsRefetchInterval, enabled });
+export const useStatsMovies = (enabled = true) => useQuery({ queryKey: qk.statsMovies, queryFn: () => api.get<MovieStatsDto>('/me/stats/movies'), refetchInterval: statsRefetchInterval, enabled });
 export const useBadges = () => useQuery({ queryKey: qk.badges, queryFn: () => api.get<{ badges: UserBadgeDto[]; totalUnlocked: number; totalBadges: number }>('/me/badges') });
 export const useNotifications = (p: { unreadOnly?: boolean; page?: number }) =>
   useQuery({ queryKey: qk.notifications(p), queryFn: () => api.get<Paginated<NotificationItemDto>>('/me/notifications', p as any) });
@@ -321,6 +367,17 @@ export function useInvalidate(keys: readonly unknown[][]) {
   return () => keys.forEach((k) => qc.invalidateQueries({ queryKey: k }));
 }
 
+/**
+ * Invalidate the leaderboard after watch activity: once immediately (the server's
+ * leading-edge cache bust is instant) and once delayed — a burst of marks within the
+ * server's 45s floor gets one trailing bust, so the delayed pass picks up the final
+ * ranking without reinstating a permanent poll.
+ */
+function invalidateLeaderboardSoon(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ['leaderboard'] });
+  setTimeout(() => qc.invalidateQueries({ queryKey: ['leaderboard'] }), 10_000);
+}
+
 export const useMarkEpisodeWatched = () => {
   const qc = useQueryClient();
   return useMutation({
@@ -367,6 +424,7 @@ export const useMarkEpisodeWatched = () => {
       qc.invalidateQueries({ queryKey: qk.episode(vars.id) });
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['show'] });
+      invalidateLeaderboardSoon(qc);
     },
   });
 };
@@ -379,6 +437,10 @@ export const useMarkSeasonWatched = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['show'] });
+      // A season mark is a bulk watch action — the Shows tab and leaderboard change too.
+      qc.invalidateQueries({ queryKey: ['watchNext'] });
+      qc.invalidateQueries({ queryKey: ['upcoming'] });
+      invalidateLeaderboardSoon(qc);
     },
   });
 };
@@ -428,6 +490,7 @@ export const useRewatchEpisode = () => {
     onSettled: (_d, _e, id) => {
       qc.invalidateQueries({ queryKey: qk.episode(id) });
       qc.invalidateQueries({ queryKey: ['watchNext'] });
+      invalidateLeaderboardSoon(qc);
     },
   });
 };
@@ -619,6 +682,7 @@ export const useMarkMovieWatched = () => {
       qc.invalidateQueries({ queryKey: ['movie'] });
       qc.invalidateQueries({ queryKey: ['watchlist'] });
       qc.invalidateQueries({ queryKey: ['history'] });
+      invalidateLeaderboardSoon(qc);
     },
   });
 };
@@ -638,6 +702,7 @@ export const useRewatchMovie = () => {
     },
     onSettled: (_d, _e, id) => {
       qc.invalidateQueries({ queryKey: qk.movie(id) });
+      invalidateLeaderboardSoon(qc);
     },
   });
 };
@@ -896,8 +961,16 @@ export const useMyLists = () =>
 export const useFollowedLists = () =>
   useQuery({ queryKey: ['followedLists'], queryFn: () => api.get<any[]>('/me/followed-lists') });
 
-export const useListItems = (id: string, page = 1) =>
-  useQuery({ queryKey: ['listItems', id, page], queryFn: () => api.get<any>(`/lists/${id}/items?page=${page}`), enabled: !!id });
+// Infinite accumulation: pages append as the user scrolls (the old per-page useQuery
+// swapped the whole list on every page advance, discarding already-loaded items).
+export const useListItems = (id: string) =>
+  useInfiniteQuery({
+    queryKey: ['listItems', id],
+    queryFn: ({ pageParam = 1 }) => api.get<any>(`/lists/${id}/items?page=${pageParam}`),
+    initialPageParam: 1,
+    getNextPageParam: (last: any, pages: any[]) => (last?.hasMore ? pages.length + 1 : undefined),
+    enabled: !!id,
+  });
 
 export const useToggleListLike = () => {
   const qc = useQueryClient();

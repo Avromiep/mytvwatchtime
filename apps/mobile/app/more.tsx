@@ -5,7 +5,7 @@ import { MediaType } from '@tvwatch/shared';
 import { Header } from '../components/Header';
 import { PosterCard } from '../components/cards';
 import { EmptyState, Screen, Spinner } from '../components/primitives';
-import { useDiscoverSections, useFavorites, useWatchlist } from '../api/hooks';
+import { useDiscoverSections, useAllFavorites, useAllWatchlist } from '../api/hooks';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAppearance } from '../context/PreferencesProvider';
@@ -87,12 +87,12 @@ export default function MoreScreen() {
     setPage((p) => p + 1);
   }, [hasMore, loadingMore, pageQuery.isFetching]);
 
-  // --- Non-paginated hooks ---
+  // --- Collection hooks (auto-paged to the end — see-alls show exactly what the user has) ---
   const sections = useDiscoverSections();
-  const watchlistShows = useWatchlist(MediaType.SHOW);
-  const watchlistMovies = useWatchlist(MediaType.MOVIE);
-  const favShows = useFavorites(MediaType.SHOW);
-  const favMovies = useFavorites(MediaType.MOVIE);
+  const watchlistShows = useAllWatchlist(MediaType.SHOW);
+  const watchlistMovies = useAllWatchlist(MediaType.MOVIE);
+  const favShows = useAllFavorites(MediaType.SHOW);
+  const favMovies = useAllFavorites(MediaType.MOVIE);
 
   // --- Collect items ---
   let items: any[] = [];
@@ -103,10 +103,10 @@ export default function MoreScreen() {
   } else {
     switch (tab) {
       case 'top-for-you': items = sections.data?.topForYou ?? []; loading = sections.isLoading; break;
-      case 'watchlist-shows': items = watchlistShows.data?.items ?? []; loading = watchlistShows.isLoading; break;
-      case 'watchlist-movies': items = watchlistMovies.data?.items ?? []; loading = watchlistMovies.isLoading; break;
-      case 'favorites-shows': items = favShows.data?.items ?? []; loading = favShows.isLoading; break;
-      case 'favorites-movies': items = favMovies.data?.items ?? []; loading = favMovies.isLoading; break;
+      case 'watchlist-shows': items = watchlistShows.items; loading = watchlistShows.isLoading; break;
+      case 'watchlist-movies': items = watchlistMovies.items; loading = watchlistMovies.isLoading; break;
+      case 'favorites-shows': items = favShows.items; loading = favShows.isLoading; break;
+      case 'favorites-movies': items = favMovies.items; loading = favMovies.isLoading; break;
     }
   }
 

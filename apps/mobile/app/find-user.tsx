@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -13,7 +13,14 @@ export default function FindUserScreen() {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['social']);
   const [query, setQuery] = useState('');
-  const { data, isLoading } = useSearchUsers(query);
+  // Debounce: without it every keystroke past 2 chars fired GET /users/search
+  // (same 400ms pattern as the Explore search).
+  const [debounced, setDebounced] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(query.trim()), 400);
+    return () => clearTimeout(timer);
+  }, [query]);
+  const { data, isLoading } = useSearchUsers(debounced);
   const followMut = useFollowUser();
   const unfollowMut = useUnfollowUser();
 
@@ -45,7 +52,7 @@ export default function FindUserScreen() {
           data={data ?? []}
           keyExtractor={(i) => i.id}
           contentContainerStyle={{ padding: spacing.lg }}
-          ListEmptyComponent={query.length >= 2 ? <T variant="caption" muted style={{ textAlign: 'center' }}>{t('social:noUsersFound')}</T> : <T variant="caption" muted style={{ textAlign: 'center' }}>{t('social:searchUsersHint')}</T>}
+          ListEmptyComponent={debounced.length >= 2 ? <T variant="caption" muted style={{ textAlign: 'center' }}>{t('social:noUsersFound')}</T> : <T variant="caption" muted style={{ textAlign: 'center' }}>{t('social:searchUsersHint')}</T>}
           renderItem={({ item }) => (
             <Pressable onPress={() => router.push(`/user/${item.username}`)} style={[styles.row, { borderBottomColor: tokens.border }]}>
               <PosterImage uri={item.avatarUrl} fallback={APP_ICON} style={styles.avatar} />

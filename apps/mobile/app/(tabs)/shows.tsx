@@ -1,5 +1,5 @@
-import React, { useCallback, useRef, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Header, IconButton } from '../../components/Header';
 import { EpisodeCard, UpcomingCard } from '../../components/cards';
@@ -20,6 +20,24 @@ const VALID_ICONS = new Set([
   'calendar-outline', 'pricetag-outline', 'film-outline', 'tv-outline', 'list-outline', 'people-outline',
   'chatbubble-outline', 'warning-outline', 'checkmark-circle-outline', 'rocket-outline',
 ]);
+
+// Exact row heights power getItemLayout → initialScrollIndex lands on Watch Next
+// precisely on mount (even before rows lay out), with zero post-mount programmatic
+// scrolling — so marking a show never yanks the viewport, and the tab-reset remount
+// (key={resetKey}) re-lands exactly like a fresh open.
+const CARD_H = 98; // EpisodeCard: still 74 + padding sm×2 + marginBottom sm
+const UPCOMING_H = 108; // UpcomingCard: poster 84 + padding sm×2 + marginBottom sm
+const HEADER_H = 44; // SectionHeader (h1 18px + paddingVertical sm×2, bottom-aligned)
+
+type WatchRow =
+  | { type: 'spacer'; key: string; h: number }
+  | { type: 'header'; key: string; bucket: string; h: number }
+  | { type: 'card'; key: string; item: any; h: number };
+
+type UpcomingRow =
+  | { type: 'spacer'; key: string; h: number }
+  | { type: 'header'; key: string; groupKey: string; h: number }
+  | { type: 'card'; key: string; item: any; h: number };
 
 export default function ShowsScreen() {
   const [tab, setTab] = useState<'watchlist' | 'upcoming'>('watchlist');
@@ -77,31 +95,93 @@ function WatchList() {
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
   const mark = useMarkEpisodeWatched();
   const rewatch = useRewatchEpisode();
-  // Dedupe by episode id: an episode should appear at most once in the watchlist.
-  // (Imports / double-marks can produce duplicate watch_history rows for the same episode.)
-  const seenEpisode = new Set<string>();
-  const items = (data?.items ?? []).filter((it) => {
-    const k = it.episode.id;
-    if (seenEpisode.has(k)) return false;
-    seenEpisode.add(k);
-    return true;
-  });
-  // History is always visible (scroll up to see it), auto-scroll lands on Watch Next
-  const buckets = [WatchNextBucket.HISTORY, WatchNextBucket.WATCH_NEXT, WatchNextBucket.START_WATCHING, WatchNextBucket.NOT_RECENTLY];
 
-  const scrollRef = useRef<ScrollView>(null);
-  const watchNextY = useRef<number | null>(null);
-  const didScroll = useRef(false);
+  // Flat rows (header / card) so the list virtualizes — a plain ScrollView rendered
+  // EVERY card (300+ for heavy users) with no windowing, and fully re-rendered on
+  // every mutation.
+  const rows = useMemo<WatchRow[]>(() => {
+    // Dedupe by episode id: an episode should appear at most once in the watchlist.
+    // (Imports / double-marks can produce duplicate watch_history rows for the same episode.)
+    const seenEpisode = new Set<string>();
+    const items = (data?.items ?? []).filter((it) => {
+      const k = it.episode.id;
+      if (seenEpisode.has(k)) return false;
+      seenEpisode.add(k);
+      return true;
+    });
+    // History is always visible (scroll up to see it), auto-scroll lands on Watch Next
+    const buckets = [WatchNextBucket.HISTORY, WatchNextBucket.WATCH_NEXT, WatchNextBucket.START_WATCHING, WatchNextBucket.NOT_RECENTLY];
+    const out: WatchRow[] = [];
+    for (const bucket of buckets) {
+      const group = items.filter((i) => i.bucket === bucket);
+      if (group.length === 0) continue;
+      // History: oldest on top, latest at the bottom (right above Watch Next).
+      const ordered = bucket === WatchNextBucket.HISTORY ? [...group].reverse() : group;
+      out.push({ type: 'header', key: `h_${bucket}`, bucket });
+      for (const it of ordered) {
+        // Non-History cards are keyed by showId so an optimistic mark-watched swap
+        // (episode E → nextEpisode) updates the same component in place instead of
+        // remounting. History rows keep the episode key (a show can appear multiple
+        // times in History → showId would collide).
+        out.push({ type: 'card', key: bucket === WatchNextBucket.HISTORY ? `c_${it.episode.id}` : `c_${it.showId}`, item: it });
+      }
+    }
+    return out;
+  }, [data?.items]);
 
-  const scrollToWatchNext = (y: number) => {
-    watchNextY.current = y;
-    if (didScroll.current) return;
-    didScroll.current = true;
-    setTimeout(() => scrollRef.current?.scrollTo({ y, animated: false }), 80);
-  };
+  const watchNextIndex = useMemo(
+    () => rows.findIndex((r) => r.type === 'header' && r.bucket === WatchNextBucket.WATCH_NEXT),
+    [rows],
+  );
+
+  const listRef = useRef<FlatList<WatchRow>>(null);
+  // Landing on the Watch Next header: scrollToIndex only works once the rows above
+  // have been laid out, and with hundreds of rows that takes several attempts. Retry
+  // on every onScrollToIndexFailed (bounded), and stop as soon as the user scrolls.
+  const landingState = useRef({ attempts: 0, cancelled: false });
+
+  const tryLand = useCallback(() => {
+    const st = landingState.current;
+    if (st.cancelled || st.attempts >= 15 || watchNextIndex <= 0) return;
+    st.attempts += 1;
+    listRef.current?.scrollToIndex({ index: watchNextIndex, animated: false });
+  }, [watchNextIndex]);
+
+  useEffect(() => {
+    const timer = setTimeout(tryLand, 100);
+    return () => clearTimeout(timer);
+  }, [tryLand]);
+
+  const onScrollToIndexFailed = useCallback(({ index }: { index: number }) => {
+    // Jump to an estimate so FlatList lays out the rows around the target, then retry.
+    listRef.current?.scrollToOffset({ offset: index * 98, animated: false });
+    setTimeout(tryLand, 180);
+  }, [tryLand]);
+
+  const cancelLanding = useCallback(() => { landingState.current.cancelled = true; }, []);
+
+  const renderRow = useCallback(({ item: row, index }: { item: WatchRow; index: number }) => {
+    if (row.type === 'header') {
+      return (
+        <View style={index > 0 ? { marginTop: spacing.lg } : undefined}>
+          <SectionHeader title={BUCKET_LABELS[row.bucket]} />
+        </View>
+      );
+    }
+    const it = row.item;
+    return (
+      <EpisodeCard
+        item={it}
+        onMarkWatched={() => mark.mutate({ id: it.episode.id, on: true })}
+        onRewatch={() => rewatch.mutate(it.episode.id)}
+        onUnwatch={() => mark.mutate({ id: it.episode.id, on: false })}
+      />
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mark, rewatch, t]);
 
   if (isLoading) return <Spinner />;
-  if (items.length === 0)
+  if (rows.length === 0)
     return (
       <EmptyState
         title={t('shows:empty.watchlistTitle')}
@@ -113,36 +193,23 @@ function WatchList() {
     );
 
   return (
-    <ScrollView ref={scrollRef} contentContainerStyle={{ padding: spacing.lg }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
-      {buckets.map((bucket) => {
-        const group = items.filter((i) => i.bucket === bucket);
-        if (group.length === 0) return null;
-        // History: oldest on top, latest at the bottom (right above Watch Next).
-        const ordered = bucket === WatchNextBucket.HISTORY ? [...group].reverse() : group;
-        return (
-          <View
-            key={bucket}
-            style={{ marginBottom: spacing.lg }}
-            onLayout={bucket === WatchNextBucket.WATCH_NEXT ? (e) => scrollToWatchNext(e.nativeEvent.layout.y) : undefined}
-          >
-            <SectionHeader title={BUCKET_LABELS[bucket]} />
-            {ordered.map((it) => (
-              <EpisodeCard
-                // Non-History cards are keyed by showId so an optimistic mark-watched swap
-                // (episode E → nextEpisode) updates the same component in place instead of
-                // remounting. History rows keep the episode key (a show can appear multiple
-                // times in History → showId would collide).
-                key={it.bucket === WatchNextBucket.HISTORY ? it.episode.id : it.showId}
-                item={it}
-                onMarkWatched={() => mark.mutate({ id: it.episode.id, on: true })}
-                onRewatch={() => rewatch.mutate(it.episode.id)}
-                onUnwatch={() => mark.mutate({ id: it.episode.id, on: false })}
-              />
-            ))}
-          </View>
-        );
-      })}
-    </ScrollView>
+    <FlatList
+      ref={listRef}
+      data={rows}
+      keyExtractor={(r) => r.key}
+      renderItem={renderRow}
+      contentContainerStyle={{ padding: spacing.lg }}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}
+      initialNumToRender={15}
+      maxToRenderPerBatch={12}
+      windowSize={9}
+      onScrollToIndexFailed={onScrollToIndexFailed}
+      onScrollBeginDrag={cancelLanding}
+      // Keep the viewport anchored when optimistic updates insert/remove History
+      // rows above the visible area.
+      maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+    />
   );
 }
 
@@ -153,20 +220,6 @@ function Upcoming() {
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
   const groups = data?.groups ?? [];
-  const scrollRef = useRef<ScrollView>(null);
-  const todayY = useRef<number | null>(null);
-  const didScroll = useRef(false);
-
-  const landOnToday = (y: number) => {
-    todayY.current = y;
-    if (didScroll.current) return;
-    didScroll.current = true;
-    setTimeout(() => scrollRef.current?.scrollTo({ y, animated: false }), 80);
-  };
-
-  if (isLoading) return <Spinner />;
-  if (groups.length === 0)
-    return <EmptyState title={t('shows:empty.upcomingTitle')} subtitle={t('shows:empty.upcomingSubtitle')} cta={t('shows:empty.browseAll')} onCta={() => router.push('/(tabs)/explore')} icon="calendar-outline" />;
 
   const UPCOMING_GROUP_KEYS: Record<string, string> = {
     TODAY: t('shows:today'),
@@ -176,22 +229,78 @@ function Upcoming() {
     LATER: t('shows:later'),
   };
 
+  // Flat rows (header / card) so the list virtualizes (up to 200 cards server-side).
+  const rows = useMemo<UpcomingRow[]>(() => {
+    const out: UpcomingRow[] = [];
+    for (const g of groups) {
+      if (!g.items?.length) continue;
+      out.push({ type: 'header', key: `h_${g.key}`, groupKey: g.key });
+      for (const it of g.items) out.push({ type: 'card', key: `c_${it.id}`, item: it });
+    }
+    return out;
+  }, [groups]);
+
   const landingKey = ['TODAY', 'TOMORROW', 'THIS_WEEK'].find((k) => groups.some((g: any) => g.key === k));
-  return (
-    <ScrollView ref={scrollRef} contentContainerStyle={{ padding: spacing.lg }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
-      {groups.map((g: any) => (
-        <View
-          key={g.key}
-          style={{ marginBottom: spacing.lg }}
-          onLayout={g.key === landingKey ? (e) => landOnToday(e.nativeEvent.layout.y) : undefined}
-        >
-          <SectionHeader title={UPCOMING_GROUP_KEYS[g.key] ?? g.label} />
-          {g.items.map((it: any) => (
-            <UpcomingCard key={it.id} item={it} />
-          ))}
+  const landingIndex = useMemo(
+    () => rows.findIndex((r) => r.type === 'header' && r.groupKey === landingKey),
+    [rows, landingKey],
+  );
+
+  const listRef = useRef<FlatList<UpcomingRow>>(null);
+  // Same landing strategy as WatchList: retry scrollToIndex while rows above the
+  // target lay out, stop on user scroll.
+  const landingState = useRef({ attempts: 0, cancelled: false });
+
+  const tryLand = useCallback(() => {
+    const st = landingState.current;
+    if (st.cancelled || st.attempts >= 15 || landingIndex <= 0) return;
+    st.attempts += 1;
+    listRef.current?.scrollToIndex({ index: landingIndex, animated: false });
+  }, [landingIndex]);
+
+  useEffect(() => {
+    const timer = setTimeout(tryLand, 100);
+    return () => clearTimeout(timer);
+  }, [tryLand]);
+
+  const onScrollToIndexFailed = useCallback(({ index }: { index: number }) => {
+    listRef.current?.scrollToOffset({ offset: index * 120, animated: false });
+    setTimeout(tryLand, 180);
+  }, [tryLand]);
+
+  const cancelLanding = useCallback(() => { landingState.current.cancelled = true; }, []);
+
+  const renderRow = useCallback(({ item: row, index }: { item: UpcomingRow; index: number }) => {
+    if (row.type === 'header') {
+      return (
+        <View style={index > 0 ? { marginTop: spacing.lg } : undefined}>
+          <SectionHeader title={UPCOMING_GROUP_KEYS[row.groupKey] ?? row.groupKey} />
         </View>
-      ))}
-    </ScrollView>
+      );
+    }
+    return <UpcomingCard item={row.item} />;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t]);
+
+  if (isLoading) return <Spinner />;
+  if (groups.length === 0)
+    return <EmptyState title={t('shows:empty.upcomingTitle')} subtitle={t('shows:empty.upcomingSubtitle')} cta={t('shows:empty.browseAll')} onCta={() => router.push('/(tabs)/explore')} icon="calendar-outline" />;
+
+  return (
+    <FlatList
+      ref={listRef}
+      data={rows}
+      keyExtractor={(r) => r.key}
+      renderItem={renderRow}
+      contentContainerStyle={{ padding: spacing.lg }}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}
+      initialNumToRender={15}
+      maxToRenderPerBatch={12}
+      windowSize={9}
+      onScrollToIndexFailed={onScrollToIndexFailed}
+      onScrollBeginDrag={cancelLanding}
+    />
   );
 }
 

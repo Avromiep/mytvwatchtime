@@ -8,5 +8,7 @@
   "topShowsForYou": "أفضل المسلسلات لك",
   "trendingShows": "المسلسلات الرائجة",
   "trendingMovies": "الأفلام الرائجة",
-  "seeAll": "عرض الكل"
+  "seeAll": "عرض الكل",
+  "mediaTypeShow": "مسلسل",
+  "mediaTypeMovie": "فيلم"
 }

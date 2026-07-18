@@ -59,13 +59,16 @@ export default function ProfileScreen() {
   // Subtle "refreshing" indicator only once we have data to show (never overlaps the Skeleton).
   const statsRefreshing = !!summary.data && (!!summary.data.stale || summary.isFetching);
 
-  // When the user has no cover image, fall back to a random backdrop from their watchlist.
+  // When the user has no cover image, fall back to a backdrop from their watchlist.
+  // Deterministic pick (first with a backdrop): Math.random() re-rolled the cover on
+  // every data refresh, causing a visible image swap + refetch.
   const coverFallback = useMemo(() => {
     const items = [...(shows.data?.items ?? []), ...(movies.data?.items ?? [])];
-    const urls = items
-      .map((it: any) => it.images?.backdrop ?? it.backdropUrl)
-      .filter(Boolean) as string[];
-    return urls.length ? urls[Math.floor(Math.random() * urls.length)] : undefined;
+    for (const it of items) {
+      const url = (it as any).images?.backdrop ?? (it as any).backdropUrl;
+      if (url) return url as string;
+    }
+    return undefined;
   }, [shows.data, movies.data]);
 
   return (

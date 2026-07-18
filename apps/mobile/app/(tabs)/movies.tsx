@@ -5,7 +5,7 @@ import { MediaType } from '@tvwatch/shared';
 import { Header } from '../../components/Header';
 import { PosterCard } from '../../components/cards';
 import { EmptyState, Screen, Spinner, T } from '../../components/primitives';
-import { useFavorites, useHistory, useWatchlist } from '../../api/hooks';
+import { useAllFavorites, useAllHistory, useAllWatchlist } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { useWindowDimensions } from 'react-native';
@@ -28,9 +28,11 @@ export default function MoviesScreen() {
   const { width } = useWindowDimensions();
   const { tokens } = useAppearance();
   const { t } = useTranslation(['movies', 'common']);
-  const watchlist = useWatchlist(MediaType.MOVIE);
-  const watched = useHistory({ mediaType: MediaType.MOVIE, page: 1 });
-  const favorites = useFavorites(MediaType.MOVIE);
+  // Complete collections (auto-paged to the end) — sections show exactly what the
+  // user has, not just the first 500.
+  const watchlist = useAllWatchlist(MediaType.MOVIE);
+  const watched = useAllHistory({ mediaType: MediaType.MOVIE });
+  const favorites = useAllFavorites(MediaType.MOVIE);
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -45,14 +47,14 @@ export default function MoviesScreen() {
   const cols = Math.max(2, Math.floor((containerW + gap) / (160 + gap))); // wider cards for movies
   const cellW = Math.floor((containerW - gap * (cols - 1)) / cols);
 
-  const watchedIds = new Set((watched.data?.items ?? []).map((h: any) => h.mediaId));
-  const watchlistItems: MovieItem[] = (watchlist.data?.items ?? [])
+  const watchedIds = new Set(watched.items.map((h: any) => h.mediaId));
+  const watchlistItems: MovieItem[] = watchlist.items
     .filter((m: any) => !watchedIds.has(m.id))
     .map((m: any) => ({ id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl }));
-  const watchedItems: MovieItem[] = (watched.data?.items ?? []).map((h: any) => ({
+  const watchedItems: MovieItem[] = watched.items.map((h: any) => ({
     id: h.mediaId, title: h.title, posterUrl: h.posterUrl, watched: true, progress: 1,
   }));
-  const favoriteItems = (favorites.data?.items ?? []).map((m: any) => {
+  const favoriteItems = favorites.items.map((m: any) => {
     const watched = watchedIds.has(m.id);
     return { id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, watched, progress: watched ? 1 : undefined };
   });

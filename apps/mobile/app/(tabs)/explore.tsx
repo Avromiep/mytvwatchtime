@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -39,7 +39,7 @@ export default function ExploreScreen() {
   const cols = Math.max(2, Math.floor((containerW + gridGap) / (110 + gridGap)));
   const cellW = Math.floor((containerW - gridGap * (cols - 1)) / cols);
 
-  const searchItems = search.data?.items ?? [];
+  const searchItems = useMemo(() => (search.data?.pages ?? []).flatMap((p) => p.items ?? []), [search.data]);
   const searchRows: typeof searchItems[] = [];
   for (let i = 0; i < searchItems.length; i += cols) searchRows.push(searchItems.slice(i, i + cols));
 
@@ -86,15 +86,24 @@ export default function ExploreScreen() {
             contentContainerStyle={{ padding: spacing.lg }}
             keyExtractor={(row, i) => row[0]?.id ?? `row-${i}`}
             ListEmptyComponent={<T variant="body" muted>{t('explore:noResults', { query: debouncedQ })}</T>}
+            onEndReached={() => { if (search.hasNextPage && !search.isFetchingNextPage) search.fetchNextPage(); }}
+            onEndReachedThreshold={0.6}
+            ListFooterComponent={search.isFetchingNextPage ? <Spinner /> : null}
             renderItem={({ item: row }) => {
               const fill = cols - row.length;
               return (
                 <View style={{ flexDirection: 'row' }}>
-                  {row.map((item) => (
-                    <View key={item.id} style={{ width: cellW, marginRight: gridGap, marginBottom: gridGap }}>
-                      <PosterCard id={item.id} kind={item.type === 'SHOW' ? 'shows' : 'movies'} title={item.title} poster={item.images?.poster ?? item.images?.backdrop} width={cellW} style={{ marginRight: 0 }} />
-                    </View>
-                  ))}
+                  {row.map((item) => {
+                    const year = (item as any).yearStart ?? (item as any).releaseYear ?? null;
+                    return (
+                      <View key={item.id} style={{ width: cellW, marginRight: gridGap, marginBottom: gridGap }}>
+                        <PosterCard id={item.id} kind={item.type === 'SHOW' ? 'shows' : 'movies'} title={item.title} poster={item.images?.poster ?? item.images?.backdrop} width={cellW} style={{ marginRight: 0 }} />
+                        <T variant="micro" muted numberOfLines={1} style={{ marginTop: 2 }}>
+                          {t(item.type === 'SHOW' ? 'explore:mediaTypeShow' : 'explore:mediaTypeMovie')}{year ? ` · ${year}` : ''}
+                        </T>
+                      </View>
+                    );
+                  })}
                   {fill > 0
                     ? Array.from({ length: fill }).map((_, i) => (
                         <View key={'pad_' + i} style={{ width: cellW, marginRight: gridGap }} />

@@ -4,7 +4,7 @@ import { Header } from '../../components/Header';
 import { Screen, Spinner } from '../../components/primitives';
 import { EpisodeDetailContent } from '../../components/EpisodeDetailContent';
 import { EpisodePager } from '../../components/EpisodePager';
-import { useEpisode, useShowEpisodes } from '../../api/hooks';
+import { useEpisode, useEpisodeSiblings } from '../../api/hooks';
 
 export default function EpisodeDetailScreen() {
   const params = useLocalSearchParams<{ id: string }>();
@@ -13,21 +13,16 @@ export default function EpisodeDetailScreen() {
   const initialIdRef = useRef(params.id);
   const initialId = initialIdRef.current;
 
-  // Bootstrap: load the entry episode to learn its showId / seasonId.
+  // Bootstrap: load the entry episode + the lightweight season-sibling ids (no full
+  // show-structure download just to page within the season).
   const { data: ep, isLoading } = useEpisode(initialId);
-  const { data: seasons } = useShowEpisodes(ep?.showId ?? '');
+  const { data: siblings } = useEpisodeSiblings(initialId);
 
   // Ordered episode ids within the same season.
   const episodeIds = useMemo(() => {
-    if (!ep || !seasons) return null;
-    const season = seasons.find((s: any) => s.id === ep.seasonId);
-    if (!season) return null;
-    const ids = (season.episodes as any[])
-      .slice()
-      .sort((a, b) => (a.number ?? 0) - (b.number ?? 0))
-      .map((e) => e.id as string);
-    return ids.length ? ids : null;
-  }, [ep, seasons]);
+    if (!siblings || siblings.episodeIds.length === 0) return null;
+    return siblings.episodeIds;
+  }, [siblings]);
 
   if (isLoading) {
     return (

@@ -13,6 +13,14 @@ import { HydrationQueue } from './hydration/hydration.queue';
 import { DiscoverQueryDto, SearchQueryDto } from './dto/discover.dto';
 import { paginate } from '../common/dto/pagination.dto';
 
+interface SearchCacheEntry {
+  /** Merged ordered media ids (local DB first, then TMDb pages). */
+  ids: string[];
+  tmdbPagesFetched: number;
+  /** True once every enabled source returned a short/empty page. */
+  exhausted: boolean;
+}
+
 @Injectable()
 export class DiscoveryService {
   private readonly logger = new Logger(DiscoveryService.name);
@@ -39,23 +47,47 @@ export class DiscoveryService {
     return this.searchViaDb(term, q, userId);
   }
 
+  /**
+   * Search result window cached per (type, term, lang): the merged ordering (local DB
+   * first, then TMDb pages) lives in `ids`, and later pages expand the window on
+   * demand — so paging returns real ordered results instead of re-fetching arbitrary
+   * TMDb pages (the old key included the page, so page 2+ restarted mid-list).
+   */
   private async searchViaProviders(term: string, q: SearchQueryDto, userId?: string) {
-    // Honor the requested page size (the PaginationDto caps it at 100). Key the cache by
-    // language AND size so different locales/page sizes don't share orderings/titles.
     const lang = currentLanguage();
-    const want = Math.max(1, Math.min(q.pageSize ?? 20, 100));
-    const cacheKey = `search:v3:${q.type ?? 'all'}:${term}:${q.page ?? 1}:${want}:${lang}`;
-    const cached = await this.redis.get<{ ids: string[] }>(cacheKey);
-    if (cached?.ids?.length) {
-      const items = await this.fetchListDtos(cached.ids, userId, want);
-      return paginate(items, 1, items.length, cached.ids.length);
+    const want = Math.max(1, Math.min(q.pageSize ?? 20, 50));
+    const page = Math.max(1, q.page ?? 1);
+    const cacheKey = `search:v4:${q.type ?? 'all'}:${term}:${lang}`;
+
+    let entry = await this.redis.get<SearchCacheEntry>(cacheKey);
+    if (!entry) {
+      entry = await this.initialSearch(term, q);
+      await this.redis.set(cacheKey, entry, 120);
+    }
+    // Expand the window until the requested page is covered or sources are exhausted
+    // (bounded per request so a deep page jump can't hammer TMDb).
+    let rounds = 0;
+    while (entry.ids.length < page * want && !entry.exhausted && rounds < 3) {
+      entry = await this.fetchNextTmdbPage(term, q, entry);
+      rounds++;
+      await this.redis.set(cacheKey, entry, 120);
     }
 
+    const start = (page - 1) * want;
+    const slice = entry.ids.slice(start, start + want);
+    const items = await this.fetchListDtos(slice, userId, want);
+    // hasMore via paginate's formula: +1 while more pages may exist upstream.
+    const total = entry.ids.length + (entry.exhausted ? 0 : 1);
+    return paginate(items, page, want, total);
+  }
+
+  /** First search round: local DB (exact then contains) + TMDb page 1 + fallbacks. */
+  private async initialSearch(term: string, q: SearchQueryDto): Promise<SearchCacheEntry> {
+    const lang = currentLanguage();
     const wantShows = !q.type || q.type === MediaType.SHOW;
     const wantMovies = !q.type || q.type === MediaType.MOVIE;
 
-    // Step 1: LOCAL DB search (fast, finds TVDB-only content that already exists).
-    // Two passes: exact title matches first (high priority), then contains matches.
+    // LOCAL DB search (fast, finds TVDB-only content that already exists).
     const dbWhere = {
       ...(wantShows && !wantMovies ? { type: MediaType.SHOW } : {}),
       ...(wantMovies && !wantShows ? { type: MediaType.MOVIE } : {}),
@@ -71,86 +103,71 @@ export class DiscoveryService {
     });
     const localIds = [...exactIds, ...containsRows.map((r) => r.id)];
 
-    // Step 2: TMDB API search (finds new content not in DB yet). TMDB returns a fixed 20
-    // results per page, so fetch ceil(want/20) pages to satisfy the requested page size.
-    const TMDB_PAGE_SIZE = 20;
-    const pagesNeeded = Math.max(1, Math.ceil(want / TMDB_PAGE_SIZE));
-    const startPage = q.page ?? 1;
-    const fetchTmdbPages = async (
-      fetcher: (p: number) => Promise<{ items: any[]; total: number }>,
-      upsert: (i: any) => Promise<string>,
-    ): Promise<string[]> => {
-      // Fetch the needed pages concurrently (TMDB's rate limiter tolerates a few parallel
-      // requests) to keep cold-search latency flat, then stop at the first short/empty page.
-      const pages = await Promise.all(
-        Array.from({ length: pagesNeeded }, (_, p) => fetcher(startPage + p)),
-      );
-      const ids: string[] = [];
-      for (const r of pages) {
-        if (r.items.length === 0) break;
-        ids.push(...(await Promise.all(r.items.map(upsert))));
-        if (r.items.length < TMDB_PAGE_SIZE) break; // last page reached
-      }
-      return ids;
-    };
+    let entry: SearchCacheEntry = { ids: localIds, tmdbPagesFetched: 0, exhausted: false };
+    entry = await this.fetchNextTmdbPage(term, q, entry);
 
-    const tasks: Promise<{ source: string; ids: string[] }>[] = [];
-    if (wantShows && this.tmdb.enabled) {
-      tasks.push(
-        fetchTmdbPages((pg) => this.tmdb.searchShows(term, pg), (i) => this.meta.lightUpsertShow(i)).then((ids) => ({
-          source: 'tmdb-shows',
-          ids,
-        })),
-      );
-    }
-    if (wantMovies && this.tmdb.enabled) {
-      tasks.push(
-        fetchTmdbPages((pg) => this.tmdb.searchMovies(term, pg), (i) => this.meta.lightUpsertMovie(i)).then((ids) => ({
-          source: 'tmdb-movies',
-          ids,
-        })),
-      );
-    }
-    const results = await Promise.all(tasks);
-    const tmdbIds = results.flatMap((r) => r.ids);
-
-    // Merge: local results first (includes TVDB-only), then TMDB-only (deduped).
-    const orderedIds = [...new Set([...localIds, ...tmdbIds])];
-
-    // Step 3: If NO results from local + TMDB, fall back to TVDB API (synchronous).
-    if (orderedIds.length === 0 && this.tvdb?.enabled) {
+    // If NO results from local + TMDB, fall back to TVDB API (synchronous).
+    if (entry.ids.length === 0 && this.tvdb?.enabled) {
       if (wantShows) {
         try {
           const r = await this.tvdb.searchShows(term, 1);
-          orderedIds.push(...await Promise.all(
+          entry.ids.push(...await Promise.all(
             r.items.filter((i) => i.tvdbId).map((i) => this.meta.lightUpsertShowTvdb(
               { tvdbId: i.tvdbId!, title: i.title, overview: i.overview, posterUrl: i.posterUrl, backdropUrl: null, popularity: 0, year: i.year ?? null },
             )),
           ));
         } catch (e) { this.logger.warn(`TVDB show fallback failed: ${(e as Error).message}`); }
       }
-      if (wantMovies && orderedIds.length === 0) {
+      if (wantMovies && entry.ids.length === 0) {
         try {
           const r = await this.tvdb.searchMovies(term, 1);
-          orderedIds.push(...await Promise.all(
+          entry.ids.push(...await Promise.all(
             r.items.filter((i) => i.tvdbId).map((i) => this.meta.lightUpsertMovieTvdb(
               { tvdbId: i.tvdbId!, title: i.title, overview: i.overview, posterUrl: i.posterUrl, backdropUrl: null, popularity: 0, year: i.year ?? null },
             )),
           ));
         } catch (e) { this.logger.warn(`TVDB movie fallback failed: ${(e as Error).message}`); }
       }
+      entry.exhausted = true;
     }
 
-    // Only cache NON-EMPTY results with a SHORT TTL — don't trap users in stale empty results.
-    if (orderedIds.length >= 3) await this.redis.set(cacheKey, { ids: orderedIds }, 120);
+    entry.ids = [...new Set(entry.ids)];
 
     // Enqueue background enrichment.
     if (wantShows && this.tvdb?.enabled) this.hydration.enqueueTvdbSearch(term, 'SHOW', lang).catch(() => undefined);
     if (wantMovies && this.tvdb?.enabled) this.hydration.enqueueTvdbSearch(term, 'MOVIE', lang).catch(() => undefined);
-    for (const id of orderedIds) this.hydration.enqueueClassifyCandidate({ mediaId: id }).catch(() => undefined);
+    for (const id of entry.ids) this.hydration.enqueueClassifyCandidate({ mediaId: id }).catch(() => undefined);
 
-    const items = await this.fetchListDtos(orderedIds, userId, want);
-    return paginate(items, 1, items.length, orderedIds.length);
+    return entry;
+  }
+
+  /** Append the next TMDb page (per requested type) to the cached window. */
+  private async fetchNextTmdbPage(term: string, q: SearchQueryDto, entry: SearchCacheEntry): Promise<SearchCacheEntry> {
+    if (entry.exhausted) return entry;
+    if (!this.tmdb.enabled) return { ...entry, exhausted: true };
+    const wantShows = !q.type || q.type === MediaType.SHOW;
+    const wantMovies = !q.type || q.type === MediaType.MOVIE;
+    const nextPage = entry.tmdbPagesFetched + 1;
+
+    const tasks: Promise<{ kind: 'show' | 'movie'; items: any[] }>[] = [];
+    if (wantShows) tasks.push(this.tmdb.searchShows(term, nextPage).then((r) => ({ kind: 'show' as const, items: r.items })));
+    if (wantMovies) tasks.push(this.tmdb.searchMovies(term, nextPage).then((r) => ({ kind: 'movie' as const, items: r.items })));
+    const results = await Promise.all(tasks);
+
+    let allShort = results.length > 0;
+    for (const { kind, items } of results) {
+      if (!items.length) continue;
+      const upserted = await Promise.all(
+        items.map((i) => (kind === 'show' ? this.meta.lightUpsertShow(i) : this.meta.lightUpsertMovie(i))),
+      );
+      entry.ids.push(...upserted);
+      if (items.length >= 20) allShort = false; // a full page means there may be more
+    }
+    return {
+      ids: [...new Set(entry.ids)],
+      tmdbPagesFetched: nextPage,
+      exhausted: allShort,
+    };
   }
 
   private async searchViaDb(term: string, q: SearchQueryDto, userId?: string) {
@@ -198,20 +215,38 @@ export class DiscoveryService {
     return paginate(items, q.page, q.pageSize, res.total);
   }
 
+  /**
+   * Trending ids with a short cache: resolving a page costs a TMDb call plus one
+   * lightUpsert per item (each = 1 externalId read + a mediaItem write), so an
+   * uncached Discover open did ~80 queries, half of them writes. Ids are
+   * user-agnostic; user-specific flags are applied by fetchListDtos afterwards.
+   */
+  private async cachedTrendingIds(kind: 'show' | 'movie', page: number): Promise<string[]> {
+    const key = `trending:ids:${kind}:${currentLanguage()}:${page}`;
+    const cached = await this.redis.get<string[]>(key);
+    if (cached?.length) return cached;
+    const items = kind === 'show'
+      ? await this.tmdb.trendingShows('week', page)
+      : await this.tmdb.trendingMovies('week', page);
+    const ids = await Promise.all(
+      items.map((i) => (kind === 'show' ? this.meta.lightUpsertShow(i) : this.meta.lightUpsertMovie(i))),
+    );
+    if (ids.length) await this.redis.set(key, ids, 300);
+    return ids;
+  }
+
   async trendingShows(userId?: string, page = 1, pageSize = 20) {
     if (!this.tmdb.enabled) return { items: await this.topDb(MediaType.SHOW, pageSize, userId), page, hasMore: false };
-    const items = await this.tmdb.trendingShows('week', page);
-    const ids = await Promise.all(items.map((i) => this.meta.lightUpsertShow(i)));
+    const ids = await this.cachedTrendingIds('show', page);
     const listItems = await this.fetchListDtos(ids, userId, pageSize);
-    return { items: listItems, page, hasMore: items.length === 20 };
+    return { items: listItems, page, hasMore: ids.length === 20 };
   }
 
   async trendingMovies(userId?: string, page = 1, pageSize = 20) {
     if (!this.tmdb.enabled) return { items: await this.topDb(MediaType.MOVIE, pageSize, userId), page, hasMore: false };
-    const items = await this.tmdb.trendingMovies('week', page);
-    const ids = await Promise.all(items.map((i) => this.meta.lightUpsertMovie(i)));
+    const ids = await this.cachedTrendingIds('movie', page);
     const listItems = await this.fetchListDtos(ids, userId, pageSize);
-    return { items: listItems, page, hasMore: items.length === 20 };
+    return { items: listItems, page, hasMore: ids.length === 20 };
   }
 
   async discoverSections(userId?: string) {

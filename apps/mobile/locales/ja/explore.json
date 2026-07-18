@@ -8,5 +8,7 @@
   "topShowsForYou": "あなたへのおすすめ番組",
   "trendingShows": "話題の番組",
   "trendingMovies": "話題の映画",
-  "seeAll": "すべて表示"
+  "seeAll": "すべて表示",
+  "mediaTypeShow": "テレビ番組",
+  "mediaTypeMovie": "映画"
 }

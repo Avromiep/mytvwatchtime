@@ -15,8 +15,8 @@ export default function StatsScreen() {
   const { t } = useTranslation(['stats', 'common']);
   const [tab, setTab] = useState<'shows' | 'movies'>('shows');
   const summary = useStatsSummary();
-  const shows = useStatsShows();
-  const movies = useStatsMovies();
+  const shows = useStatsShows(tab === 'shows');
+  const movies = useStatsMovies(tab === 'movies');
   const badges = useBadges();
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {

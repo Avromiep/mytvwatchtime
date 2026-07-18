@@ -1,7 +1,9 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { currentLanguage } from '../common/language.context';
 import { mergeLocalized } from '../common/utils/localization.util';
 import { mapMovie, mapSeason, mapShow } from '../common/utils/mapper.util';
@@ -30,6 +32,7 @@ export class MediaMetadataService {
     private readonly tvmaze: TvmazeProvider,
     private readonly config: ConfigService,
     private readonly hydration: HydrationQueue,
+    private readonly redis: RedisService,
   ) {}
 
   /** Enqueue classification, versioned by metadataRefreshedAt so each re-hydration re-runs
@@ -103,6 +106,35 @@ export class MediaMetadataService {
   }
 
   // ---- Light upsert for list endpoints ----
+  /**
+   * Build the locale-override update for an existing media row and report whether
+   * anything would actually change. mergeLocalized only ever touches the 'en' and
+   * `lang` keys, so comparing those two keys before/after is enough — list
+   * refreshes (trending/search/discover) re-send identical values on every call,
+   * and skipping the no-op UPDATE halves the write load on those endpoints.
+   */
+  private localeOverrideUpdate(
+    existing: { titles: any; overviews: any; posterUrls: any; backdropUrls: any },
+    item: { title?: string; overview?: string | null; posterUrl?: string | null; backdropUrl?: string | null },
+    lang: string,
+  ) {
+    const data = {
+      titles: mergeLocalized(existing.titles as any, lang, item.title, undefined),
+      overviews: mergeLocalized(existing.overviews as any, lang, item.overview, undefined),
+      posterUrls: mergeLocalized(existing.posterUrls as any, lang, item.posterUrl, undefined),
+      backdropUrls: mergeLocalized(existing.backdropUrls as any, lang, item.backdropUrl, undefined),
+    };
+    const same = (before: any, after: any) =>
+      (before?.en ?? undefined) === (after?.en ?? undefined) &&
+      (before?.[lang] ?? undefined) === (after?.[lang] ?? undefined);
+    const changed =
+      !same(existing.titles, data.titles) ||
+      !same(existing.overviews, data.overviews) ||
+      !same(existing.posterUrls, data.posterUrls) ||
+      !same(existing.backdropUrls, data.backdropUrls);
+    return { data, changed };
+  }
+
   async lightUpsertShow(item: {
     tmdbId: number;
     title: string;
@@ -119,15 +151,10 @@ export class MediaMetadataService {
     if (existing) {
       // List data is single-language: store it as a locale override only, never
       // overwriting the (English) base so other users aren't contaminated.
-      await this.prisma.mediaItem.update({
-        where: { id: existing.id },
-        data: {
-          titles: mergeLocalized(existing.titles as any, lang, item.title, undefined),
-          overviews: mergeLocalized(existing.overviews as any, lang, item.overview, undefined),
-          posterUrls: mergeLocalized(existing.posterUrls as any, lang, item.posterUrl, undefined),
-          backdropUrls: mergeLocalized(existing.backdropUrls as any, lang, item.backdropUrl, undefined),
-        },
-      });
+      const { data, changed } = this.localeOverrideUpdate(existing, item, lang);
+      if (changed) {
+        await this.prisma.mediaItem.update({ where: { id: existing.id }, data });
+      }
       // Backfill a missing year on stubs created before search mapped the year.
       if (item.year) {
         await this.prisma.show
@@ -176,15 +203,10 @@ export class MediaMetadataService {
     const lang = currentLanguage();
     const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal);
     if (existing) {
-      await this.prisma.mediaItem.update({
-        where: { id: existing.id },
-        data: {
-          titles: mergeLocalized(existing.titles as any, lang, item.title, undefined),
-          overviews: mergeLocalized(existing.overviews as any, lang, item.overview, undefined),
-          posterUrls: mergeLocalized(existing.posterUrls as any, lang, item.posterUrl, undefined),
-          backdropUrls: mergeLocalized(existing.backdropUrls as any, lang, item.backdropUrl, undefined),
-        },
-      });
+      const { data, changed } = this.localeOverrideUpdate(existing, item, lang);
+      if (changed) {
+        await this.prisma.mediaItem.update({ where: { id: existing.id }, data });
+      }
       if (item.year) {
         await this.prisma.movie
           .updateMany({ where: { mediaId: existing.id, releaseYear: null }, data: { releaseYear: item.year } })
@@ -600,17 +622,27 @@ export class MediaMetadataService {
       where: { season: { show: { mediaId } } },
       select: { id: true, number: true, season: { select: { number: true } } },
     });
+    // One UPDATE ... FROM (VALUES ...) for the whole show — the old loop issued one
+    // serial UPDATE per episode (500+ round trips on long-running shows).
+    const updates: { id: string; airTime: string | null; airDate: Date | null }[] = [];
     for (const e of eps) {
       const air = map.get(`${e.season.number}-${e.number}`);
       if (!air) continue;
-      await this.prisma.episode.update({
-        where: { id: e.id },
-        data: {
-          airTime: air.airtime ?? null,
-          ...(air.airstamp ? { airDate: new Date(air.airstamp) } : {}),
-        },
+      updates.push({
+        id: e.id,
+        airTime: air.airtime ?? null,
+        airDate: air.airstamp ? new Date(air.airstamp) : null,
       });
     }
+    if (!updates.length) return;
+    const values = updates.map((u) => Prisma.sql`(${u.id}, ${u.airTime}, ${u.airDate})`);
+    await this.prisma.$executeRaw`
+      UPDATE episodes e
+      SET air_time = v.air_time,
+          air_date = COALESCE(v.air_date::timestamptz, e.air_date)
+      FROM (VALUES ${Prisma.join(values)}) AS v(id, air_time, air_date)
+      WHERE e.id = v.id
+    `;
   }
 
   /** Populate per-episode air times from TVmaze if any are missing (idempotent / cached). */
@@ -620,6 +652,13 @@ export class MediaMetadataService {
       where: { season: { show: { mediaId } }, airTime: null },
     });
     if (missing === 0) return;
+    // TVmaze doesn't cover every show (and partial coverage never reaches missing=0),
+    // so without a marker EVERY detail view re-fetched TVmaze + re-looped all episodes.
+    // Attempt at most once per 6h per show; newly added episodes are picked up on the
+    // next window.
+    const marker = `airtimes:tried:${mediaId}`;
+    if (await this.redis.get(marker)) return;
+    await this.redis.set(marker, 1, 6 * 3600);
     const exts = await this.prisma.externalId.findMany({
       where: { mediaId },
       select: { provider: true, value: true },
@@ -904,28 +943,34 @@ export class MediaMetadataService {
     // Source of truth for the chart = YOUR app users' ratings.
     // Unrated episodes count as 0 unless USE_API_FOR_EPISODES_CHART=true (then TMDb fills gaps).
     const useApi = this.config.get<boolean>('metadata.useApiRatingsForChart') === true;
-    const eps = await this.prisma.episode.findMany({
-      where: { season: { show: { mediaId } } },
-      select: {
-        number: true,
-        rating: true,
-        season: { select: { number: true } },
-        ratings: { select: { rating: true } },
-      },
-    });
+    // One aggregate query — the old findMany loaded every episode of the show plus
+    // every user rating row ever cast on it (thousands of rows) to average in JS,
+    // on every show-detail view.
+    const eps = await this.prisma.$queryRaw<
+      { number: number; seasonNumber: number; tmdbRating: number | null; votes: number; avg: number | null }[]
+    >`
+      SELECT e.number, s.number AS "seasonNumber", e.rating AS "tmdbRating",
+             COUNT(r.id)::int AS votes, AVG(r.rating)::float AS avg
+      FROM episodes e
+      JOIN seasons s ON e.season_id = s.id
+      JOIN shows sh ON s.show_id = sh.id
+      LEFT JOIN ratings r ON r.episode_id = e.id
+      WHERE sh.media_id = ${mediaId}
+      GROUP BY e.id, e.number, s.number, e.rating
+    `;
     const bySeason = new Map<number, { number: number; rating: number; votes: number }[]>();
     for (const e of eps) {
-      const votes = e.ratings.length;
-      const userAvg = votes ? e.ratings.reduce((a, r) => a + r.rating, 0) / votes : null;
+      const votes = e.votes;
+      const userAvg = votes ? e.avg : null;
       let value: number;
       if (userAvg != null) {
         value = userAvg; // 1–5 from your users
-      } else if (useApi && e.rating) {
-        value = e.rating / 2; // TMDb 0–10 scaled to 0–5
+      } else if (useApi && e.tmdbRating) {
+        value = e.tmdbRating / 2; // TMDb 0–10 scaled to 0–5
       } else {
         value = 0; // no user ratings yet
       }
-      const sn = e.season.number;
+      const sn = e.seasonNumber;
       if (!bySeason.has(sn)) bySeason.set(sn, []);
       bySeason.get(sn)!.push({ number: e.number, rating: Math.round(value * 10) / 10, votes });
     }
@@ -948,16 +993,16 @@ export class MediaMetadataService {
               include: {
                 episodes: {
                   orderBy: { number: 'asc' },
-                  ...(userId
-                    ? {
-                        include: {
-                          userStatuses: {
-                            where: { userId },
-                            select: { watched: true, watchedAt: true, device: true },
-                          },
-                        },
-                      }
-                    : {}),
+                      ...(userId
+                        ? {
+                            include: {
+                              userStatuses: {
+                                where: { userId },
+                                select: { watched: true, watchedAt: true, device: true, watchCount: true },
+                              },
+                            },
+                          }
+                        : {}),
                 },
               },
             },

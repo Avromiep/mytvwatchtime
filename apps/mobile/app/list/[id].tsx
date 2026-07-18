@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { FlatList, Modal, Pressable, Share, StyleSheet, TextInput, View } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -15,13 +15,15 @@ import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
 import { showError, showConfirm } from '../../lib/dialog';
 
+/** Poster grid columns (chunked rows — never FlatList numColumns, see AGENTS.md). */
+const GRID_COLS = 3;
+
 export default function ListDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: list, isLoading } = useList(id);
   const { tokens } = useAppearance();
   const { t } = useTranslation(['lists', 'common']);
-  const [page, setPage] = useState(1);
-  const { data: itemsData } = useListItems(id, page);
+  const itemsQuery = useListItems(id);
   const [activeTab, setActiveTab] = useState<'SHOW' | 'MOVIE'>('SHOW');
   const [showAddSearch, setShowAddSearch] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -32,9 +34,9 @@ export default function ListDetailScreen() {
   const addMut = useAddListItem();
   const removeMut = useRemoveListItem();
 
-  const allItems = itemsData?.items ?? [];
-  const shows = allItems.filter(i => i.mediaType === 'SHOW');
-  const movies = allItems.filter(i => i.mediaType === 'MOVIE');
+  const allItems = useMemo(() => (itemsQuery.data?.pages ?? []).flatMap((p: any) => p.items ?? []), [itemsQuery.data]);
+  const shows = useMemo(() => allItems.filter(i => i.mediaType === 'SHOW'), [allItems]);
+  const movies = useMemo(() => allItems.filter(i => i.mediaType === 'MOVIE'), [allItems]);
 
   useEffect(() => {
     if (activeTab === 'SHOW' && shows.length === 0 && movies.length > 0) setActiveTab('MOVIE');
@@ -42,6 +44,12 @@ export default function ListDetailScreen() {
   }, [shows.length, movies.length]);
 
   const currentItems = activeTab === 'SHOW' ? shows : movies;
+  // Chunked rows instead of numColumns (forbidden on Android — see AGENTS.md grid rule).
+  const gridRows = useMemo(() => {
+    const out: any[][] = [];
+    for (let i = 0; i < currentItems.length; i += GRID_COLS) out.push(currentItems.slice(i, i + GRID_COLS));
+    return out;
+  }, [currentItems]);
 
   const onShare = async () => {
     try { await Share.share({ message: `${t('lists:shareMsg', { title: list?.title })}\ntvwatchtime://list/${id}` }); } catch {}
@@ -74,9 +82,8 @@ export default function ListDetailScreen() {
         </View>
       } />
       <FlatList
-        data={currentItems}
-        keyExtractor={(i) => i.id}
-        numColumns={3}
+        data={gridRows}
+        keyExtractor={(row) => row.map((i) => i.id).join('_')}
         contentContainerStyle={{ paddingBottom: 40 }}
         ListHeaderComponent={
           <View>
@@ -139,21 +146,32 @@ export default function ListDetailScreen() {
           </View>
         }
         ListEmptyComponent={<EmptyState title={isOwner ? t('lists:noItemsYet') : t('lists:listEmpty')} subtitle={isOwner ? t('lists:tapAddItems') : undefined} icon="list-outline" />}
-        renderItem={({ item }) => (
-          <Pressable onPress={() => router.push(`/${item.mediaType === 'SHOW' ? 'show' : 'movie'}/${item.mediaId}`)} style={{ flex: 1, marginHorizontal: 2, marginBottom: 12 }}>
-            <View style={{ position: 'relative' }}>
-              <Image source={item.posterUrl ? { uri: item.posterUrl } : undefined} style={{ width: '100%', height: 160, borderRadius: radius.sm, backgroundColor: tokens.surfaceElevated }} contentFit="cover" transition={150} />
-              {isOwner ? (
-                <Pressable onPress={() => onRemove(item.id)} style={{ position: 'absolute', top: 4, right: 4, backgroundColor: tokens.mediaScrim, borderRadius: 12, width: 24, height: 24, alignItems: 'center', justifyContent: 'center' }}>
-                  <Ionicons name="close" size={14} color={tokens.mediaText} />
-                </Pressable>
-              ) : null}
-            </View>
-            <T variant="micro" numberOfLines={2} style={{ marginTop: 4 }}>{item.title}</T>
-          </Pressable>
+        renderItem={({ item: row }) => (
+          <View style={{ flexDirection: 'row' }}>
+            {row.map((item) => (
+              <Pressable key={item.id} onPress={() => router.push(`/${item.mediaType === 'SHOW' ? 'show' : 'movie'}/${item.mediaId}`)} style={{ flex: 1, marginHorizontal: 2, marginBottom: 12 }}>
+                <View style={{ position: 'relative' }}>
+                  <Image source={item.posterUrl ? { uri: item.posterUrl } : undefined} style={{ width: '100%', height: 160, borderRadius: radius.sm, backgroundColor: tokens.surfaceElevated }} contentFit="cover" transition={150} />
+                  {isOwner ? (
+                    <Pressable onPress={() => onRemove(item.id)} style={{ position: 'absolute', top: 4, right: 4, backgroundColor: tokens.mediaScrim, borderRadius: 12, width: 24, height: 24, alignItems: 'center', justifyContent: 'center' }}>
+                      <Ionicons name="close" size={14} color={tokens.mediaText} />
+                    </Pressable>
+                  ) : null}
+                </View>
+                <T variant="micro" numberOfLines={2} style={{ marginTop: 4 }}>{item.title}</T>
+              </Pressable>
+            ))}
+            {/* Invisible spacers keep incomplete rows aligned with the 3-column grid */}
+            {row.length < GRID_COLS
+              ? Array.from({ length: GRID_COLS - row.length }).map((_, i) => (
+                  <View key={`pad_${i}`} style={{ flex: 1, marginHorizontal: 2 }} />
+                ))
+              : null}
+          </View>
         )}
-        onEndReached={() => { if (itemsData?.hasMore) setPage(p => p + 1); }}
+        onEndReached={() => { if (itemsQuery.hasNextPage && !itemsQuery.isFetchingNextPage) itemsQuery.fetchNextPage(); }}
         onEndReachedThreshold={0.5}
+        ListFooterComponent={itemsQuery.isFetchingNextPage ? <Spinner /> : null}
       />
 
       {showEditModal ? <EditListModal listId={id} title={list.title} description={list.description} visibility={list.visibility} onClose={() => setShowEditModal(false)} /> : null}

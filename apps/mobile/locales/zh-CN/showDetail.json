@@ -19,5 +19,6 @@
   "addedBy": "添加者",
   "watchTrailer": "观看预告片",
   "cast": "演职员",
-  "comments": "评论"
+  "comments": "评论",
+  "showMoreEpisodes": "再显示 {{count}} 集"
 }

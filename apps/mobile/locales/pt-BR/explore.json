@@ -8,5 +8,7 @@
   "topShowsForYou": "Melhores séries para você",
   "trendingShows": "Séries em alta",
   "trendingMovies": "Filmes em alta",
-  "seeAll": "Ver tudo"
+  "seeAll": "Ver tudo",
+  "mediaTypeShow": "Série",
+  "mediaTypeMovie": "Filme"
 }

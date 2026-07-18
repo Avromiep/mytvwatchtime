@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
-import { ListVisibility } from '@prisma/client';
+import { ListVisibility, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { NotificationService } from '../notifications/notification.service';
 
@@ -9,6 +9,29 @@ export class ListsService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
   ) {}
+
+  /**
+   * Show/movie item counts for MANY lists in one GROUP BY query — replaces the
+   * 2 COUNT queries per list that made /lists cost 4N+ queries.
+   */
+  private async itemCountsByType(listIds: string[]) {
+    const map = new Map<string, { shows: number; movies: number }>();
+    if (!listIds.length) return map;
+    const rows = await this.prisma.$queryRaw<{ listId: string; type: string; c: number }[]>`
+      SELECT cli.list_id AS "listId", m.type, COUNT(*)::int AS c
+      FROM custom_list_items cli
+      JOIN media_items m ON m.id = cli.media_id
+      WHERE cli.list_id IN (${Prisma.join(listIds)})
+      GROUP BY cli.list_id, m.type
+    `;
+    for (const r of rows) {
+      const e = map.get(r.listId) ?? { shows: 0, movies: 0 };
+      if (r.type === 'SHOW') e.shows = r.c;
+      else if (r.type === 'MOVIE') e.movies = r.c;
+      map.set(r.listId, e);
+    }
+    return map;
+  }
 
   private async getCover(listId: string): Promise<string | null> {
     const items = await this.prisma.customListItem.findMany({
@@ -71,33 +94,29 @@ export class ListsService {
       where: { userId },
       orderBy: { updatedAt: 'desc' },
       include: {
+        _count: { select: { likes: true, subscriptions: true } },
         items: { take: 1, include: { media: { select: { posterUrl: true, backdropUrl: true } } } },
       },
     });
 
-    return Promise.all(
-      lists.map(async (l) => {
-        const [showCount, movieCount, likeCount, subCount] = await Promise.all([
-          this.prisma.customListItem.count({ where: { listId: l.id, media: { type: 'SHOW' } } }).catch(() => 0),
-          this.prisma.customListItem.count({ where: { listId: l.id, media: { type: 'MOVIE' } } }).catch(() => 0),
-          this.prisma.listLike.count({ where: { listId: l.id } }).catch(() => 0),
-          this.prisma.listSubscription.count({ where: { listId: l.id } }).catch(() => 0),
-        ]);
-        const cover = l.coverUrl || l.items[0]?.media?.backdropUrl || l.items[0]?.media?.posterUrl || null;
-        return {
-          id: l.id,
-          title: l.title,
-          description: l.description,
-          coverUrl: cover,
-          visibility: l.visibility,
-          showCount,
-          movieCount,
-          likeCount,
-          subCount,
-          updatedAt: l.updatedAt.toISOString(),
-        };
-      }),
-    );
+    // One GROUP BY for all show/movie counts (was 2 COUNT queries per list).
+    const typeCounts = await this.itemCountsByType(lists.map((l) => l.id));
+    return lists.map((l) => {
+      const c = typeCounts.get(l.id) ?? { shows: 0, movies: 0 };
+      const cover = l.coverUrl || l.items[0]?.media?.backdropUrl || l.items[0]?.media?.posterUrl || null;
+      return {
+        id: l.id,
+        title: l.title,
+        description: l.description,
+        coverUrl: cover,
+        visibility: l.visibility,
+        showCount: c.shows,
+        movieCount: c.movies,
+        likeCount: l._count.likes,
+        subCount: l._count.subscriptions,
+        updatedAt: l.updatedAt.toISOString(),
+      };
+    });
   }
 
   async followedLists(userId: string) {
@@ -115,31 +134,28 @@ export class ListsService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return Promise.all(
-      subs.map(async (s) => {
-        const l = s.list;
-        const [showCount, movieCount] = await Promise.all([
-          this.prisma.customListItem.count({ where: { listId: l.id, media: { type: 'SHOW' } } }),
-          this.prisma.customListItem.count({ where: { listId: l.id, media: { type: 'MOVIE' } } }),
-        ]);
-        const cover = l.coverUrl || l.items[0]?.media?.backdropUrl || l.items[0]?.media?.posterUrl || null;
-        return {
-          id: l.id,
-          title: l.title,
-          description: l.description,
-          coverUrl: cover,
-          visibility: l.visibility,
-          ownerId: l.userId,
-          ownerUsername: l.user?.username ?? null,
-          showCount,
-          movieCount,
-          likeCount: l._count.likes,
-          subCount: l._count.subscriptions,
-          notifyOnAdd: s.notifyOnAdd,
-          updatedAt: l.updatedAt.toISOString(),
-        };
-      }),
-    );
+    // One GROUP BY for all show/movie counts (was 2 COUNT queries per list).
+    const typeCounts = await this.itemCountsByType(subs.map((s) => s.list.id));
+    return subs.map((s) => {
+      const l = s.list;
+      const c = typeCounts.get(l.id) ?? { shows: 0, movies: 0 };
+      const cover = l.coverUrl || l.items[0]?.media?.backdropUrl || l.items[0]?.media?.posterUrl || null;
+      return {
+        id: l.id,
+        title: l.title,
+        description: l.description,
+        coverUrl: cover,
+        visibility: l.visibility,
+        ownerId: l.userId,
+        ownerUsername: l.user?.username ?? null,
+        showCount: c.shows,
+        movieCount: c.movies,
+        likeCount: l._count.likes,
+        subCount: l._count.subscriptions,
+        notifyOnAdd: s.notifyOnAdd,
+        updatedAt: l.updatedAt.toISOString(),
+      };
+    });
   }
 
   async get(id: string, userId?: string) {

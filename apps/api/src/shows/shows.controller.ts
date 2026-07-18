@@ -33,6 +33,11 @@ export class ShowsController {
     return this.shows.getSeasons(id, userId);
   }
 
+  @Get('episodes/:id/siblings')
+  episodeSiblings(@Param('id') id: string) {
+    return this.shows.getEpisodeSiblings(id);
+  }
+
   @Get('episodes/:id')
   episode(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.shows.getEpisodeDetail(id, userId);

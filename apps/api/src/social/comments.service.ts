@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { CommentThreadType, ListVisibility, NotificationCategory } from '@prisma/client';
+import { CommentThreadType, ListVisibility, NotificationCategory, Prisma } from '@prisma/client';
 import { isCommunityGroupId } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { mapPublicUser } from '../common/utils/mapper.util';
@@ -415,17 +415,36 @@ export class CommentsService {
     const map = new Map<string, any>();
     const ids = [...new Set(listIds)];
     if (ids.length === 0) return map;
-    const rows = await this.prisma.customList.findMany({
-      where: { id: { in: ids } },
-      include: { items: { include: { media: { select: { type: true } } } } },
-    });
+    // Counts via GROUP BY — the old code loaded every item (with media) of each
+    // attached list just to count SHOW vs MOVIE.
+    const [rows, counts] = await Promise.all([
+      this.prisma.customList.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, title: true, coverUrl: true },
+      }),
+      this.prisma.$queryRaw<{ listId: string; type: string; c: number }[]>`
+        SELECT cli.list_id AS "listId", m.type, COUNT(*)::int AS c
+        FROM custom_list_items cli
+        JOIN media_items m ON m.id = cli.media_id
+        WHERE cli.list_id IN (${Prisma.join(ids)})
+        GROUP BY cli.list_id, m.type
+      `,
+    ]);
+    const byList = new Map<string, { shows: number; movies: number }>();
+    for (const r of counts) {
+      const e = byList.get(r.listId) ?? { shows: 0, movies: 0 };
+      if (r.type === 'SHOW') e.shows = r.c;
+      else if (r.type === 'MOVIE') e.movies = r.c;
+      byList.set(r.listId, e);
+    }
     for (const l of rows) {
+      const c = byList.get(l.id) ?? { shows: 0, movies: 0 };
       map.set(l.id, {
         id: l.id,
         title: l.title,
         coverUrl: l.coverUrl ?? null,
-        showCount: l.items.filter((i) => i.media.type === 'SHOW').length,
-        movieCount: l.items.filter((i) => i.media.type === 'MOVIE').length,
+        showCount: c.shows,
+        movieCount: c.movies,
       });
     }
     return map;
@@ -433,13 +452,24 @@ export class CommentsService {
 
   private async authorCounts(userIds: string[]) {
     const map = new Map<string, any>();
-    for (const id of userIds) {
-      const [followersCount, followingCount, commentsCount] = await Promise.all([
-        this.prisma.follow.count({ where: { targetId: id } }),
-        this.prisma.follow.count({ where: { followerId: id } }),
-        this.prisma.comment.count({ where: { userId: id } }),
-      ]);
-      map.set(id, { _followersCount: followersCount, _followingCount: followingCount, _commentsCount: commentsCount });
+    const ids = [...new Set(userIds)];
+    if (ids.length === 0) return map;
+    // 3 GROUP BY queries for the whole author set — the old loop ran 3 COUNTs PER
+    // AUTHOR (up to ~60 queries for a 20-comment page).
+    const [followers, following, comments] = await Promise.all([
+      this.prisma.follow.groupBy({ by: ['targetId'], where: { targetId: { in: ids } }, _count: { _all: true } }),
+      this.prisma.follow.groupBy({ by: ['followerId'], where: { followerId: { in: ids } }, _count: { _all: true } }),
+      this.prisma.comment.groupBy({ by: ['userId'], where: { userId: { in: ids } }, _count: { _all: true } }),
+    ]);
+    const f1 = new Map(followers.map((r) => [r.targetId, r._count._all]));
+    const f2 = new Map(following.map((r) => [r.followerId, r._count._all]));
+    const c = new Map(comments.map((r) => [r.userId, r._count._all]));
+    for (const id of ids) {
+      map.set(id, {
+        _followersCount: f1.get(id) ?? 0,
+        _followingCount: f2.get(id) ?? 0,
+        _commentsCount: c.get(id) ?? 0,
+      });
     }
     return map;
   }

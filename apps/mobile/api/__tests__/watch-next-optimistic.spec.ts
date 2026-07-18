@@ -134,6 +134,37 @@ describe('applyWatchStateToItems', () => {
       expect(historyRows.map((i) => i.episode.id)).toEqual(['e1', 'h1']);
     });
 
+    it('moves a marked Start Watching card to the top of Watch Next (mirrors server bucketFor)', () => {
+      const items = [
+        item({ showId: 's1', episode: ep('e1'), nextEpisode: ep('e2'), remainingUnwatched: 2, bucket: WatchNextBucket.WATCH_NEXT }),
+        item({ showId: 's2', episode: ep('g1'), nextEpisode: ep('g2'), remainingUnwatched: 10, bucket: WatchNextBucket.START_WATCHING }),
+      ];
+      const out = applyWatchStateToItems(items, 'g1', true);
+
+      // History row first (no prior history), then the moved card at the top of Watch Next.
+      expect(out[0].bucket).toBe(WatchNextBucket.HISTORY);
+      expect(out[0].episode.id).toBe('g1');
+      expect(out[1].showId).toBe('s2');
+      expect(out[1].bucket).toBe(WatchNextBucket.WATCH_NEXT);
+      expect(out[1].episode.id).toBe('g2');
+      expect(out[1].remainingUnwatched).toBe(9);
+      // Existing Watch Next card is pushed down but untouched.
+      expect(out[2].showId).toBe('s1');
+      expect(out[2].bucket).toBe(WatchNextBucket.WATCH_NEXT);
+      expect(out[2].episode.id).toBe('e1');
+    });
+
+    it('moves a marked Not Recently card to Watch Next', () => {
+      const items = [
+        item({ showId: 's3', episode: ep('n1'), nextEpisode: ep('n2'), remainingUnwatched: 5, bucket: WatchNextBucket.NOT_RECENTLY }),
+      ];
+      const out = applyWatchStateToItems(items, 'n1', true);
+      const card = out.find((i) => i.bucket !== WatchNextBucket.HISTORY)!;
+      expect(card.bucket).toBe(WatchNextBucket.WATCH_NEXT);
+      expect(card.episode.id).toBe('n2');
+      expect(card.remainingUnwatched).toBe(4);
+    });
+
     it('leaves the array unchanged when the episode is not in the watch-next cache', () => {
       const items = [
         item({ showId: 's1', episode: ep('e1'), nextEpisode: ep('e2'), remainingUnwatched: 2 }),

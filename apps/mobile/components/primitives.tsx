@@ -141,10 +141,14 @@ export function PosterImage({
   uri,
   style,
   fallback,
+  transition = 150,
 }: {
   uri?: string | null;
   style?: ViewStyle;
   fallback?: number | { uri: string };
+  /** Fade-in duration ms. Pass 0 in dense lists/grids — one JS-driven crossfade per
+   *  cell (worst on web, where expo-image emulates transitions) causes scroll jank. */
+  transition?: number;
 }) {
   const { tokens } = useAppearance();
   const source = uri ? { uri } : fallback;
@@ -153,7 +157,8 @@ export function PosterImage({
       source={source as any}
       style={[{ backgroundColor: tokens.surfaceElevated }, style]}
       contentFit="cover"
-      transition={150}
+      transition={transition}
+      cachePolicy="memory-disk"
     />
   );
 }

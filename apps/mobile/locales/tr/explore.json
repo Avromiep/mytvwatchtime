@@ -8,5 +8,7 @@
   "topShowsForYou": "Senin İçin En İyi Diziler",
   "trendingShows": "Trend Diziler",
   "trendingMovies": "Trend Filmler",
-  "seeAll": "Tümünü gör"
+  "seeAll": "Tümünü gör",
+  "mediaTypeShow": "Dizi",
+  "mediaTypeMovie": "Film"
 }

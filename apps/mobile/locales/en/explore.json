@@ -8,5 +8,7 @@
   "topShowsForYou": "Top Shows For You",
   "trendingShows": "Trending Shows",
   "trendingMovies": "Trending Movies",
-  "seeAll": "See all"
+  "seeAll": "See all",
+  "mediaTypeShow": "TV show",
+  "mediaTypeMovie": "Movie"
 }

@@ -22,6 +22,7 @@ export class TrackingService {
     await Promise.all([
       this.redis.delByPattern(`watchnext:${userId}:*`),
       this.redis.delByPattern(`upcoming:${userId}:*`),
+      this.redis.delByPattern(`showsprogress:${userId}:*`),
       this.redis.del(`watchnext:${userId}`),
       this.redis.del(`upcoming:${userId}`),
     ]);

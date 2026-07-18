@@ -19,5 +19,6 @@
   "addedBy": "Adicionada por",
   "watchTrailer": "Assistir ao trailer",
   "cast": "Elenco",
-  "comments": "Comentários"
+  "comments": "Comentários",
+  "showMoreEpisodes": "Mostrar mais {{count}}"
 }

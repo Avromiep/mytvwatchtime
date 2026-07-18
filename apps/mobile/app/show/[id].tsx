@@ -3,6 +3,9 @@ import { ImageBackground, Linking, Pressable, RefreshControl, ScrollView, StyleS
 import { useLocalSearchParams, router, Link } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+
+/** Rows rendered when a season is first opened; the rest load via "show more". */
+const INITIAL_EPISODES = 20;
 import { Header } from '../../components/Header';
 import { BadgeGrid, Carousel } from '../../components/cards';
 import { RatingChart } from '../../components/RatingChart';
@@ -119,6 +122,10 @@ function EpisodesTab({ showId }: { showId: string }) {
   const { t } = useTranslation(['showDetail', 'common']);
   const { data: seasons, isLoading } = useShowEpisodes(showId);
   const [open, setOpen] = useState<string | null>(null);
+  // Seasons open with the first INITIAL_EPISODES rows only — soaps/anime with
+  // 100–200+ episode seasons rendered every row (with images) inside the page
+  // ScrollView otherwise. Expanded per season via the "show more" row.
+  const [expandedAll, setExpandedAll] = useState<Record<string, boolean>>({});
   const markEp = useMarkEpisodeWatched();
   const rewatchEp = useRewatchEpisode();
   const markSeason = useMarkSeasonWatched();
@@ -133,6 +140,8 @@ function EpisodesTab({ showId }: { showId: string }) {
         // Only count episodes that have AIRED (airDate exists and is in the past)
         const aired = s.episodes.filter((e: any) => e.airDate && new Date(e.airDate) <= now);
         const watched = aired.filter((e: any) => e.watched).length;
+        const shownEpisodes = expandedAll[s.id] ? s.episodes : s.episodes.slice(0, INITIAL_EPISODES);
+        const hiddenCount = s.episodes.length - shownEpisodes.length;
         return (
           <Card key={s.id} style={{ marginBottom: spacing.md, padding: 0, overflow: 'hidden' }}>
             <Pressable
@@ -166,38 +175,52 @@ function EpisodesTab({ showId }: { showId: string }) {
               <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={18} color={tokens.textMuted} style={{ marginLeft: spacing.sm }} />
             </Pressable>
             {isOpen
-              ? s.episodes.map((e: any) => {
-                  const isUpcoming = e.airDate && new Date(e.airDate) > new Date();
-                  return (
-                    <View key={e.id} style={{ flexDirection: 'row', alignItems: 'center', padding: spacing.sm, borderTopColor: tokens.border, borderTopWidth: 1, opacity: isUpcoming ? 0.4 : 1 }}>
-                      <Link href={`/episode/${e.id}` as any} asChild>
-                        <Pressable style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
-                          <PosterImage uri={e.stillUrl} style={{ width: 96, height: 54, borderRadius: radius.sm }} />
-                          <View style={{ flex: 1, marginLeft: spacing.sm }}>
-                            <T variant="caption" muted>S{String(s.number).padStart(2, '0')} E{String(e.number).padStart(2, '0')}{isUpcoming ? ` · ${t('showDetail:notAiredYet')}` : ''}</T>
-                            <T variant="body" numberOfLines={1}>{e.title}</T>
+              ? (
+                <>
+                  {shownEpisodes.map((e: any) => {
+                    const isUpcoming = e.airDate && new Date(e.airDate) > new Date();
+                    return (
+                      <View key={e.id} style={{ flexDirection: 'row', alignItems: 'center', padding: spacing.sm, borderTopColor: tokens.border, borderTopWidth: 1, opacity: isUpcoming ? 0.4 : 1 }}>
+                        <Link href={`/episode/${e.id}` as any} asChild>
+                          <Pressable style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
+                            <PosterImage uri={e.stillUrl} style={{ width: 96, height: 54, borderRadius: radius.sm }} />
+                            <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                              <T variant="caption" muted>S{String(s.number).padStart(2, '0')} E{String(e.number).padStart(2, '0')}{isUpcoming ? ` · ${t('showDetail:notAiredYet')}` : ''}</T>
+                              <T variant="body" numberOfLines={1}>{e.title}</T>
+                            </View>
+                          </Pressable>
+                        </Link>
+                        {isUpcoming ? null : (
+                          <View style={{ marginLeft: spacing.sm }}>
+                            <WatchButton
+                              watched={e.watched}
+                              watchCount={e.watchCount}
+                              onPress={() =>
+                                menu({
+                                  watched: e.watched,
+                                  onMarkWatched: () => markEp.mutate({ id: e.id, on: true }),
+                                  onRewatch: () => rewatchEp.mutate(e.id),
+                                  onUnwatch: () => markEp.mutate({ id: e.id, on: false }),
+                                })
+                              }
+                            />
                           </View>
-                        </Pressable>
-                      </Link>
-                      {isUpcoming ? null : (
-                        <View style={{ marginLeft: spacing.sm }}>
-                          <WatchButton
-                            watched={e.watched}
-                            watchCount={e.watchCount}
-                            onPress={() =>
-                              menu({
-                                watched: e.watched,
-                                onMarkWatched: () => markEp.mutate({ id: e.id, on: true }),
-                                onRewatch: () => rewatchEp.mutate(e.id),
-                                onUnwatch: () => markEp.mutate({ id: e.id, on: false }),
-                              })
-                            }
-                          />
-                        </View>
-                      )}
-                    </View>
-                  );
-                })
+                        )}
+                      </View>
+                    );
+                  })}
+                  {hiddenCount > 0 ? (
+                    <Pressable
+                      onPress={() => setExpandedAll((p) => ({ ...p, [s.id]: true }))}
+                      style={{ padding: spacing.md, borderTopColor: tokens.border, borderTopWidth: 1 }}
+                    >
+                      <T variant="caption" style={{ color: tokens.primary, textAlign: 'center' }}>
+                        {t('showDetail:showMoreEpisodes', { count: hiddenCount })}
+                      </T>
+                    </Pressable>
+                  ) : null}
+                </>
+              )
               : null}
           </Card>
         );

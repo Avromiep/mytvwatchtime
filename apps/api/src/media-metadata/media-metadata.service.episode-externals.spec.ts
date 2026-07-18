@@ -100,6 +100,7 @@ function fakePrisma() {
 }
 
 const fakeHydration = { enqueueClassifyCandidate: async () => undefined };
+const fakeRedis = { get: async () => null, set: async () => undefined, del: async () => undefined };
 
 describe('MediaMetadataService — episode external id persistence', () => {
   it('TVDB hydration stores THE_TVDB episode ids', async () => {
@@ -116,6 +117,7 @@ describe('MediaMetadataService — episode external id persistence', () => {
       {} as any,
       {} as any,
       fakeHydration as any,
+      fakeRedis as any,
     );
     await runInLanguage('en', () => svc.ensureShowFullTvdb(78857));
 
@@ -152,6 +154,7 @@ describe('MediaMetadataService — episode external id persistence', () => {
       {} as any,
       {} as any,
       fakeHydration as any,
+      fakeRedis as any,
     );
     await runInLanguage('en', () => svc.ensureShowFull(1399));
 

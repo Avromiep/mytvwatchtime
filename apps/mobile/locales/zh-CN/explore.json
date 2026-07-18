@@ -8,5 +8,7 @@
   "topShowsForYou": "为你推荐的剧集",
   "trendingShows": "热门剧集",
   "trendingMovies": "热门电影",
-  "seeAll": "查看全部"
+  "seeAll": "查看全部",
+  "mediaTypeShow": "剧集",
+  "mediaTypeMovie": "电影"
 }

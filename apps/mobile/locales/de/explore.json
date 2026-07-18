@@ -8,5 +8,7 @@
   "topShowsForYou": "Top-Serien für dich",
   "trendingShows": "Angesagte Serien",
   "trendingMovies": "Angesagte Filme",
-  "seeAll": "Alle anzeigen"
+  "seeAll": "Alle anzeigen",
+  "mediaTypeShow": "Serie",
+  "mediaTypeMovie": "Film"
 }

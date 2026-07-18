@@ -41,8 +41,10 @@ function optimisticLabel(ep: EpisodeDto | undefined | null): EpisodeLabel | unde
  *
  * `on === true` (mark watched):
  *  - the matched item moves to History (latest entry → bottom of the History section),
- *  - its Watch-Next card is swapped in place to `nextEpisode` with `remainingUnwatched - 1`,
- *  - if there is no `nextEpisode` (last unwatched episode) the Watch-Next card is removed.
+ *  - its card is swapped to `nextEpisode` with `remainingUnwatched - 1` — in place when
+ *    it was already in Watch Next, or moved to the top of Watch Next when it came from
+ *    Start Watching / Haven't-watched-in-a-while (mirrors the server's bucketFor()),
+ *  - if there is no `nextEpisode` (last unwatched episode) the card is removed.
  *
  * `on === false` (unwatch):
  *  - the matched History item is removed,
@@ -84,18 +86,35 @@ function applyMarkWatched(items: WatchNextItemDto[], episodeId: string): WatchNe
 
   let withoutIt: WatchNextItemDto[];
   if (it.nextEpisode) {
-    // Swap the card in place to the following episode and mirror the server's label for it
+    // Swap the card to the following episode and mirror the server's label for it
     // (FINALE / AIRED) so the chip is already correct when the ~1s reconcile lands.
     const newRemaining = Math.max(0, (it.remainingUnwatched ?? 1) - 1);
+    // Server bucketFor(): a show with watched episodes + a next unwatched episode
+    // always belongs in WATCH_NEXT. Cards marked from START_WATCHING (first episode)
+    // or NOT_RECENTLY (stale) therefore move sections — not just swap episodes.
+    const movesToWatchNext = it.bucket !== WatchNextBucket.WATCH_NEXT;
     const replacement: WatchNextItemDto = {
       ...it,
+      bucket: movesToWatchNext ? WatchNextBucket.WATCH_NEXT : it.bucket,
       episode: { ...it.nextEpisode, watched: false },
       nextEpisode: null,
       remainingUnwatched: newRemaining,
       label: optimisticLabel(it.nextEpisode),
+      lastWatchedAt: now,
     };
-    withoutIt = items.slice();
-    withoutIt[idx] = replacement;
+    if (!movesToWatchNext) {
+      // Already in Watch Next: swap in place (cards don't jump while batch-marking).
+      withoutIt = items.slice();
+      withoutIt[idx] = replacement;
+    } else {
+      // Move to the top of Watch Next (server sorts it by lastWatchedAt desc).
+      const rest = items.filter((_, i) => i !== idx);
+      const firstWnIdx = rest.findIndex((x) => x.bucket === WatchNextBucket.WATCH_NEXT);
+      withoutIt =
+        firstWnIdx === -1
+          ? [...rest, replacement]
+          : [...rest.slice(0, firstWnIdx), replacement, ...rest.slice(firstWnIdx)];
+    }
   } else {
     // Last unwatched episode → the show is finished; drop the Watch-Next card.
     withoutIt = items.filter((x) => x.episode?.id !== episodeId);

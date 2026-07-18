@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { EmailService } from '../common/email.service';
 
 @Injectable()
@@ -12,6 +13,7 @@ export class DataDeletionService {
     private readonly prisma: PrismaService,
     private readonly email: EmailService,
     private readonly config: ConfigService,
+    private readonly redis: RedisService,
   ) {}
 
   async requestDeletion(email: string): Promise<{ sent: boolean; link?: string }> {
@@ -70,6 +72,7 @@ export class DataDeletionService {
 
     // Delete all user data — Prisma cascades to all related records
     await this.prisma.user.delete({ where: { id: req.userId } });
+    await this.redis.del(`auth:user:${req.userId}`); // evict the JWT existence cache
 
     await this.prisma.deletionRequest.update({ where: { id: req.id }, data: { usedAt: new Date() } });
 

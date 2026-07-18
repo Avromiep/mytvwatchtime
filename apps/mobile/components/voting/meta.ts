@@ -54,14 +54,15 @@ export function sectionPercents(section: VoteSectionDto): Map<string, number> {
 
 /**
  * Map option value -> whole-number percent for the multi-select reaction section.
- * Each reaction is rounded independently (a user may hold several, so percents
- * are "% of reactors" and need not sum to 100).
+ * Percentages are each reaction's share of ALL reaction picks (Σ counts), so the
+ * displayed set sums to exactly 100 (largest-remainder rounding). Normalizing by
+ * distinct reactors instead let many options each show 50–100% at once, since a
+ * user may hold several reactions.
  */
 export function reactionPercents(section: ReactionVoteSectionDto): Map<string, number> {
-  const { total } = section;
-  return new Map(
-    section.options.map((o) => [o.value, total > 0 ? Math.round((o.count * 100) / total) : 0]),
-  );
+  const totalPicks = section.options.reduce((acc, o) => acc + o.count, 0);
+  const computed = computePercentages(section.options, totalPicks);
+  return new Map(computed.map((o) => [o.value, o.percent]));
 }
 
 type TFunc = (key: string, opts?: Record<string, unknown>) => string;

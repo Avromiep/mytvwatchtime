@@ -1,11 +1,15 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { mapCurrentUser, mapPublicUser, dtoThemeToDb, dtoLangToDb } from '../common/utils/mapper.util';
 import { DeviceRegisterDto, UpdateProfileDto } from './dto/user.dto';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+  ) {}
 
   async getMe(userId: string) {
     const user = await this.prisma.user.findUnique({
@@ -83,6 +87,7 @@ export class UsersService {
 
   async deleteMe(userId: string) {
     await this.prisma.user.delete({ where: { id: userId } });
+    await this.redis.del(`auth:user:${userId}`); // evict the JWT existence cache
     return { ok: true };
   }
 

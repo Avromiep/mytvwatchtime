@@ -72,6 +72,25 @@ export class ShowsService {
     return result;
   }
 
+  /**
+   * Ordered ids of the episodes in the same season — powers the episode pager without
+   * downloading the show's entire season/episode structure (hundreds of KB for
+   * long-running shows) just to compute sibling ids.
+   */
+  async getEpisodeSiblings(episodeId: string) {
+    const episode = await this.prisma.episode.findUnique({
+      where: { id: episodeId },
+      select: { seasonId: true },
+    });
+    if (!episode) throw new NotFoundException('Episode not found');
+    const siblings = await this.prisma.episode.findMany({
+      where: { seasonId: episode.seasonId },
+      select: { id: true },
+      orderBy: { number: 'asc' },
+    });
+    return { seasonId: episode.seasonId, episodeIds: siblings.map((s) => s.id) };
+  }
+
   async getEpisodeDetail(episodeId: string, userId?: string) {
     const episode = await this.prisma.episode.findUnique({
       where: { id: episodeId },
@@ -99,11 +118,31 @@ export class ShowsService {
     });
     if (!episode) return null;
     const media = episode.season.show.media;
+    // Kick off the locale-independent lookups immediately (they don't touch the
+    // locale-override tables), overlap them with the locale ensures, then re-read
+    // the fresh localized JSON — two waves instead of six sequential ones.
+    const userStatusP = userId
+      ? this.prisma.userEpisodeStatus.findUnique({
+          where: { userId_episodeId: { userId, episodeId } },
+        })
+      : Promise.resolve(null);
+    const commentsCountP = this.prisma.comment.count({ where: { threadType: 'EPISODE', threadId: episodeId } });
+    const voteGroupsP = this.prisma.characterVote.groupBy({
+      by: ['castId'],
+      where: { episodeId },
+      _count: { _all: true },
+    });
+    const charVoteP = userId
+      ? this.prisma.characterVote.findUnique({ where: { userId_episodeId: { userId, episodeId } } })
+      : Promise.resolve(null);
+
     // Populate locale overrides for the show + this episode (title/overview/still),
     // then read fresh localized JSON so the episode detail shows in the request language.
-    await this.meta.ensureListLocaleOverrides([media.id]);
-    await this.meta.ensureEpisodeLocaleOverrides([episodeId]);
-    const [freshEp, freshMedia] = await Promise.all([
+    await Promise.all([
+      this.meta.ensureListLocaleOverrides([media.id]),
+      this.meta.ensureEpisodeLocaleOverrides([episodeId]),
+    ]);
+    const [freshEp, freshMedia, userStatus, commentsCount, voteGroups, charVote] = await Promise.all([
       this.prisma.episode.findUnique({
         where: { id: episodeId },
         select: { titles: true, overviews: true, stillUrls: true },
@@ -112,24 +151,17 @@ export class ShowsService {
         where: { id: media.id },
         select: { titles: true, posterUrls: true, backdropUrls: true },
       }),
+      userStatusP,
+      commentsCountP,
+      voteGroupsP,
+      charVoteP,
     ]);
     const epLocalized = freshEp
       ? ({ ...episode, titles: freshEp.titles, overviews: freshEp.overviews, stillUrls: freshEp.stillUrls } as any)
       : (episode as any);
     const mediaLoc = (freshMedia ?? {}) as any;
-    const userStatus = userId
-      ? await this.prisma.userEpisodeStatus.findUnique({
-          where: { userId_episodeId: { userId, episodeId } },
-        })
-      : null;
-    const commentsCount = await this.prisma.comment.count({ where: { threadType: 'EPISODE', threadId: episodeId } });
 
     // Aggregate favorite-character votes keyed by the stable MediaCast credit id.
-    const voteGroups = await this.prisma.characterVote.groupBy({
-      by: ['castId'],
-      where: { episodeId },
-      _count: { _all: true },
-    });
     const voteMap = new Map<string, number>();
     let charTotal = 0;
     for (const g of voteGroups) {
@@ -150,12 +182,8 @@ export class ShowsService {
       }))
       .sort((a: any, b: any) => b.votes - a.votes || a.order - b.order);
 
-    const charVote = userId
-      ? await this.prisma.characterVote.findUnique({ where: { userId_episodeId: { userId, episodeId } } })
-      : null;
-
     const [deviceSection, ratingSection, reactionSection] = await Promise.all([
-      this.getDeviceSection(episodeId, userId),
+      this.getDeviceSection(episodeId, userId, userStatus),
       this.getRatingSection(episodeId, userId),
       this.getReactionSection(episodeId, userId),
     ]);
@@ -212,9 +240,14 @@ export class ShowsService {
     return { userVote: safeUserVote, total, options };
   }
 
-  private async getDeviceSection(episodeId: string, userId?: string) {
+  private async getDeviceSection(episodeId: string, userId?: string, preloadedStatus?: any) {
+    // preloadedStatus avoids re-fetching the same userEpisodeStatus row when the
+    // caller (episode detail) already loaded it. Explicit undefined check: a
+    // preloaded null IS the answer (user has no status row), not a cache miss.
     const status = userId
-      ? await this.prisma.userEpisodeStatus.findUnique({ where: { userId_episodeId: { userId, episodeId } } })
+      ? preloadedStatus !== undefined
+        ? preloadedStatus
+        : await this.prisma.userEpisodeStatus.findUnique({ where: { userId_episodeId: { userId, episodeId } } })
       : null;
     const groups = await this.prisma.userEpisodeStatus.groupBy({
       by: ['device'],

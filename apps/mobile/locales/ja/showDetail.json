@@ -19,5 +19,6 @@
   "addedBy": "追加したユーザー",
   "watchTrailer": "予告編を見る",
   "cast": "キャスト",
-  "comments": "コメント"
+  "comments": "コメント",
+  "showMoreEpisodes": "さらに{{count}}件表示"
 }
