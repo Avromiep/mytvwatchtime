@@ -229,21 +229,29 @@ export class DiscoveryService {
 
   private async recommendedForYou(userId: string) {
     // Score genres: watch history counts double, favorites +1 each.
+    // Aggregates in SQL — the old findMany pulled every mediaGenre row for the
+    // user's entire history/favorites (thousands of rows) on every Discover open.
+    // EXISTS keeps the old semantics: each mediaGenre row counts once per media,
+    // regardless of how many history rows that media has.
     const [histGenres, favGenres] = await Promise.all([
-      this.prisma.mediaGenre.findMany({
-        where: { media: { watchHistory: { some: { userId } } } },
-        select: { genre: { select: { name: true } } },
-      }),
-      this.prisma.mediaGenre.findMany({
-        where: { media: { favorites: { some: { userId } } } },
-        select: { genre: { select: { name: true } } },
-      }),
+      this.prisma.$queryRaw<{ name: string; c: number }[]>`
+        SELECT g.name, COUNT(*)::int AS c
+        FROM media_genres mg
+        JOIN genres g ON g.id = mg.genre_id
+        WHERE EXISTS (SELECT 1 FROM watch_history wh WHERE wh.media_id = mg.media_id AND wh.user_id = ${userId})
+        GROUP BY g.name
+      `,
+      this.prisma.$queryRaw<{ name: string; c: number }[]>`
+        SELECT g.name, COUNT(*)::int AS c
+        FROM media_genres mg
+        JOIN genres g ON g.id = mg.genre_id
+        WHERE EXISTS (SELECT 1 FROM favorites f WHERE f.media_id = mg.media_id AND f.user_id = ${userId})
+        GROUP BY g.name
+      `,
     ]);
     const scores = new Map<string, number>();
-    const add = (rows: { genre: { name: string } }[], weight: number) =>
-      rows.forEach((g) => scores.set(g.genre.name, (scores.get(g.genre.name) ?? 0) + weight));
-    add(histGenres as any, 2);
-    add(favGenres as any, 1);
+    for (const r of histGenres) scores.set(r.name, (scores.get(r.name) ?? 0) + 2 * r.c);
+    for (const r of favGenres) scores.set(r.name, (scores.get(r.name) ?? 0) + r.c);
     const genreNames = [...scores.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)

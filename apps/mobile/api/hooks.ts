@@ -357,12 +357,14 @@ export const useMarkEpisodeWatched = () => {
       ctx?.prevShowEpisodes?.forEach(([key, data]: [any, any]) => qc.setQueryData(key, data));
       if (ctx?.prevEpisode) qc.setQueryData(qk.episode(vars.id), ctx.prevEpisode);
     },
-    onSettled: () => {
+    onSettled: (_d, _e, vars) => {
       // Invalidate all relevant queries so every consumer updates
       qc.invalidateQueries({ queryKey: ['watchNext'] });
       // Stats are NOT invalidated per-mark: the backend marks them stale and the client polls via
       // refetchInterval while the SWR `stale` flag is true. (See useStatsSummary.)
-      qc.invalidateQueries({ queryKey: ['episode'] });
+      // Exact episode key only — a bare ['episode'] prefix refetches every mounted
+      // episode query (up to 5 in the episode pager) on every tap.
+      qc.invalidateQueries({ queryKey: qk.episode(vars.id) });
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['show'] });
     },
@@ -854,8 +856,9 @@ export const useLeaderboard = (type: LeaderboardType, page: number, pageSize = 1
     queryFn: () =>
       api.get<LeaderboardPageDto>(`/me/stats/leaderboard?type=${type}&page=${page}&pageSize=${pageSize}`),
     placeholderData: keepPreviousData,
-    // Pick up the trailing leaderboard cache bust after watch activity without requiring focus.
-    refetchInterval: 60_000,
+    // No refetchInterval: tab screens stay mounted, so a timer would poll every minute
+    // for the rest of the session. The component refetches on focus instead (covers the
+    // trailing leaderboard cache bust after watch activity).
   });
 
 /** Prefetch the next page (if any) so arrow/swipe navigation is instant. */

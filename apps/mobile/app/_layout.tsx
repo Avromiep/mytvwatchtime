@@ -20,7 +20,10 @@ if (Platform.OS !== 'web') {
 }
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
+  // refetchOnWindowFocus stays on for native (app-foreground refresh) but off on web:
+  // every browser alt-tab refocus would otherwise storm all mounted queries
+  // (watchNext, 4× 500-item lists, stats, …) at once.
+  defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: Platform.OS !== 'web' } },
 });
 
 function Gate() {

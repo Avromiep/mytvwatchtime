@@ -138,7 +138,7 @@ export function Carousel({ title, action, onAction, data, kind, width = 120 }: {
 }
 
 // ---------------- Episode card (watch list row) ----------------
-export function EpisodeCard({
+function EpisodeCardImpl({
   item,
   onMarkWatched,
   onRewatch,
@@ -233,6 +233,13 @@ export function EpisodeCard({
     </Swipeable>
   );
 }
+
+// Memoized: watch-next lists render hundreds of these inside a ScrollView, and every
+// mark-watched tap re-renders the parent (isPending flip + optimistic cache swap).
+// React Query's structural sharing (and the optimistic transforms) keep `item`
+// identity stable for unchanged rows, and the callbacks only close over stable
+// mutation fns — so comparing item identity alone safely skips untouched cards.
+export const EpisodeCard = React.memo(EpisodeCardImpl, (prev, next) => prev.item === next.item);
 
 // ---------------- Stats card ----------------
 export function StatsCard({ title, big, subtitle, children, style }: { title?: string; big?: string; subtitle?: string; children?: React.ReactNode; style?: ViewStyle }) {

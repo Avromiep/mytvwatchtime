@@ -125,13 +125,19 @@ export class BadgeService implements OnModuleInit {
   }
 
   private async biggestMarathon(userId: string): Promise<number> {
-    const rows = await this.prisma.watchHistory.findMany({ where: { userId, mediaType: MediaType.SHOW }, select: { watchedAt: true } });
-    const byDay = new Map<string, number>();
-    for (const r of rows) {
-      const key = new Date(r.watchedAt).toISOString().slice(0, 10);
-      byDay.set(key, (byDay.get(key) || 0) + 1);
-    }
-    return Math.max(0, ...byDay.values());
+    // One aggregate query — the previous findMany pulled the user's ENTIRE show
+    // history (all watched_at values) into Node on every watch/comment/follow event.
+    // watched_at is written in UTC, so DATE() buckets match the old
+    // toISOString().slice(0,10) grouping. ('SHOW' literal = MediaType.SHOW enum.)
+    const rows = await this.prisma.$queryRaw<{ c: number }[]>`
+      SELECT COUNT(*)::int AS c
+      FROM watch_history
+      WHERE user_id = ${userId} AND media_type = 'SHOW'
+      GROUP BY DATE(watched_at)
+      ORDER BY c DESC
+      LIMIT 1
+    `;
+    return rows[0]?.c ?? 0;
   }
 
   async listAll() {

@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Prisma } from '@prisma/client';
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -161,21 +162,90 @@ export class TrackingService {
       include: { episodes: true, show: true },
     });
     if (!season) throw new NotFoundException('Season not found');
-    for (const ep of season.episodes) {
-      await this.markEpisodeWatched(userId, ep.id, {});
+    const mediaId = season.show.mediaId;
+    const now = new Date();
+    const episodeIds = season.episodes.map((e) => e.id);
+
+    // Batched: the old per-episode markEpisodeWatched loop cost ~8 queries + a badge
+    // evaluation + 2 Redis keyspace scans PER EPISODE on a single tap.
+    const existing = await this.prisma.userEpisodeStatus.findMany({
+      where: { userId, episodeId: { in: episodeIds } },
+      select: { episodeId: true, watched: true },
+    });
+    const existingById = new Map(existing.map((s) => [s.episodeId, s]));
+    // Mirrors markEpisodeWatched's upsert: create missing rows, flip unwatched ones;
+    // already-watched rows stay untouched (watchedAt keeps the FIRST watch date).
+    const toCreate = season.episodes.filter((e) => !existingById.has(e.id));
+    const toMark = season.episodes.filter((e) => existingById.get(e.id)?.watched === false);
+    const newlyWatched = [...toCreate, ...toMark];
+
+    if (newlyWatched.length) {
+      const ops: Prisma.PrismaPromise<any>[] = [
+        this.prisma.watchHistory.createMany({
+          data: newlyWatched.map((e) => ({
+            userId,
+            mediaId,
+            mediaType: MediaType.SHOW,
+            episodeId: e.id,
+            seasonNumber: season.number,
+            episodeNumber: e.number,
+            runtimeMinutes: e.runtimeMinutes,
+            watchedAt: now,
+          })),
+        }),
+      ];
+      if (toCreate.length) {
+        ops.unshift(
+          this.prisma.userEpisodeStatus.createMany({
+            data: toCreate.map((e) => ({ userId, episodeId: e.id, watched: true, watchedAt: now, watchCount: 1 })),
+          }),
+        );
+      }
+      if (toMark.length) {
+        ops.unshift(
+          this.prisma.userEpisodeStatus.updateMany({
+            where: { userId, episodeId: { in: toMark.map((e) => e.id) }, watched: false },
+            data: { watched: true, watchedAt: now, watchCount: 1 },
+          }),
+        );
+      }
+      await this.prisma.$transaction(ops);
+      await this.bumpShowCount(userId, mediaId, newlyWatched.length, now);
+      // One event for the whole season: badge evaluation and stats invalidation are
+      // user-level + idempotent, and the leaderboard bust is debounced — the old loop
+      // re-fired all three per episode.
+      this.events.emit('watch.episode', { userId, mediaId });
     }
+    await this.invalidateUserCache(userId);
     return { watched: true, count: season.episodes.length };
   }
 
   async unmarkSeasonWatched(userId: string, seasonId: string) {
     const season = await this.prisma.season.findUnique({
       where: { id: seasonId },
-      include: { episodes: true },
+      include: { episodes: true, show: true },
     });
     if (!season) throw new NotFoundException('Season not found');
-    for (const ep of season.episodes) {
-      await this.unmarkEpisodeWatched(userId, ep.id);
+    const mediaId = season.show.mediaId;
+    const episodeIds = season.episodes.map((e) => e.id);
+
+    const watched = await this.prisma.userEpisodeStatus.findMany({
+      where: { userId, episodeId: { in: episodeIds }, watched: true },
+      select: { episodeId: true },
+    });
+    if (watched.length) {
+      const ids = watched.map((w) => w.episodeId);
+      await this.prisma.$transaction([
+        this.prisma.userEpisodeStatus.updateMany({
+          where: { userId, episodeId: { in: ids } },
+          data: { watched: false, watchedAt: null, watchCount: 0 },
+        }),
+        this.prisma.watchHistory.deleteMany({ where: { userId, episodeId: { in: ids } } }),
+      ]);
+      await this.bumpShowCount(userId, mediaId, -ids.length);
+      this.events.emit('unwatch.episode', { userId, mediaId });
     }
+    await this.invalidateUserCache(userId);
     return { watched: false, count: season.episodes.length };
   }
 
