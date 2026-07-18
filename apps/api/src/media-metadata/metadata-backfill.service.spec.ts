@@ -385,10 +385,9 @@ describe('MetadataBackfillService', () => {
 
       const res = await service.repairTypeMismatches();
 
-      // Stray-kind id detached → correct show created from TVDB → watch data remapped.
+      // Stray-kind id detached globally → correct show created from TVDB → watch data remapped.
       expect(prisma.externalId.deleteMany).toHaveBeenCalledWith({
         where: {
-          mediaId: 'movie-1',
           provider: ExternalProvider.THE_TVDB,
           providerEntityKind: 'SERIES',
           value: '280103',

@@ -575,10 +575,11 @@ export class MetadataBackfillService {
       return true;
     }
 
-    // 1. Detach the stray-kind external id (re-attached on failure so a retry can resolve it again).
+    // 1. Detach the stray-kind external id GLOBALLY (it may be parked on any row — the
+    // recreated entity must be able to claim it). Re-attached to this row on failure so a
+    // retry can resolve the cross-type entity again.
     const detached = await this.prisma.externalId.deleteMany({
       where: {
-        mediaId,
         provider: strayExt.provider,
         providerEntityKind: strayExt.providerEntityKind,
         value: strayExt.value,

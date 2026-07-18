@@ -187,4 +187,21 @@ describe('MediaMetadataService — cross-type protections', () => {
     expect(calls.genreUpsert[0].where.slug).toBe('animation');
     expect(calls.genreUpsert[0].create.name).toBe('Animation');
   });
+
+  it('attaches externals via conflict-safe upserts, never a nested create (no P2002 aborts)', async () => {
+    const { tx, calls } = fakeTx();
+    const findFirst = jest.fn(async () => null);
+    const svc = makeService(tx, findFirst);
+    await runInLanguage('en', () => svc.ensureShowFullTvdb(280103));
+
+    // The create carries no nested externalIds…
+    expect(calls.mediaItemCreate).toHaveLength(1);
+    expect(calls.mediaItemCreate[0].data.externalIds).toBeUndefined();
+    // …and every external attaches through the upsert loop (conflict → no-op, not abort).
+    expect(calls.externalIdUpsert.length).toBeGreaterThan(0);
+    for (const u of calls.externalIdUpsert) {
+      expect(u.where.provider_providerEntityKind_value.providerEntityKind).toBe('SERIES');
+      expect(u.update).toEqual({});
+    }
+  });
 });

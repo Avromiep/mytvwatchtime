@@ -739,13 +739,8 @@ export class MediaMetadataService {
           data: {
             ...mediaData,
             type: MediaType.SHOW,
-            externalIds: {
-              create: data.externals.map((e) => ({
-                provider: e.provider,
-                providerEntityKind: ProviderEntityKind.SERIES,
-                value: e.value,
-              })),
-            },
+            // Externals attach via the conflict-safe upsert loop below — a parked id on
+            // another row must never abort the whole hydration with a P2002.
           },
         });
         mediaId = created.id;
@@ -859,16 +854,19 @@ export class MediaMetadataService {
           data: {
             ...mediaData,
             type: MediaType.MOVIE,
-            externalIds: {
-              create: data.externals.map((e) => ({
-                provider: e.provider,
-                providerEntityKind: ProviderEntityKind.MOVIE,
-                value: e.value,
-              })),
-            },
+            // Externals attach via the conflict-safe upsert loop below (same as persistShow).
           },
         });
         mediaId = created.id;
+      }
+
+      // Upsert externals (conflict-safe: a parked id on another row is left in place).
+      for (const e of data.externals) {
+        await tx.externalId.upsert({
+          where: { provider_providerEntityKind_value: { provider: e.provider, providerEntityKind: ProviderEntityKind.MOVIE, value: e.value } },
+          create: { mediaId: mediaId!, provider: e.provider, providerEntityKind: ProviderEntityKind.MOVIE, value: e.value },
+          update: {},
+        });
       }
 
       await tx.movie.upsert({
