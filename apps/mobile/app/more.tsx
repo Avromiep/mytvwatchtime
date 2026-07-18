@@ -3,7 +3,7 @@ import { ActivityIndicator, Dimensions, FlatList, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { MediaType } from '@tvwatch/shared';
 import { Header } from '../components/Header';
-import { PosterCard } from '../components/cards';
+import { PosterCard, cardProgress } from '../components/cards';
 import { EmptyState, Screen, Spinner } from '../components/primitives';
 import { useDiscoverSections, useAllFavorites, useAllWatchlist } from '../api/hooks';
 import { useQuery } from '@tanstack/react-query';
@@ -146,7 +146,7 @@ export default function MoreScreen() {
                     kind={kind}
                     title={item.title}
                     poster={item.posterUrl ?? item.images?.poster}
-                    progress={item.userProgress}
+                    progress={cardProgress(item)}
                     width={cardW}
                     style={{ marginRight: spacing.md }}
                   />

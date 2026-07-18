@@ -506,6 +506,8 @@ model Show {
   episodesCount Int          @default(0) @map("episodes_count")
   inProduction  Boolean      @default(false) @map("in_production")
   originalLanguage String?   @map("original_language")
+  // Original-language title (e.g. Japanese for anime) — displayed in show details only.
+  originalTitle  String?     @map("original_title")
   originCountries  String[]  @map("origin_countries")
   totalRuntimeMinutes Int?   @map("total_runtime_minutes")
 
@@ -1178,6 +1180,8 @@ model Import {
   status           ImportStatus   @default(UPLOADED)
   totalFiles       Int            @default(0) @map("total_files")
   totalRows        Int            @default(0) @map("total_rows")
+  // 0-100 processing progress, updated at stage transitions + per batch/section.
+  progress         Int            @default(0)
   matchedCount     Int            @default(0) @map("matched_count")
   unmatchedCount   Int            @default(0) @map("unmatched_count")
   duplicateCount   Int            @default(0) @map("duplicate_count")

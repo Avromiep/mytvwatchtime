@@ -51,5 +51,6 @@
     "needsReview": "需要审核",
     "unmatched": "未匹配",
     "duplicates": "重复项"
-  }
+  },
+  "progressPercent": "{{pct}}%"
 }

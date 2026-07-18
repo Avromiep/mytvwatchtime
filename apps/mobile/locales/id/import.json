@@ -51,5 +51,6 @@
     "needsReview": "Perlu ditinjau",
     "unmatched": "Tidak cocok",
     "duplicates": "Duplikat"
-  }
+  },
+  "progressPercent": "{{pct}}%"
 }

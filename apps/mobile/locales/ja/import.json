@@ -51,5 +51,6 @@
     "needsReview": "要確認",
     "unmatched": "不一致",
     "duplicates": "重複"
-  }
+  },
+  "progressPercent": "{{pct}}%"
 }

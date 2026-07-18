@@ -51,5 +51,6 @@
     "needsReview": "À vérifier",
     "unmatched": "Non associés",
     "duplicates": "Doublons"
-  }
+  },
+  "progressPercent": "{{pct}} %"
 }

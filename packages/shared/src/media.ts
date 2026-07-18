@@ -109,6 +109,9 @@ export interface ShowDto {
   id: string;
   type: MediaType.SHOW;
   title: string;
+  /** Original-language title — only populated for anime when it differs from the
+   *  displayed (user-locale) title and the user isn't in that original language. */
+  originalTitle?: string | null;
   overview?: string | null;
   images: ImageSet;
   yearStart?: number | null;

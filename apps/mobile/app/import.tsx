@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { MediaType } from '@tvwatch/shared';
 import { Header } from '../components/Header';
-import { Button, Card, Chip, EmptyState, PosterImage, Screen, Spinner, T } from '../components/primitives';
+import { Button, Card, Chip, EmptyState, PosterImage, ProgressBar, Screen, Spinner, T } from '../components/primitives';
 import {
   useCancelImport,
   useConfirmImport,
@@ -131,12 +131,19 @@ export default function ImportScreen() {
   }
 
   if (isProcessing) {
+    const pct = Math.min(100, Math.max(0, Math.round(importQ.data?.progress ?? 0)));
     return (
       <Screen>
         <Header title={t('import:title')} showBack />
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl }}>
           <Spinner />
           <T variant="h2" style={{ marginTop: spacing.lg }}>{STATUS_LABEL[status] ?? t('import:processing')}</T>
+          <View style={{ alignSelf: 'stretch', marginTop: spacing.lg }}>
+            <ProgressBar value={pct / 100} />
+            <T variant="caption" muted style={{ marginTop: spacing.xs, textAlign: 'center' }}>
+              {t('import:progressPercent', { pct })}
+            </T>
+          </View>
           <T variant="caption" muted style={{ marginTop: spacing.sm, textAlign: 'center' }}>
             {t('import:matchingDesc')}
           </T>

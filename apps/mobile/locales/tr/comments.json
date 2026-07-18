@@ -60,5 +60,9 @@
   "collapseThread": "Başlığı daralt",
   "expandThread": "Başlığı genişlet",
   "replyingTo": "@{{username}} yanıtlanıyor",
-  "cancelReply": "Yanıtı iptal et"
+  "cancelReply": "Yanıtı iptal et",
+  "timeJustNow": "şimdi",
+  "timeMinutesAgo": "{{count}} dk önce",
+  "timeHoursAgo": "{{count}} sa önce",
+  "timeDaysAgo": "{{count}} g önce"
 }

@@ -45,5 +45,14 @@
   "privacyUpdateFailed": "Die Privatsphäre-Einstellung konnte nicht aktualisiert werden. Bitte versuche es erneut.",
   "permissionNeeded": "Berechtigung erforderlich",
   "allowPhotoAccess": "Bitte erlaube den Zugriff auf Fotos",
-  "uploadFailed": "Upload fehlgeschlagen"
+  "uploadFailed": "Upload fehlgeschlagen",
+  "toast": {
+    "saved": "Gespeichert",
+    "privacyUpdated": "Privatsphäre aktualisiert",
+    "avatarUpdated": "Avatar aktualisiert",
+    "coverUpdated": "Titelbild aktualisiert",
+    "themeUpdated": "Design aktualisiert",
+    "languageUpdated": "Sprache aktualisiert",
+    "backendUpdated": "Backend-URL gespeichert. Wird neu geladen…"
+  }
 }

@@ -17,7 +17,8 @@ import { SUPPORTED_LOCALES, type LanguagePreference, type ThemePreference } from
 import { useMe, useUpdateProfile, useUploadAvatar, useUploadCover } from '../api/hooks';
 import { api, setBaseUrl, SITE_URL } from '../api/client';
 import { radius, spacing } from '../theme/theme';
-import { showError, showSuccess, showConfirm } from '../lib/dialog';
+import { showError, showConfirm } from '../lib/dialog';
+import { showToast } from '../lib/toast';
 
 const API_BASE = (Constants.expoConfig?.extra as any)?.apiBaseUrl || 'http://localhost:4000/api';
 
@@ -55,12 +56,19 @@ export default function SettingsScreen() {
     }
   }, [me, isSelfHosted]);
 
-  const save = () => update.mutate({ username, displayName, bio, avatarUrl, coverUrl });
+  const save = () =>
+    update.mutate(
+      { username, displayName, bio, avatarUrl, coverUrl },
+      { onSuccess: () => showToast(t('settings:toast.saved')) },
+    );
 
   const togglePrivate = (next: boolean) =>
     update.mutate(
       { isPrivate: next },
-      { onError: () => showError({ description: t('settings:privacyUpdateFailed') }) },
+      {
+        onSuccess: () => showToast(t('settings:toast.privacyUpdated')),
+        onError: () => showError({ description: t('settings:privacyUpdateFailed') }),
+      },
     );
 
   const pickImage = async (type: 'avatar' | 'cover') => {
@@ -84,9 +92,11 @@ export default function SettingsScreen() {
       if (type === 'avatar') {
         const res = await uploadAvatar.mutateAsync(manip.uri);
         setAvatarUrl(`${res.url}?t=${Date.now()}`);
+        showToast(t('settings:toast.avatarUpdated'));
       } else {
         const res = await uploadCover.mutateAsync(manip.uri);
         setCoverUrl(`${res.url}?t=${Date.now()}`);
+        showToast(t('settings:toast.coverUpdated'));
       }
     } catch (e: any) {
       showError({ title: t('settings:uploadFailed'), description: e?.message ?? t('common:tryAgain') });
@@ -160,17 +170,17 @@ export default function SettingsScreen() {
         <Card>
           <SectionHeader title={t('settings:appearance.title')} />
           <T variant="caption" muted style={{ marginBottom: spacing.sm }}>{t('settings:appearance.description')}</T>
-          <OptionRow label={t('settings:appearance.system')} selected={themePreference === 'system'} onPress={() => setThemePreference('system')} icon="phone-portrait-outline" />
-          <OptionRow label={t('settings:appearance.light')} selected={themePreference === 'light'} onPress={() => setThemePreference('light')} icon="sunny-outline" />
-          <OptionRow label={t('settings:appearance.dark')} selected={themePreference === 'dark'} onPress={() => setThemePreference('dark')} icon="moon-outline" />
+          <OptionRow label={t('settings:appearance.system')} selected={themePreference === 'system'} onPress={() => { setThemePreference('system'); showToast(t('settings:toast.themeUpdated')); }} icon="phone-portrait-outline" />
+          <OptionRow label={t('settings:appearance.light')} selected={themePreference === 'light'} onPress={() => { setThemePreference('light'); showToast(t('settings:toast.themeUpdated')); }} icon="sunny-outline" />
+          <OptionRow label={t('settings:appearance.dark')} selected={themePreference === 'dark'} onPress={() => { setThemePreference('dark'); showToast(t('settings:toast.themeUpdated')); }} icon="moon-outline" />
         </Card>
 
         <Card>
           <SectionHeader title={t('settings:language.title')} />
           <T variant="caption" muted style={{ marginBottom: spacing.sm }}>{t('settings:language.description')}</T>
-          <OptionRow label={t('settings:language.system')} selected={languagePreference === 'system'} onPress={() => setLanguagePreference('system')} icon="language-outline" />
+          <OptionRow label={t('settings:language.system')} selected={languagePreference === 'system'} onPress={() => { setLanguagePreference('system'); showToast(t('settings:toast.languageUpdated')); }} icon="language-outline" />
           {SUPPORTED_LOCALES.map((l) => (
-            <OptionRow key={l.code} label={l.nativeName} selected={languagePreference === l.code} onPress={() => setLanguagePreference(l.code as LanguagePreference)} />
+            <OptionRow key={l.code} label={l.nativeName} selected={languagePreference === l.code} onPress={() => { setLanguagePreference(l.code as LanguagePreference); showToast(t('settings:toast.languageUpdated')); }} />
           ))}
           {resolvedLocale === 'ar' ? (
             <T variant="micro" muted style={{ marginTop: spacing.xs }}>{t('settings:language.rtlRestartNotice')}</T>
@@ -184,7 +194,7 @@ export default function SettingsScreen() {
               <TextField label={t('settings:backendUrl')} value={backendUrl} onChangeText={setBackendUrl} autoCapitalize="none" keyboardType="url" />
               <Button title={t('settings:updateBackend')} variant="ghost" icon="server-outline" onPress={async () => {
                 await setBaseUrl(backendUrl);
-                showSuccess({ title: t('settings:backendUpdated'), description: t('settings:backendSavedReloading') });
+                showToast(t('settings:toast.backendUpdated'));
                 setTimeout(() => { logout(); }, 1500);
               }} style={{ marginTop: spacing.sm }} />
             </View>

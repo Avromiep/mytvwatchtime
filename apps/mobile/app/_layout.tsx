@@ -13,6 +13,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import { PreferencesProvider, useAppearance } from '../context/PreferencesProvider';
 import { DialogProvider } from '../components/DialogProvider';
+import { ToastHost } from '../components/ToastHost';
 import { useNotificationNavigation } from '../hooks/useNotificationNavigation';
 
 if (Platform.OS !== 'web') {
@@ -111,6 +112,7 @@ export default function RootLayout() {
             <PreferencesProvider>
               <DialogProvider>
                 <RootShell />
+                <ToastHost />
               </DialogProvider>
             </PreferencesProvider>
           </AuthProvider>

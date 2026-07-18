@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import { useEffect, useMemo } from 'react';
+import { Platform } from 'react-native';
 import {
   useInfiniteQuery,
   useMutation,
@@ -938,13 +939,23 @@ async function uriToBlob(uri: string): Promise<Blob> {
   return res.blob();
 }
 
+// Native FormData/XHR can't send Blobs ("Creating blobs from 'ArrayBuffer'…"),
+// so native sends the { uri, name, type } file descriptor; web needs a real Blob.
+function appendImageFile(fd: FormData, uri: string, name: string): Promise<void> | void {
+  if (Platform.OS === 'web') {
+    return uriToBlob(uri).then((blob) => {
+      fd.append('file', blob, name);
+    });
+  }
+  fd.append('file', { uri, name, type: 'image/jpeg' } as any);
+}
+
 export const useUploadAvatar = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (uri: string) => {
-      const blob = await uriToBlob(uri);
       const fd = new FormData();
-      fd.append('file', blob, 'avatar.jpg');
+      await appendImageFile(fd, uri, 'avatar.jpg');
       return api.post<{ url: string }>('/me/avatar', fd);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['me'] }),
@@ -955,9 +966,8 @@ export const useUploadCover = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (uri: string) => {
-      const blob = await uriToBlob(uri);
       const fd = new FormData();
-      fd.append('file', blob, 'cover.jpg');
+      await appendImageFile(fd, uri, 'cover.jpg');
       return api.post<{ url: string }>('/me/cover', fd);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['me'] }),

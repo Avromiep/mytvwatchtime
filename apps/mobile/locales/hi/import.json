@@ -51,5 +51,6 @@
     "needsReview": "समीक्षा आवश्यक",
     "unmatched": "मिलान नहीं हुआ",
     "duplicates": "डुप्लिकेट"
-  }
+  },
+  "progressPercent": "{{pct}}%"
 }

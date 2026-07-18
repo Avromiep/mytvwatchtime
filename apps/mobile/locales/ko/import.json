@@ -51,5 +51,6 @@
     "needsReview": "검토 필요",
     "unmatched": "매칭 안 됨",
     "duplicates": "중복"
-  }
+  },
+  "progressPercent": "{{pct}}%"
 }

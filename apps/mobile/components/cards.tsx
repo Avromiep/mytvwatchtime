@@ -115,6 +115,13 @@ export function PosterGrid({ data, kind, emptyTitle, emptyCta, minCardWidth = 11
   );
 }
 
+// Progress bars are only meaningful for shows the user tracks: in mixed lists
+// (explore/trending/related) an untouched show would otherwise render an empty bar.
+export function cardProgress(item: any): number | undefined {
+  if (item.inWatchlist || item.favorite || (item.userProgress ?? 0) > 0) return item.userProgress;
+  return undefined;
+}
+
 // ---------------- Horizontal carousel ----------------
 export function Carousel({ title, action, onAction, data, kind, width = 120 }: { title: string; action?: string; onAction?: () => void; data: any[]; kind: 'shows' | 'movies'; width?: number }) {
   if (!data || data.length === 0) return null;
@@ -130,7 +137,7 @@ export function Carousel({ title, action, onAction, data, kind, width = 120 }: {
         contentContainerStyle={{ paddingHorizontal: spacing.lg }}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <PosterCard id={item.id} kind={kind} title={item.title} poster={item.images?.poster ?? item.posterUrl} progress={item.userProgress} width={width} />
+          <PosterCard id={item.id} kind={kind} title={item.title} poster={item.images?.poster ?? item.posterUrl} progress={cardProgress(item)} width={width} />
         )}
       />
     </View>
@@ -159,8 +166,26 @@ function EpisodeCardImpl({
 
   const cardContent = (
     <View style={[styles.epCard, { backgroundColor: tokens.surface }]}>
-      {/* Foreground navigation wraps the still + text. A Pressable claims taps over its
-          children, so tapping the image/title/network all navigate to the episode. */}
+      {/* Header: show title (tap → show page) + network. Sibling of the nav
+          pressable below so it keeps its own action; the still stays clear. */}
+      <View style={styles.epHeader}>
+        <Pressable
+          onPress={() => router.push(`/show/${item.showId}` as any)}
+          hitSlop={6}
+          style={{ flex: 1, minWidth: 0 }}
+        >
+          <T variant="caption" numberOfLines={1} style={{ fontWeight: '700', color: tokens.primary }}>
+            {item.showTitle}
+          </T>
+        </Pressable>
+        {item.network ? (
+          <T variant="micro" muted style={{ marginLeft: spacing.sm }}>
+            {item.network}
+          </T>
+        ) : null}
+      </View>
+
+      {/* Body: tapping the still or episode info navigates to the episode. */}
       <Pressable
         onPress={() => router.push(`/episode/${item.episode.id}` as any)}
         style={{ flex: 1, flexDirection: 'row' }}
@@ -168,41 +193,25 @@ function EpisodeCardImpl({
         <View style={styles.epStillWrap}>
           <PosterImage uri={item.episode.stillUrl ?? item.backdropUrl} style={styles.epStill} transition={0} />
         </View>
-        <View style={{ flex: 1, marginLeft: spacing.md, justifyContent: 'space-between' }}>
-          <View>
-            <View style={[styles.row, { alignItems: 'center' }]}>
-              <T variant="caption" muted>
-                S{String(item.episode.seasonNumber).padStart(2, '0')} | E{String(item.episode.number).padStart(2, '0')}
-              </T>
-              {item.label ? <View style={{ marginLeft: spacing.sm }}><StatusChip label={item.label} /></View> : null}
-              {item.remainingUnwatched > 1 ? (
-                <T variant="caption" style={{ marginLeft: 'auto', color: tokens.primary }}>
-                  +{item.remainingUnwatched - 1}
-                </T>
-              ) : null}
-            </View>
-            <T variant="h2" numberOfLines={2} style={{ marginTop: 2 }}>
-              {item.episode.title}
-            </T>
-          </View>
+        <View style={{ flex: 1, marginLeft: spacing.md }}>
           <View style={[styles.row, { alignItems: 'center' }]}>
             <T variant="caption" muted>
-              {item.network ?? ''}
+              S{String(item.episode.seasonNumber).padStart(2, '0')} | E{String(item.episode.number).padStart(2, '0')}
             </T>
+            {item.label ? <View style={{ marginLeft: spacing.sm }}><StatusChip label={item.label} /></View> : null}
+            {item.remainingUnwatched > 1 ? (
+              <T variant="caption" style={{ marginLeft: 'auto', color: tokens.primary }}>
+                +{item.remainingUnwatched - 1}
+              </T>
+            ) : null}
           </View>
+          <T variant="h2" numberOfLines={2} style={{ marginTop: 2 }}>
+            {item.episode.title}
+          </T>
         </View>
       </Pressable>
 
-      {/* Overlays: siblings (not nested in the nav pressable) so they do their own action. */}
-      <Pressable
-        onPress={() => router.push(`/show/${item.showId}` as any)}
-        hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
-        style={[styles.epPill, { top: spacing.sm + 6, left: spacing.sm + 6, backgroundColor: tokens.primary }]}
-      >
-        <T variant="caption" numberOfLines={1} style={{ color: tokens.primaryForeground, fontWeight: '700' }}>
-          {item.showTitle}
-        </T>
-      </Pressable>
+      {/* Watch button: absolute sibling so it does its own action. */}
       <View style={styles.epWatchBtn}>
         <WatchButton watched={watched} watchCount={item.episode.watchCount} onPress={handleWatch} />
       </View>
@@ -423,11 +432,11 @@ export function timeAgo(iso: string): string {
 
 const styles = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: spacing.lg },
-  epCard: { position: 'relative', flexDirection: 'row', borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
+  epCard: { position: 'relative', borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
+  epHeader: { height: 20, flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xs },
   swipeAction: { justifyContent: 'center', alignItems: 'center', width: 90, marginRight: spacing.sm, marginBottom: spacing.sm, borderRadius: radius.md },
   epStillWrap: { width: 130, height: 74, borderRadius: radius.sm, overflow: 'hidden', position: 'relative' },
   epStill: { width: '100%', height: '100%' },
-  epPill: { position: 'absolute', top: 6, left: 6, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, maxWidth: 116 },
   epWatchBtn: { position: 'absolute', right: spacing.sm, bottom: spacing.sm },
   upCard: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
   row: { flexDirection: 'row' },

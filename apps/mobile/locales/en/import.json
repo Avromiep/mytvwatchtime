@@ -80,5 +80,6 @@
     "needsReview": "Needs review",
     "unmatched": "Unmatched",
     "duplicates": "Duplicates"
-  }
+  },
+  "progressPercent": "{{pct}}%"
 }

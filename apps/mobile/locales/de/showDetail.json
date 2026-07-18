@@ -20,5 +20,6 @@
   "watchTrailer": "Trailer ansehen",
   "cast": "Besetzung",
   "comments": "Kommentare",
-  "showMoreEpisodes": "{{count}} weitere anzeigen"
+  "showMoreEpisodes": "{{count}} weitere anzeigen",
+  "originalTitle": "Originaltitel"
 }

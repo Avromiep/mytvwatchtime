@@ -257,6 +257,7 @@ function AboutTab({ show, id }: { show: any; id: string }) {
 
       <Card>
         <SectionHeader title={t('showDetail:showInfo')} />
+        {show.originalTitle ? <InfoRow label={t('showDetail:originalTitle')} value={show.originalTitle} /> : null}
         <InfoRow label={t('showDetail:years')} value={`${show.yearStart ?? '—'}${show.yearEnd ? `–${show.yearEnd}` : ''}`} />
         <InfoRow label={t('showDetail:status')} value={show.status} />
         <InfoRow label={t('showDetail:genres')} value={show.genres?.map((g: any) => g.name).join(', ')} />

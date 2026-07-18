@@ -60,5 +60,9 @@
   "collapseThread": "Ciutkan thread",
   "expandThread": "Luaskan thread",
   "replyingTo": "Membalas @{{username}}",
-  "cancelReply": "Batalkan balasan"
+  "cancelReply": "Batalkan balasan",
+  "timeJustNow": "sekarang",
+  "timeMinutesAgo": "{{count}} mnt lalu",
+  "timeHoursAgo": "{{count}} j lalu",
+  "timeDaysAgo": "{{count}} h lalu"
 }

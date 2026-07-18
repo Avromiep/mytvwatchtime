@@ -232,7 +232,7 @@ export class ImportService {
     if (imp.status !== 'READY_FOR_REVIEW') {
       throw new BadRequestException(`Import is not ready for review (status=${imp.status})`);
     }
-    await this.prisma.import.update({ where: { id: importId }, data: { status: 'IMPORTING' } });
+    await this.prisma.import.update({ where: { id: importId }, data: { status: 'IMPORTING', progress: 0 } });
 
     // Load only not-yet-applied matched items. Each section marks its items APPLIED inside its
     // own transaction, so a retry (BullMQ or manual re-confirm) only reprocesses leftover items
@@ -255,7 +255,7 @@ export class ImportService {
       skipped = res.skipped;
       await this.prisma.import.update({
         where: { id: importId },
-        data: { status: 'COMPLETED', completedAt: new Date() },
+        data: { status: 'COMPLETED', completedAt: new Date(), progress: 100 },
       });
       await this.rebuildShowStatuses(userId, items);
       this.events.emit('import.applied', { userId });
@@ -319,6 +319,16 @@ export class ImportService {
   ): Promise<{ created: number; skipped: number }> {
     let created = 0;
     let skipped = 0;
+
+    // Apply progress: 8 fixed sections run sequentially below; bump after each one.
+    let sectionsDone = 0;
+    const SECTIONS_TOTAL = 8;
+    const sectionDone = async () => {
+      sectionsDone++;
+      await this.prisma.import
+        .update({ where: { id: importId }, data: { progress: Math.round((sectionsDone / SECTIONS_TOTAL) * 100) } })
+        .catch(() => undefined);
+    };
 
     const epItems = items.filter(
       (it) => it.sourceEntityType === 'WATCHED_EPISODE' && it.matchedMediaId && it.matchedEpisodeId,
@@ -443,6 +453,7 @@ export class ImportService {
       }
       created += sectionCreated + sectionBumped;
     }
+    await sectionDone();
 
     // --- WATCHED MOVIES ---
     if (movieItems.length) {
@@ -498,6 +509,7 @@ export class ImportService {
       }
       created += sectionCreated;
     }
+    await sectionDone();
 
     // --- WATCHLIST ---
     if (watchlistItems.length) {
@@ -534,6 +546,7 @@ export class ImportService {
       }
       created += sectionCreated;
     }
+    await sectionDone();
 
     // --- FAVORITES ---
     if (favoriteItems.length) {
@@ -570,20 +583,25 @@ export class ImportService {
       }
       created += sectionCreated;
     }
+    await sectionDone();
 
     // --- LISTS (imported lists: TV Time lists-prod-lists.csv / Trakt lists-lists.json) ---
     created += await this.applyLists(userId, importId, items, source);
+    await sectionDone();
 
     // --- RATINGS / EMOTIONS / COMMENTS ---
     const r = await this.applyRatings(userId, importId, items, source);
     created += r.created;
     skipped += r.skipped;
+    await sectionDone();
     const e = await this.applyEmotions(userId, importId, items, source);
     created += e.created;
     skipped += e.skipped;
+    await sectionDone();
     const c = await this.applyComments(userId, importId, items, source);
     created += c.created;
     skipped += c.skipped;
+    await sectionDone();
 
     return { created, skipped };
   }

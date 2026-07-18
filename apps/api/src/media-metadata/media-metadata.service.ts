@@ -766,6 +766,7 @@ export class MediaMetadataService {
           episodesCount: data.episodesCount,
           inProduction: data.inProduction,
           originalLanguage: data.originalLanguage ?? null,
+          originalTitle: data.originalTitle ?? null,
           originCountries: data.originCountries ?? [],
         },
         update: {
@@ -779,6 +780,7 @@ export class MediaMetadataService {
           inProduction: data.inProduction,
           // Only TMDB supplies origin evidence — preserve existing values on TVDB refreshes.
           ...(data.originalLanguage !== undefined ? { originalLanguage: data.originalLanguage } : {}),
+          ...(data.originalTitle !== undefined ? { originalTitle: data.originalTitle } : {}),
           ...(data.originCountries !== undefined ? { originCountries: data.originCountries } : {}),
         },
       });
@@ -908,6 +910,21 @@ export class MediaMetadataService {
     });
     if (!media || !media.show) throw new NotFoundException('Show not found');
     const dto = mapShow(media as any, userId);
+    // "Original title" is a details-page-only extra, and only for ANIME whose original
+    // language isn't the user's (e.g. a Japanese title for an English user). Anything
+    // else keeps the field empty so non-anime originals never clutter the page.
+    const isAnime = (media.genres ?? []).some((g: any) => g.genre?.slug === 'animation');
+    const originalLanguage = media.show.originalLanguage;
+    const userBaseLang = currentLanguage().split('-')[0];
+    if (
+      !isAnime ||
+      !originalLanguage ||
+      originalLanguage === userBaseLang ||
+      !dto.originalTitle ||
+      dto.originalTitle === dto.title
+    ) {
+      dto.originalTitle = null;
+    }
     const seasons = (media.show.seasons || [])
       .filter((s) => !s.isSpecial)
       .map((s) => mapSeason(s as any, userId));

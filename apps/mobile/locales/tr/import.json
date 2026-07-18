@@ -51,5 +51,6 @@
     "needsReview": "İnceleme gerekli",
     "unmatched": "Eşleşmeyen",
     "duplicates": "Yinelenenler"
-  }
+  },
+  "progressPercent": "%{{pct}}"
 }

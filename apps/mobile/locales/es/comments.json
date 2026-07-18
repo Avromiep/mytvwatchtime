@@ -60,5 +60,9 @@
   "collapseThread": "Contraer hilo",
   "expandThread": "Expandir hilo",
   "replyingTo": "Respondiendo a @{{username}}",
-  "cancelReply": "Cancelar respuesta"
+  "cancelReply": "Cancelar respuesta",
+  "timeJustNow": "ahora",
+  "timeMinutesAgo": "hace {{count}} min",
+  "timeHoursAgo": "hace {{count}} h",
+  "timeDaysAgo": "hace {{count}} d"
 }

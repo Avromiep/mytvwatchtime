@@ -20,5 +20,6 @@
   "watchTrailer": "Voir la bande-annonce",
   "cast": "Distribution",
   "comments": "Commentaires",
-  "showMoreEpisodes": "Afficher {{count}} de plus"
+  "showMoreEpisodes": "Afficher {{count}} de plus",
+  "originalTitle": "Titre original"
 }

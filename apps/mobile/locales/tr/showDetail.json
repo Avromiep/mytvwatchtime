@@ -20,5 +20,6 @@
   "watchTrailer": "Fragmanı izle",
   "cast": "Oyuncular",
   "comments": "Yorumlar",
-  "showMoreEpisodes": "{{count}} tane daha göster"
+  "showMoreEpisodes": "{{count}} tane daha göster",
+  "originalTitle": "Orijinal başlık"
 }

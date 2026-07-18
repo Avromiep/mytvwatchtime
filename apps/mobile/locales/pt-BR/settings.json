@@ -45,5 +45,14 @@
   "privacyUpdateFailed": "Não foi possível atualizar a privacidade. Tente novamente.",
   "permissionNeeded": "Permissão necessária",
   "allowPhotoAccess": "Permita o acesso às fotos",
-  "uploadFailed": "Falha no envio"
+  "uploadFailed": "Falha no envio",
+  "toast": {
+    "saved": "Salvo",
+    "privacyUpdated": "Privacidade atualizada",
+    "avatarUpdated": "Avatar atualizado",
+    "coverUpdated": "Capa atualizada",
+    "themeUpdated": "Tema atualizado",
+    "languageUpdated": "Idioma atualizado",
+    "backendUpdated": "URL do backend salva. Recarregando…"
+  }
 }

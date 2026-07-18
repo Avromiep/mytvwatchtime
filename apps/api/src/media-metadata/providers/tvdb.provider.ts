@@ -98,6 +98,8 @@ interface TvdbSeriesExtended {
   artworks?: TvdbArtwork[];
   characters?: TvdbCharacter[];
   genres?: TvdbGenre[];
+  /** Present when fetched with meta=translations. */
+  translations?: TvdbTranslationBlock;
 }
 
 interface TvdbGenre {
@@ -229,11 +231,43 @@ export class TvdbProvider {
   }
 
   async getShow(tvdbId: number, language?: string): Promise<NormalizedShow> {
-    const res = await this.client.get<{ data: TvdbSeriesExtended }>(`/series/${tvdbId}/extended`, {}, language);
+    // meta=translations: without it the only title available is `s.name`, which is
+    // ALWAYS the original-language name on TVDB (e.g. Japanese for anime) regardless
+    // of the requested language — that leaked into the base title of anime shows.
+    const res = await this.client.get<{ data: TvdbSeriesExtended }>(
+      `/series/${tvdbId}/extended`,
+      { meta: 'translations' },
+      language,
+    );
     const s = res.data;
 
     const poster = s.artworks?.find((a) => a.type === 1);
     const backdrop = s.artworks?.find((a) => a.type === 2);
+
+    // Pick the title/overview for the request locale from the translations block,
+    // falling back to English, then to the original-language name (same logic as
+    // the movie path). `s.name` (original title) is kept separately.
+    const tr = s.translations;
+    const allTitles: Record<string, string> = {};
+    const allOverviews: Record<string, string> = {};
+    if (tr?.nameTranslations) {
+      for (const nt of tr.nameTranslations) {
+        const appLocale = TVDB_TO_APP[nt.language] ?? 'en';
+        if (!allTitles[appLocale]) allTitles[appLocale] = nt.name;
+      }
+    }
+    if (tr?.overviewTranslations) {
+      for (const ot of tr.overviewTranslations) {
+        const appLocale = TVDB_TO_APP[ot.language] ?? 'en';
+        if (!allOverviews[appLocale]) allOverviews[appLocale] = ot.overview;
+      }
+    }
+    const requestLocale = TVDB_TO_APP[tvdbLang3(language)] ?? 'en';
+    const localizedTitle = allTitles[requestLocale] ?? allTitles['en'] ?? null;
+    const localizedOverview = allOverviews[requestLocale] ?? allOverviews['en'] ?? null;
+    // The primary translation marks the series' original language (e.g. jpn → ja) —
+    // needed for the anime "Original title" display rule on TVDB-hydrated shows.
+    const primaryTvdbLang = tr?.nameTranslations?.find((nt) => nt.isPrimary)?.language;
 
     // TVDB `/series/{id}/extended` does NOT embed episodes per season. Fetch the series'
     // full episode list (aired/default order) and group by seasonNumber. This is best-effort
@@ -277,8 +311,11 @@ export class TvdbProvider {
       type: MediaType.SHOW,
       tmdbId: 0,
       tvdbId,
-      title: s.name || 'Untitled',
-      overview: s.overview || null,
+      title: localizedTitle ?? (s.name || 'Untitled'),
+      // Original-language series name (TVDB's `name` is always original-language).
+      originalTitle: s.name ?? null,
+      originalLanguage: primaryTvdbLang ? (TVDB_TO_APP[primaryTvdbLang] ?? null) : undefined,
+      overview: localizedOverview ?? (s.overview || null),
       posterUrl: this.client.artwork(poster?.image),
       backdropUrl: this.client.artwork(backdrop?.image),
       status: tvdbStatusMap(s.status?.name),

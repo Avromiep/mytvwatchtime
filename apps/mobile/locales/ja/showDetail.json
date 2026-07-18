@@ -20,5 +20,6 @@
   "watchTrailer": "予告編を見る",
   "cast": "キャスト",
   "comments": "コメント",
-  "showMoreEpisodes": "さらに{{count}}件表示"
+  "showMoreEpisodes": "さらに{{count}}件表示",
+  "originalTitle": "原題"
 }

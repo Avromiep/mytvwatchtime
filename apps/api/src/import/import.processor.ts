@@ -91,9 +91,21 @@ export class ImportProcessor implements OnModuleInit {
     await this.prisma.import.update({ where: { id: importId }, data: { status, ...extra } });
   }
 
+  // Monotonic 0-99 progress per import (100 is set by the terminal stage writes). The guard
+  // skips DB writes unless the rounded percent advances, so loops can call this per item.
+  private lastProgress = new Map<string, number>();
+
+  private async reportProgress(importId: string, pct: number) {
+    const p = Math.min(99, Math.round(pct));
+    if (p <= (this.lastProgress.get(importId) ?? 0)) return;
+    this.lastProgress.set(importId, p);
+    await this.prisma.import.update({ where: { id: importId }, data: { progress: p } }).catch(() => undefined);
+  }
+
   async run(importId: string) {
     const imp = await this.prisma.import.findUnique({ where: { id: importId } });
     if (!imp || imp.status === 'CANCELLED') return;
+    this.lastProgress.delete(importId);
     const locale = (imp.locale as SupportedLocale) || 'en';
     // Wrap the entire import in the user's language so all matching + hydration use it.
     return runInLanguage(locale, () => this.runBody(importId, imp));
@@ -101,7 +113,7 @@ export class ImportProcessor implements OnModuleInit {
 
   private async runBody(importId: string, imp: any) {
     try {
-      await this.setStatus(importId, 'EXTRACTING');
+      await this.setStatus(importId, 'EXTRACTING', { progress: 5 });
       const bytes = await this.storage.read(imp.storageKey!);
 
       // Trakt JSON export? Detect on zip entry names (or the standalone .json filename) BEFORE
@@ -117,7 +129,7 @@ export class ImportProcessor implements OnModuleInit {
       if (tvTimeJsonEntries) return await this.runTvTimeJsonBody(importId, tvTimeJsonEntries);
 
       const files = this.extractAndParse(imp.sourceType, imp.originalFilename ?? 'upload', bytes);
-      await this.setStatus(importId, 'PARSING', { totalFiles: files.length });
+      await this.setStatus(importId, 'PARSING', { totalFiles: files.length, progress: 10 });
 
       // Per-file normalize → flat item list + ImportFile rows
       const allItems: NormalizedItem[] = [];
@@ -151,7 +163,7 @@ export class ImportProcessor implements OnModuleInit {
       const fileInputs = files.map((f) => ({ filename: f.filename, rows: f.rows }));
       const archiveLang = resolveArchiveLanguage(fileInputs);
 
-      await this.setStatus(importId, 'NORMALIZING', { totalRows });
+      await this.setStatus(importId, 'NORMALIZING', { totalRows, progress: 25 });
       // Dedupe by entity|normTitle|season|episode (keep one). The same episode can
       // appear in seen_episode_source (single watch) AND rewatched_episode (total
       // count via cpt); keep the authoritative higher watchCount and the latest
@@ -174,7 +186,7 @@ export class ImportProcessor implements OnModuleInit {
         dedup.push({ ...it, watchCount: it.watchCount ?? 1 });
       }
 
-      await this.setStatus(importId, 'MATCHING');
+      await this.setStatus(importId, 'MATCHING', { progress: 30 });
       // Season/episode footprint per show in the import — used to disambiguate duplicate titles
       // (e.g. two shows named "Silo"): the candidate must have enough seasons AND enough episodes
       // in each referenced season (import watched S1 up to E10 → S1 must have ≥10 episodes).
@@ -211,7 +223,9 @@ export class ImportProcessor implements OnModuleInit {
       }
       const showMediaByNorm = new Map<string, string>();
       const structureGuarded = new Set<string>();
+      let hydrateIdx = 0;
       for (const it of dedup) {
+        await this.reportProgress(importId, 30 + (20 * hydrateIdx++) / Math.max(1, dedup.length));
         if (it.entityType !== 'WATCHED_EPISODE') continue;
         if (showMediaByNorm.has(it.normTitle)) continue;
         const seMap = seasonEpisodesByNorm.get(it.normTitle);
@@ -257,7 +271,9 @@ export class ImportProcessor implements OnModuleInit {
         batch.length = 0;
       };
 
+      let matchIdx = 0;
       for (const it of dedup) {
+        await this.reportProgress(importId, 50 + (35 * matchIdx++) / Math.max(1, dedup.length));
         if (!it.title) {
           invalid++;
           continue;
@@ -387,10 +403,12 @@ export class ImportProcessor implements OnModuleInit {
 
       // ---- Ratings / Emotions / Comments pass ----
       const extraCounts = await this.stageExtraEntities(importId, files, showMediaByNorm, archiveLang);
+      await this.reportProgress(importId, 95);
 
       await this.setStatus(importId, 'READY_FOR_REVIEW', {
         totalFiles: files.length,
         totalRows,
+        progress: 100,
         matchedCount: matched,
         unmatchedCount: unmatched,
         duplicateCount: duplicates,
@@ -456,7 +474,7 @@ export class ImportProcessor implements OnModuleInit {
   private async runTraktBody(importId: string, entries: ZipEntry[]) {
     try {
       await this.prisma.import.update({ where: { id: importId }, data: { format: 'trakt' } });
-      await this.setStatus(importId, 'PARSING', { totalFiles: entries.length });
+      await this.setStatus(importId, 'PARSING', { totalFiles: entries.length, progress: 10 });
 
       // ---- PARSING: JSON.parse each supported file; classify per Trakt filename conventions.
       const parsed: { filename: string; kind: TraktFileKind; data: unknown; size: number; failed: boolean }[] = [];
@@ -491,7 +509,7 @@ export class ImportProcessor implements OnModuleInit {
       }
 
       // ---- NORMALIZING ----
-      await this.setStatus(importId, 'NORMALIZING', { totalRows });
+      await this.setStatus(importId, 'NORMALIZING', { totalRows, progress: 25 });
       const ok = parsed.filter((f) => !f.failed);
       const dataOf = (kind: TraktFileKind) => ok.filter((f) => f.kind === kind).map((f) => f.data);
       const archiveLang = resolveTraktArchiveLanguage(ok.find((f) => f.kind === 'user_settings')?.data);
@@ -530,7 +548,7 @@ export class ImportProcessor implements OnModuleInit {
       }
 
       // ---- MATCHING ----
-      await this.setStatus(importId, 'MATCHING');
+      await this.setStatus(importId, 'MATCHING', { progress: 30 });
       // Distinct shows keyed by strongest external id — one provider lookup per unique show.
       const showKey = (ids: TraktIds, title: string) =>
         ids.tmdb ? `tmdb:${ids.tmdb}` : ids.tvdb ? `tvdb:${ids.tvdb}` : `norm:${normTitle(title)}`;
@@ -573,7 +591,9 @@ export class ImportProcessor implements OnModuleInit {
       };
 
       // ---- Watched episodes ----
+      let epIdx = 0;
       for (const c of watched.episodes) {
+        await this.reportProgress(importId, 30 + (25 * epIdx++) / Math.max(1, watched.episodes.length));
         const { mediaId } = await matchShowIds(c.showIds, c.showTitle, c.year, true);
         let episodeId: string | null = null;
         let confidence = 0;
@@ -649,24 +669,32 @@ export class ImportProcessor implements OnModuleInit {
           confidenceScore: m.confidence,
         });
       };
+      const mediaStageTotal = Math.max(1, watched.movies.length + watchlist.length + favorites.length);
+      let mediaStageIdx = 0;
       for (const c of watched.movies) {
+        await this.reportProgress(importId, 55 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem('WATCHED_MOVIE', c.movieIds, c.movieTitle, c.year, c.watchedAt, c.watchCount);
       }
       for (const c of watchlist) {
+        await this.reportProgress(importId, 55 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem(c.type === 'movie' ? 'WATCHLIST_MOVIE' : 'WATCHLIST_SHOW', c.ids, c.title, c.year, c.listedAt, 1);
       }
       for (const c of favorites) {
+        await this.reportProgress(importId, 55 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem(c.type === 'movie' ? 'FAVORITE_MOVIE' : 'FAVORITE_SHOW', c.ids, c.title, c.year, c.listedAt, 1);
       }
       await flush();
 
       // ---- Custom lists (lists-lists.json) → LIST + LIST_ITEM items (same shapes as CSV) ----
       const listBatch: any[] = [];
+      const listItemTotal = Math.max(1, lists.reduce((n, l) => n + l.items.length, 0));
+      let listItemIdx = 0;
       for (const list of lists) {
         let resolved = 0;
         let unresolved = 0;
         const itemRows: any[] = [];
         for (const it of list.items) {
+          await this.reportProgress(importId, 70 + (10 * listItemIdx++) / listItemTotal);
           const m = await this.matcher.matchByExternalIds(
             it.ids,
             it.mediaType === 'movie' ? 'MOVIE' : 'SHOW',
@@ -754,7 +782,9 @@ export class ImportProcessor implements OnModuleInit {
 
       let ratingsUnresolved = 0;
       const ratingItems: any[] = [];
+      let ratingIdx = 0;
       for (const c of ratingsRes.candidates) {
+        await this.reportProgress(importId, 80 + (10 * ratingIdx++) / Math.max(1, ratingsRes.candidates.length));
         const r = await resolveTarget(
           {
             targetType: c.rating.targetType,
@@ -775,7 +805,9 @@ export class ImportProcessor implements OnModuleInit {
 
       let commentsUnresolved = 0;
       const commentItems: any[] = [];
+      let commentIdx = 0;
       for (const c of commentsRes.candidates) {
+        await this.reportProgress(importId, 90 + (5 * commentIdx++) / Math.max(1, commentsRes.candidates.length));
         const r = await resolveTarget(
           {
             targetType: c.comment.targetType,
@@ -798,6 +830,7 @@ export class ImportProcessor implements OnModuleInit {
       await this.setStatus(importId, 'READY_FOR_REVIEW', {
         totalFiles: parsed.length,
         totalRows,
+        progress: 100,
         matchedCount: matched,
         unmatchedCount: unmatched,
         duplicateCount: 0,
@@ -846,7 +879,7 @@ export class ImportProcessor implements OnModuleInit {
    */
   private async runTvTimeJsonBody(importId: string, entries: ZipEntry[]) {
     try {
-      await this.setStatus(importId, 'PARSING', { totalFiles: entries.length });
+      await this.setStatus(importId, 'PARSING', { totalFiles: entries.length, progress: 10 });
 
       // ---- PARSING: JSON.parse each supported file; parseCsv for activity_history.csv.
       const parsed: { filename: string; kind: TvTimeJsonFileKind; data: unknown; csvRows: Record<string, string>[] | null; size: number; failed: boolean }[] = [];
@@ -882,7 +915,7 @@ export class ImportProcessor implements OnModuleInit {
       }
 
       // ---- NORMALIZING ----
-      await this.setStatus(importId, 'NORMALIZING', { totalRows });
+      await this.setStatus(importId, 'NORMALIZING', { totalRows, progress: 25 });
       const ok = parsed.filter((f) => !f.failed);
       const dataOf = (kind: TvTimeJsonFileKind) => ok.filter((f) => f.kind === kind).map((f) => f.data);
 
@@ -916,7 +949,7 @@ export class ImportProcessor implements OnModuleInit {
       }
 
       // ---- MATCHING ----
-      await this.setStatus(importId, 'MATCHING');
+      await this.setStatus(importId, 'MATCHING', { progress: 30 });
       // Distinct shows keyed by strongest external id — one provider lookup per unique show.
       const showMediaByKey = new Map<string, string>();
       const hydrated = new Set<string>();
@@ -964,7 +997,9 @@ export class ImportProcessor implements OnModuleInit {
       // `special: true` episodes resolve ONLY via the external-id path: their S/E
       // numbers live in a separate numbering space and would corrupt into regular
       // episodes; an unresolved special is skipped, never staged.
+      let epIdx = 0;
       for (const c of showsRes.episodes) {
+        await this.reportProgress(importId, 30 + (25 * epIdx++) / Math.max(1, showsRes.episodes.length));
         const { mediaId } = await matchShowIds(c.showIds, c.showTitle, c.year, true);
         let episodeId: string | null = null;
         let confidence = 0;
@@ -1042,27 +1077,36 @@ export class ImportProcessor implements OnModuleInit {
           confidenceScore: m.confidence,
         });
       };
+      const mediaStageTotal = Math.max(1, moviesRes.watched.length + moviesRes.watchlist.length + watchlistShows.length + favorites.length);
+      let mediaStageIdx = 0;
       for (const c of moviesRes.watched) {
+        await this.reportProgress(importId, 55 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem('WATCHED_MOVIE', c.movieIds, c.movieTitle, c.year, c.watchedAt, 1);
       }
       for (const c of moviesRes.watchlist) {
+        await this.reportProgress(importId, 55 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem('WATCHLIST_MOVIE', c.ids, c.title, c.year, c.listedAt, 1);
       }
       for (const c of watchlistShows) {
+        await this.reportProgress(importId, 55 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem('WATCHLIST_SHOW', c.ids, c.title, c.year, c.listedAt, 1);
       }
       for (const c of favorites) {
+        await this.reportProgress(importId, 55 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem(c.type === 'movie' ? 'FAVORITE_MOVIE' : 'FAVORITE_SHOW', c.ids, c.title, c.year, c.listedAt, 1);
       }
       await flush();
 
       // ---- Custom lists (lists.json) → LIST + LIST_ITEM items (same shapes as Trakt) ----
       const listBatch: any[] = [];
+      const listItemTotal = Math.max(1, lists.reduce((n, l) => n + l.items.length, 0));
+      let listItemIdx = 0;
       for (const list of lists) {
         let resolved = 0;
         let unresolved = 0;
         const itemRows: any[] = [];
         for (const it of list.items) {
+          await this.reportProgress(importId, 70 + (10 * listItemIdx++) / listItemTotal);
           const m = await this.matcher.matchByExternalIds(
             it.ids,
             it.mediaType === 'movie' ? 'MOVIE' : 'SHOW',
@@ -1103,7 +1147,9 @@ export class ImportProcessor implements OnModuleInit {
       // ---- Ratings: resolve targets external-ID-first, stage with the shared shapes ----
       let ratingsUnresolved = 0;
       const ratingItems: any[] = [];
+      let ratingIdx = 0;
       for (const c of ratingsRes.candidates) {
+        await this.reportProgress(importId, 80 + (15 * ratingIdx++) / Math.max(1, ratingsRes.candidates.length));
         let mediaId: string | null = null;
         let episodeId: string | null = null;
         let confidence = 0;
@@ -1152,6 +1198,7 @@ export class ImportProcessor implements OnModuleInit {
       await this.setStatus(importId, 'READY_FOR_REVIEW', {
         totalFiles: parsed.length,
         totalRows,
+        progress: 100,
         matchedCount: matched,
         unmatchedCount: unmatched,
         duplicateCount: 0,

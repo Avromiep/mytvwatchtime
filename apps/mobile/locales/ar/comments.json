@@ -60,5 +60,9 @@
   "collapseThread": "طي السلسلة",
   "expandThread": "توسيع السلسلة",
   "replyingTo": "رد على @{{username}}",
-  "cancelReply": "إلغاء الرد"
+  "cancelReply": "إلغاء الرد",
+  "timeJustNow": "الآن",
+  "timeMinutesAgo": "منذ {{count}} د",
+  "timeHoursAgo": "منذ {{count}} س",
+  "timeDaysAgo": "منذ {{count}} ي"
 }

@@ -45,5 +45,14 @@
   "privacyUpdateFailed": "无法更新隐私设置，请重试。",
   "permissionNeeded": "需要权限",
   "allowPhotoAccess": "请允许访问照片",
-  "uploadFailed": "上传失败"
+  "uploadFailed": "上传失败",
+  "toast": {
+    "saved": "已保存",
+    "privacyUpdated": "隐私设置已更新",
+    "avatarUpdated": "头像已更新",
+    "coverUpdated": "封面已更新",
+    "themeUpdated": "主题已更新",
+    "languageUpdated": "语言已更新",
+    "backendUpdated": "后端地址已保存。正在重新加载…"
+  }
 }

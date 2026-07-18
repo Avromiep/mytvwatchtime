@@ -84,5 +84,9 @@
   "collapseThread": "Collapse thread",
   "expandThread": "Expand thread",
   "replyingTo": "Replying to @{{username}}",
-  "cancelReply": "Cancel reply"
+  "cancelReply": "Cancel reply",
+  "timeJustNow": "now",
+  "timeMinutesAgo": "{{count}}m ago",
+  "timeHoursAgo": "{{count}}h ago",
+  "timeDaysAgo": "{{count}}d ago"
 }

@@ -663,9 +663,18 @@ Ratings live inside the JSON files as a nullable 1–10 `rating` field (shows/mo
   first 10 children (`CHILD_PREVIEW_LIMIT`, same sort), flat in `items` — the client groups
   by `parentId` to render two layers; `total` counts direct children only. Default `depth=1`
   is unchanged (direct children only).
-- Thread screen UX: two layers by default, "Show more replies" inline-expands a node's next
-  two layers (one fetch, pageSize 100), then "Continue this thread" opens `/comment/:id`
-  focused on that node. Any sub-thread can be collapsed/expanded.
+- Thread screen UX (Reddit-style, card-free rows): the tree renders RECURSIVELY — each
+  comment nests its children, offset one gutter. A comment's own thread line emerges
+  from its avatar's bottom CENTER and only exists while it has visible replies (leaf
+  comments have no line). Depth-2+ replies get a rounded elbow from the parent's line
+  into the avatar; top-level comments are unlinked (the post is not a line parent).
+  A parent's line ends at its last child's avatar (background mask). Collapsing hides
+  the subtree, the line, and the "show more" row. Collapse ⊖/⊕ sits on the
+  avatar-center line (masked above it); relative timestamps. Two layers by default;
+  "Show more replies" paginates a node's children inline (50/page, depth=2). Tree
+  grouping in `thread-utils.ts` (`buildChildrenMap`); rows render via
+  `components/comments/ThreadNode.tsx`. The feed screen keeps the card design
+  (`CommentCard`).
 - Thread types: SHOW, MOVIE, EPISODE, GROUP (threadId = media/episode ID or group slug)
 - @mention suggestions: distinct participants in thread
 - Likes, reports (SPAM, ABUSE, OFF_TOPIC, OTHER)

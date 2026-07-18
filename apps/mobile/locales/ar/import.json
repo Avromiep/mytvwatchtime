@@ -51,5 +51,6 @@
     "needsReview": "يحتاج إلى مراجعة",
     "unmatched": "غير مطابق",
     "duplicates": "مكررات"
-  }
+  },
+  "progressPercent": "٪{{pct}}"
 }

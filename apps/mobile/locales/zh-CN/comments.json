@@ -60,5 +60,9 @@
   "collapseThread": "收起话题",
   "expandThread": "展开话题",
   "replyingTo": "回复 @{{username}}",
-  "cancelReply": "取消回复"
+  "cancelReply": "取消回复",
+  "timeJustNow": "刚刚",
+  "timeMinutesAgo": "{{count}}分钟前",
+  "timeHoursAgo": "{{count}}小时前",
+  "timeDaysAgo": "{{count}}天前"
 }

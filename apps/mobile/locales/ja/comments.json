@@ -60,5 +60,9 @@
   "collapseThread": "スレッドを折りたたむ",
   "expandThread": "スレッドを展開",
   "replyingTo": "@{{username}} に返信",
-  "cancelReply": "返信をキャンセル"
+  "cancelReply": "返信をキャンセル",
+  "timeJustNow": "たった今",
+  "timeMinutesAgo": "{{count}}分前",
+  "timeHoursAgo": "{{count}}時間前",
+  "timeDaysAgo": "{{count}}日前"
 }

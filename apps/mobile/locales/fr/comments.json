@@ -60,5 +60,9 @@
   "collapseThread": "Réduire le fil",
   "expandThread": "Développer le fil",
   "replyingTo": "Réponse à @{{username}}",
-  "cancelReply": "Annuler la réponse"
+  "cancelReply": "Annuler la réponse",
+  "timeJustNow": "maintenant",
+  "timeMinutesAgo": "il y a {{count}} min",
+  "timeHoursAgo": "il y a {{count}} h",
+  "timeDaysAgo": "il y a {{count}} j"
 }

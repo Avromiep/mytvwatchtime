@@ -51,5 +51,6 @@
     "needsReview": "Requiere revisión",
     "unmatched": "Sin coincidencia",
     "duplicates": "Duplicados"
-  }
+  },
+  "progressPercent": "{{pct}}%"
 }

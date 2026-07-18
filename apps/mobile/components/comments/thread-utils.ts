@@ -1,39 +1,59 @@
 import type { CommentDto } from '@tvwatch/shared';
+import { formatDateTime } from '@tvwatch/shared';
 
 /**
  * Helpers for the Reddit-style threaded comment screen.
  *
  * The server returns thread pages as a FLAT list (direct children of the requested
  * comment, optionally followed by each direct child's first children — depth=2).
- * These helpers merge that with locally expanded subtrees ("Show more replies")
- * and flatten the visible tree into rows for a single FlatList.
+ * `buildChildrenMap` groups them (plus locally expanded subtrees) by parentId;
+ * the screen then renders the tree RECURSIVELY (each comment nests its children
+ * container) — thread lines are full-height gutters inside that nesting, so
+ * continuity comes from the structure instead of computed geometry.
  */
 
-/** One row in the flattened thread list. */
-export type ThreadRow =
-  | { type: 'comment'; comment: CommentDto; depth: number }
-  | {
-      type: 'more';
-      parentId: string;
-      depth: number;
-      remaining: number;
-      /** True after the parent was already inline-expanded: deeper navigation instead of another inline load. */
-      continueThread: boolean;
-    };
-
-/** Locally fetched subtree of one node ("Show more replies" result). */
+/** Locally fetched subtree of one node ("Show more replies" result, paginated). */
 export interface ExpandedNode {
   items: CommentDto[];
   loading: boolean;
+  /** Last loaded page of the node's direct children (0 = nothing fetched yet). */
+  page: number;
 }
+
+// ---------- Thread geometry ----------
 
 /** Visual indent cap — deeper levels render at the same offset (like Reddit). */
 export const MAX_VISIBLE_INDENT = 5;
+/** Gutter width per nesting level — holds the thread lines + elbow connector. */
+export const THREAD_GUTTER = 28;
+/** Row avatar (its left edge sits on the own thread line). */
+export const THREAD_AVATAR = 32;
+/** Row top padding — avatar starts here. */
+export const THREAD_ROW_PAD_TOP = 8;
+/** Avatar center Y within a row (where the elbow meets the avatar). */
+export const THREAD_CENTER_Y = THREAD_ROW_PAD_TOP + THREAD_AVATAR / 2;
+/** Elbow corner radius. */
+export const THREAD_ELBOW_R = 14;
+/** Body offset from the avatar's left edge: avatar + gap — body aligns with the username. */
+export const THREAD_CONTENT_INDENT = THREAD_AVATAR + 8;
 
-/** Indent in px for a thread depth (1 = direct reply). */
-export function threadIndent(depth: number): number {
-  return Math.min(Math.max(depth, 0), MAX_VISIBLE_INDENT) * 12;
+/** "5h ago"-style compact relative time (falls back to the full date past a week). */
+export function formatRelativeShort(
+  iso: string,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  locale: string,
+): string {
+  const diffMin = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (diffMin < 1) return t('comments:timeJustNow');
+  if (diffMin < 60) return t('comments:timeMinutesAgo', { count: diffMin });
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return t('comments:timeHoursAgo', { count: diffH });
+  const diffD = Math.floor(diffH / 24);
+  if (diffD < 7) return t('comments:timeDaysAgo', { count: diffD });
+  return formatDateTime(iso, locale as any);
 }
+
+// ---------- Tree building ----------
 
 /**
  * Merge the root page items with expanded subtrees (expanded wins per id, first
@@ -58,46 +78,4 @@ export function buildChildrenMap(
     else childrenOf.set(c.parentId, [c]);
   }
   return { childrenOf, byId };
-}
-
-/**
- * Pre-order walk of the visible tree below `rootId`. Children of collapsed nodes
- * are skipped (the node itself stays visible). A `more` row is emitted under a
- * node whose loaded children are fewer than its `repliesCount`.
- *
- * Depth is relative to the screen root: direct replies render at depth 1.
- * No `more` row is emitted for the root itself — its children are paginated by
- * the screen's infinite query instead.
- */
-export function flattenThread(
-  rootId: string,
-  childrenOf: Map<string, CommentDto[]>,
-  collapsed: ReadonlySet<string>,
-  expanded: Record<string, ExpandedNode | undefined>,
-): ThreadRow[] {
-  const rows: ThreadRow[] = [];
-  const walk = (parentId: string, depth: number) => {
-    const kids = childrenOf.get(parentId);
-    if (!kids) return;
-    for (const kid of kids) {
-      rows.push({ type: 'comment', comment: kid, depth });
-      if (collapsed.has(kid.id)) continue;
-      const childDepth = depth + 1;
-      walk(kid.id, childDepth);
-      const loaded = childrenOf.get(kid.id)?.length ?? 0;
-      const remaining = kid.repliesCount - loaded;
-      if (remaining > 0) {
-        const node = expanded[kid.id];
-        rows.push({
-          type: 'more',
-          parentId: kid.id,
-          depth: childDepth,
-          remaining,
-          continueThread: !!node && !node.loading,
-        });
-      }
-    }
-  };
-  walk(rootId, 1);
-  return rows;
 }

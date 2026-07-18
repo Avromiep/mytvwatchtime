@@ -1,24 +1,17 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Pressable, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { FlatList, KeyboardAvoidingView, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import type { CommentDto, Paginated } from '@tvwatch/shared';
 import { Header } from '../../components/Header';
 import { EmptyState, Screen, Spinner, T } from '../../components/primitives';
 import { SortBar } from '../../components/comments/SortBar';
-import { CommentCard } from '../../components/comments/CommentCard';
+import { NodeContent, ThreadNode, type ThreadHandlers } from '../../components/comments/ThreadNode';
 import { CommentComposer } from '../../components/comments/CommentComposer';
 import { CommentEditDialog } from '../../components/comments/CommentEditDialog';
 import { useCommentActions } from '../../components/comments/useCommentActions';
 import { feedColumn } from '../../components/comments/layout';
-import {
-  buildChildrenMap,
-  flattenThread,
-  threadIndent,
-  type ExpandedNode,
-  type ThreadRow,
-} from '../../components/comments/thread-utils';
+import { buildChildrenMap, type ExpandedNode } from '../../components/comments/thread-utils';
 import {
   useComment,
   useCommentReplies,
@@ -65,35 +58,48 @@ export default function CommentThreadScreen() {
     () => buildChildrenMap(rootItems, expanded),
     [rootItems, expanded],
   );
-  const rows = useMemo(
-    () => flattenThread(id, childrenOf, collapsed, expanded),
-    [id, childrenOf, collapsed, expanded],
-  );
+  const topLevel = useMemo(() => childrenOf.get(id) ?? [], [childrenOf, id]);
 
-  /** "Show more replies": inline-expand a node's next two layers (single fetch). */
+  /** "Show more replies": inline-expand the next page of a node's children (appended). */
   const loadMore = useCallback(
     async (node: CommentDto) => {
+      const nextPage = (expanded[node.id]?.page ?? 0) + 1;
       setExpanded((prev) => ({
         ...prev,
-        [node.id]: { items: prev[node.id]?.items ?? [], loading: true },
+        [node.id]: {
+          items: prev[node.id]?.items ?? [],
+          loading: true,
+          page: prev[node.id]?.page ?? 0,
+        },
       }));
       try {
         const res = await api.get<Paginated<CommentDto>>(`/comments/${node.id}/replies`, {
-          page: 1,
-          pageSize: 100,
+          page: nextPage,
+          pageSize: 50,
           sort,
           depth: 2,
         });
-        setExpanded((prev) => ({ ...prev, [node.id]: { items: res.items, loading: false } }));
+        setExpanded((prev) => ({
+          ...prev,
+          [node.id]: {
+            items: [...(prev[node.id]?.items ?? []), ...res.items],
+            loading: false,
+            page: nextPage,
+          },
+        }));
       } catch {
         setExpanded((prev) => ({
           ...prev,
-          [node.id]: { items: prev[node.id]?.items ?? [], loading: false },
+          [node.id]: {
+            items: prev[node.id]?.items ?? [],
+            loading: false,
+            page: prev[node.id]?.page ?? 0,
+          },
         }));
         showError({ description: t('comments:failedToLoad') });
       }
     },
-    [sort, t],
+    [expanded, sort, t],
   );
 
   const toggleCollapse = useCallback((c: CommentDto) => {
@@ -153,74 +159,44 @@ export default function CommentThreadScreen() {
     }
   }, [replyTarget, id, byId, loadMore]);
 
-  const isOwner = (c?: CommentDto | null) => !!c && c.author?.id === currentUserId;
-  const openAuthor = (c: CommentDto) =>
-    c.author?.username && router.push(`/user/${encodeURIComponent(c.author.username)}` as any);
+  const isOwner = useCallback(
+    (c?: CommentDto | null) => !!c && c.author?.id === currentUserId,
+    [currentUserId],
+  );
+  const openAuthor = useCallback(
+    (c: CommentDto) =>
+      c.author?.username && router.push(`/user/${encodeURIComponent(c.author.username)}` as any),
+    [],
+  );
 
-  const renderRow = ({ item }: { item: ThreadRow }) => {
-    if (item.type === 'more') {
-      const loading = expanded[item.parentId]?.loading;
-      return (
-        <Pressable
-          onPress={() => {
-            if (loading) return;
-            if (item.continueThread) {
-              router.push(`/comment/${item.parentId}` as any);
-              return;
-            }
-            const node = byId.get(item.parentId);
-            if (node) loadMore(node);
-          }}
-          style={{ marginLeft: threadIndent(item.depth), paddingVertical: spacing.xs }}
-          accessibilityRole="button"
-        >
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <T variant="caption" style={{ color: tokens.primary, fontWeight: '700' }}>
-              {loading
-                ? t('comments:loadingMore')
-                : item.continueThread
-                  ? t('comments:continueThread')
-                  : t('comments:showMoreReplies', { count: item.remaining })}
-            </T>
-            {!loading && item.continueThread ? (
-              <Ionicons
-                name="chevron-forward"
-                size={14}
-                color={tokens.primary}
-                style={{ marginLeft: 2 }}
-              />
-            ) : null}
-          </View>
-        </Pressable>
-      );
-    }
-    const c = item.comment;
-    return (
-      <CommentCard
-        comment={c}
-        isOwner={isOwner(c)}
-        onLike={handleLike}
-        onOverflow={(cc) => openOverflow(cc, isOwner(cc))}
-        onPressAuthor={openAuthor}
-        onReply={(cc) => setReplyTarget(cc)}
-        collapsed={collapsed.has(c.id)}
-        onToggleCollapse={toggleCollapse}
-        depth={item.depth}
-        compact
-      />
-    );
-  };
+  const handlers: ThreadHandlers = useMemo(
+    () => ({
+      onLike: handleLike,
+      onOverflow: (c: CommentDto) => openOverflow(c, isOwner(c)),
+      onPressAuthor: openAuthor,
+      onReply: (c: CommentDto) => setReplyTarget(c),
+      onToggleCollapse: toggleCollapse,
+      onLoadMore: loadMore,
+      isOwner,
+    }),
+    [handleLike, openOverflow, isOwner, openAuthor, toggleCollapse, loadMore],
+  );
+
+  const renderNode = ({ item }: { item: CommentDto }) => (
+    <ThreadNode
+      node={item}
+      depth={1}
+      childrenOf={childrenOf}
+      collapsed={collapsed}
+      expanded={expanded}
+      handlers={handlers}
+    />
+  );
 
   const ListHeader = parent ? (
-    <View>
-      <CommentCard
-        comment={parent}
-        isOwner={isOwner(parent)}
-        onLike={handleLike}
-        onOverflow={(c) => openOverflow(c, isOwner(parent))}
-        onPressAuthor={openAuthor}
-      />
-      <View style={{ paddingTop: spacing.md }}>
+    <View style={{ paddingBottom: spacing.sm }}>
+      <NodeContent comment={parent} depth={0} collapsed={false} handlers={handlers} />
+      <View style={{ paddingTop: spacing.sm, paddingLeft: spacing.xs }}>
         <SortBar
           sort={sort}
           onChange={setSort}
@@ -230,9 +206,6 @@ export default function CommentThreadScreen() {
           }
         />
       </View>
-      <T variant="caption" style={{ fontWeight: '700', paddingTop: spacing.sm }}>
-        {t('comments:repliesTitle')}
-      </T>
     </View>
   ) : null;
 
@@ -253,8 +226,8 @@ export default function CommentThreadScreen() {
           ) : (
             <FlatList
               style={{ flex: 1 }}
-              data={rows}
-              keyExtractor={(r) => (r.type === 'comment' ? r.comment.id : `more-${r.parentId}`)}
+              data={topLevel}
+              keyExtractor={(c) => c.id}
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={{
                 paddingHorizontal: spacing.lg,
@@ -278,7 +251,7 @@ export default function CommentThreadScreen() {
                       {t('comments:loadingMore')}
                     </T>
                   </View>
-                ) : rows.length > 0 && !replies.hasNextPage ? (
+                ) : topLevel.length > 0 && !replies.hasNextPage ? (
                   <T variant="micro" muted style={{ textAlign: 'center', marginTop: spacing.md }}>
                     {t('comments:reachedEnd')}
                   </T>
@@ -291,8 +264,7 @@ export default function CommentThreadScreen() {
                     .catch(() => showError({ description: t('comments:failedToLoad') }));
               }}
               onEndReachedThreshold={0.4}
-              ItemSeparatorComponent={() => <View style={{ height: spacing.md }} />}
-              renderItem={renderRow}
+              renderItem={renderNode}
             />
           )}
         </View>

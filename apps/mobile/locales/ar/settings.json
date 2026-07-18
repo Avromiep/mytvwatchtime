@@ -45,5 +45,14 @@
   "privacyUpdateFailed": "تعذر تحديث إعداد الخصوصية. يرجى المحاولة مرة أخرى.",
   "permissionNeeded": "الإذن مطلوب",
   "allowPhotoAccess": "يرجى السماح بالوصول إلى الصور",
-  "uploadFailed": "فشل الرفع"
+  "uploadFailed": "فشل الرفع",
+  "toast": {
+    "saved": "تم الحفظ",
+    "privacyUpdated": "تم تحديث الخصوصية",
+    "avatarUpdated": "تم تحديث الصورة الرمزية",
+    "coverUpdated": "تم تحديث صورة الغلاف",
+    "themeUpdated": "تم تحديث المظهر",
+    "languageUpdated": "تم تحديث اللغة",
+    "backendUpdated": "تم حفظ عنوان الخادم. جارٍ إعادة التحميل…"
+  }
 }

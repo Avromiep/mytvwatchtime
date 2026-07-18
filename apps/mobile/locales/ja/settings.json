@@ -30,5 +30,14 @@
   "website": "ウェブサイト",
   "githubReleases": "アプリのアップデート",
   "joinDiscord": "Discordに参加",
-  "contactSupport": "サポートに連絡"
+  "contactSupport": "サポートに連絡",
+  "toast": {
+    "saved": "保存しました",
+    "privacyUpdated": "プライバシー設定を更新しました",
+    "avatarUpdated": "アバターを更新しました",
+    "coverUpdated": "カバー画像を更新しました",
+    "themeUpdated": "テーマを更新しました",
+    "languageUpdated": "言語を更新しました",
+    "backendUpdated": "バックエンドURLを保存しました。再読み込み中…"
+  }
 }

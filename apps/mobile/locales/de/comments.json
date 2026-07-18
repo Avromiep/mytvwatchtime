@@ -60,5 +60,9 @@
   "collapseThread": "Thread einklappen",
   "expandThread": "Thread ausklappen",
   "replyingTo": "Antwort an @{{username}}",
-  "cancelReply": "Antwort abbrechen"
+  "cancelReply": "Antwort abbrechen",
+  "timeJustNow": "jetzt",
+  "timeMinutesAgo": "vor {{count}} Min.",
+  "timeHoursAgo": "vor {{count}} Std.",
+  "timeDaysAgo": "vor {{count}} T"
 }

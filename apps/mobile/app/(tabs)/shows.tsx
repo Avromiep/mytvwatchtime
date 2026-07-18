@@ -25,7 +25,7 @@ const VALID_ICONS = new Set([
 // precisely on mount (even before rows lay out), with zero post-mount programmatic
 // scrolling — so marking a show never yanks the viewport, and the tab-reset remount
 // (key={resetKey}) re-lands exactly like a fresh open.
-const CARD_H = 98; // EpisodeCard: still 74 + padding sm×2 + marginBottom sm
+const CARD_H = 122; // EpisodeCard: header 20 + gap xs + still 74 + padding sm×2 + marginBottom sm
 const UPCOMING_H = 108; // UpcomingCard: poster 84 + padding sm×2 + marginBottom sm
 const HEADER_H = 44; // SectionHeader (h1 18px + paddingVertical sm×2, bottom-aligned)
 

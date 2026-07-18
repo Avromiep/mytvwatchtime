@@ -45,5 +45,14 @@
   "privacyUpdateFailed": "개인정보 설정을 업데이트하지 못했습니다. 다시 시도해 주세요.",
   "permissionNeeded": "권한이 필요합니다",
   "allowPhotoAccess": "사진 접근을 허용해 주세요",
-  "uploadFailed": "업로드 실패"
+  "uploadFailed": "업로드 실패",
+  "toast": {
+    "saved": "저장됨",
+    "privacyUpdated": "개인정보 설정이 업데이트되었습니다",
+    "avatarUpdated": "아바타가 업데이트되었습니다",
+    "coverUpdated": "커버 이미지가 업데이트되었습니다",
+    "themeUpdated": "테마가 업데이트되었습니다",
+    "languageUpdated": "언어가 업데이트되었습니다",
+    "backendUpdated": "백엔드 URL이 저장되었습니다. 다시 로드하는 중…"
+  }
 }

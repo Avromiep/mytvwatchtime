@@ -45,5 +45,14 @@
   "privacyUpdateFailed": "गोपनीयता अपडेट नहीं हो सकी। कृपया फिर प्रयास करें।",
   "permissionNeeded": "अनुमति आवश्यक है",
   "allowPhotoAccess": "कृपया फ़ोटो तक पहुँच की अनुमति दें",
-  "uploadFailed": "अपलोड विफल"
+  "uploadFailed": "अपलोड विफल",
+  "toast": {
+    "saved": "सहेजा गया",
+    "privacyUpdated": "गोपनीयता अपडेट की गई",
+    "avatarUpdated": "अवतार अपडेट किया गया",
+    "coverUpdated": "कवर अपडेट किया गया",
+    "themeUpdated": "थीम अपडेट की गई",
+    "languageUpdated": "भाषा अपडेट की गई",
+    "backendUpdated": "बैकएंड URL सहेजा गया। रीलोड हो रहा है…"
+  }
 }

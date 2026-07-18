@@ -45,5 +45,14 @@
   "privacyUpdateFailed": "Gizlilik ayarı güncellenemedi. Lütfen tekrar dene.",
   "permissionNeeded": "İzin gerekli",
   "allowPhotoAccess": "Lütfen fotoğraflara erişime izin ver",
-  "uploadFailed": "Yükleme başarısız"
+  "uploadFailed": "Yükleme başarısız",
+  "toast": {
+    "saved": "Kaydedildi",
+    "privacyUpdated": "Gizlilik güncellendi",
+    "avatarUpdated": "Avatar güncellendi",
+    "coverUpdated": "Kapak güncellendi",
+    "themeUpdated": "Tema güncellendi",
+    "languageUpdated": "Dil güncellendi",
+    "backendUpdated": "Backend URL'si kaydedildi. Yeniden yükleniyor…"
+  }
 }

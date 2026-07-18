@@ -60,5 +60,9 @@
   "collapseThread": "थ्रेड छोटा करें",
   "expandThread": "थ्रेड फैलाएँ",
   "replyingTo": "@{{username}} को जवाब",
-  "cancelReply": "जवाब रद्द करें"
+  "cancelReply": "जवाब रद्द करें",
+  "timeJustNow": "अभी",
+  "timeMinutesAgo": "{{count}} मि पहले",
+  "timeHoursAgo": "{{count}} घं पहले",
+  "timeDaysAgo": "{{count}} दि पहले"
 }

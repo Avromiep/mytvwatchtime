@@ -89,6 +89,7 @@ export function mapShow(media: AnyRecord, userId?: string): ShowDto {
     id: media.id,
     type: MediaType.SHOW,
     title: localized(media, 'titles', 'title') ?? media.title,
+    originalTitle: show.originalTitle ?? null,
     overview: localized(media, 'overviews', 'overview') ?? null,
     images: imagesOf(media),
     yearStart: show.yearStart ?? null,

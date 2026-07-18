@@ -45,5 +45,14 @@
   "privacyUpdateFailed": "Tidak dapat memperbarui privasi. Silakan coba lagi.",
   "permissionNeeded": "Izin diperlukan",
   "allowPhotoAccess": "Izinkan akses ke foto",
-  "uploadFailed": "Unggahan gagal"
+  "uploadFailed": "Unggahan gagal",
+  "toast": {
+    "saved": "Tersimpan",
+    "privacyUpdated": "Privasi diperbarui",
+    "avatarUpdated": "Avatar diperbarui",
+    "coverUpdated": "Sampul diperbarui",
+    "themeUpdated": "Tema diperbarui",
+    "languageUpdated": "Bahasa diperbarui",
+    "backendUpdated": "URL backend disimpan. Memuat ulang…"
+  }
 }

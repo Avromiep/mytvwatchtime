@@ -45,5 +45,14 @@
   "privacyUpdateFailed": "Impossible de mettre à jour la confidentialité. Veuillez réessayer.",
   "permissionNeeded": "Autorisation requise",
   "allowPhotoAccess": "Veuillez autoriser l’accès aux photos",
-  "uploadFailed": "Échec de l’envoi"
+  "uploadFailed": "Échec de l’envoi",
+  "toast": {
+    "saved": "Enregistré",
+    "privacyUpdated": "Confidentialité mise à jour",
+    "avatarUpdated": "Avatar mis à jour",
+    "coverUpdated": "Couverture mise à jour",
+    "themeUpdated": "Thème mis à jour",
+    "languageUpdated": "Langue mise à jour",
+    "backendUpdated": "URL du backend enregistrée. Rechargement…"
+  }
 }

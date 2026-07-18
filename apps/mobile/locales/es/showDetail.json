@@ -20,5 +20,6 @@
   "watchTrailer": "Ver tráiler",
   "cast": "Reparto",
   "comments": "Comentarios",
-  "showMoreEpisodes": "Mostrar {{count}} más"
+  "showMoreEpisodes": "Mostrar {{count}} más",
+  "originalTitle": "Título original"
 }

@@ -70,6 +70,8 @@ export interface NormalizedShow {
   nextAirDate?: string | null;
   /** ISO 639-1 original language (TMDB shows only) — anime classification evidence. */
   originalLanguage?: string | null;
+  /** Original-language title (TMDB original_name / TVDB series name). Shown in show details. */
+  originalTitle?: string | null;
   /** ISO 3166-1 origin countries (TMDB shows only) — anime classification evidence ('JP'). */
   originCountries?: string[];
 }
@@ -112,6 +114,7 @@ interface TmdbShow {
   id: number;
   name?: string;
   title?: string;
+  original_name?: string;
   overview?: string;
   poster_path?: string | null;
   backdrop_path?: string | null;
@@ -413,6 +416,7 @@ export class TmdbProvider {
       seasons,
       nextAirDate: s.next_episode_to_air?.air_date ?? null,
       originalLanguage: s.original_language ?? null,
+      originalTitle: s.original_name ?? null,
       originCountries: s.origin_country ?? [],
     };
   }

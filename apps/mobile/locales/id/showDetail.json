@@ -20,5 +20,6 @@
   "watchTrailer": "Tonton trailer",
   "cast": "Pemeran",
   "comments": "Komentar",
-  "showMoreEpisodes": "Tampilkan {{count}} lainnya"
+  "showMoreEpisodes": "Tampilkan {{count}} lainnya",
+  "originalTitle": "Judul asli"
 }
