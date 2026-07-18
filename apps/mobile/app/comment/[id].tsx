@@ -230,7 +230,7 @@ export default function CommentThreadScreen() {
               keyExtractor={(c) => c.id}
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={{
-                paddingHorizontal: spacing.lg,
+                paddingHorizontal: spacing.sm,
                 paddingBottom: spacing.xl,
                 flexGrow: 1,
               }}

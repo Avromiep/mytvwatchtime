@@ -22,8 +22,6 @@ export interface ExpandedNode {
 
 // ---------- Thread geometry ----------
 
-/** Visual indent cap — deeper levels render at the same offset (like Reddit). */
-export const MAX_VISIBLE_INDENT = 5;
 /** Gutter width per nesting level — holds the thread lines + elbow connector. */
 export const THREAD_GUTTER = 28;
 /** Row avatar (its left edge sits on the own thread line). */

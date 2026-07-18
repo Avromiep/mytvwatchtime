@@ -8,7 +8,6 @@ import { PosterImage, T, APP_ICON } from '../primitives';
 import { CommentMedia } from './CommentMedia';
 import {
   formatRelativeShort,
-  MAX_VISIBLE_INDENT,
   THREAD_AVATAR,
   THREAD_CENTER_Y,
   THREAD_CONTENT_INDENT,
@@ -90,8 +89,8 @@ export function NodeContent({ comment, depth, collapsed, handlers }: NodeContent
         </View>
       </View>
 
-      {/* Body + attachments — aligned with the username. */}
-      <View style={{ marginLeft: THREAD_CONTENT_INDENT }}>
+      {/* Body + attachments — aligned with the username (full-width for the post). */}
+      <View style={{ marginLeft: depth > 0 ? THREAD_CONTENT_INDENT : 0 }}>
         {tombstone ? (
           <T variant="body" muted style={[styles.body, { fontStyle: 'italic' }]}>
             {t('comments:deleted')}
@@ -174,11 +173,12 @@ export function NodeContent({ comment, depth, collapsed, handlers }: NodeContent
         ) : null}
       </View>
 
-      {/* Action row: ⊖/⊕ centered on the avatar-center thread line, then like/reply/⋯. */}
+      {/* Action row: ⊖/⊕ centered on the avatar-center thread line, then like/reply/⋯.
+          (The post has no line — its actions render flush left, full width.) */}
       <View
         style={[
           styles.actions,
-          { marginLeft: depth > 0 ? 0 : THREAD_CONTENT_INDENT },
+          { marginLeft: 0 },
           !showCollapse && depth > 0 ? { paddingLeft: AVATAR_CX + 12 } : null,
         ]}
       >
@@ -279,41 +279,33 @@ export function ThreadNode({
 }: ThreadNodeProps) {
   const { tokens } = useAppearance();
   const isCollapsed = collapsed.has(node.id);
-  const capped = depth >= MAX_VISIBLE_INDENT;
 
   // Collapsed: subtree hidden entirely — no children, no line, no "show more".
   const kids = isCollapsed ? [] : (childrenOf.get(node.id) ?? []);
   const remaining = isCollapsed ? 0 : Math.max(0, node.repliesCount - kids.length);
   const showKids = kids.length > 0 || remaining > 0;
-  const hasParentLine = depth >= 2 && !capped;
+  const hasParentLine = depth >= 2;
 
   return (
-    <View style={[styles.node, { marginLeft: capped ? 0 : THREAD_GUTTER }]}>
-      {/* Last child: end the parent's line at the avatar. Uncapped: mask below the
-          point where the elbow's arc leaves the line (arc start = CENTER_Y - R + 2).
-          Capped (same x as the parent, straight connection): mask below the avatar. */}
-      {isLast && depth >= 2 ? (
+    // Depth-1 nodes render flush to the left edge (no parent line, no elbow — the
+    // gutter would be dead space); every deeper level indents one gutter.
+    <View style={[styles.node, { marginLeft: hasParentLine ? THREAD_GUTTER : 0 }]}>
+      {/* Last child: mask the parent's line below the point where the elbow's arc
+          leaves it (arc start = CENTER_Y - R + 2), so the line ends exactly at the curve. */}
+      {isLast && hasParentLine ? (
         <View
           style={[
             styles.lineMask,
-            capped
-              ? {
-                  backgroundColor: tokens.background,
-                  left: OWN_LINE_LEFT - 1,
-                  top: THREAD_ROW_PAD_TOP + THREAD_AVATAR,
-                  bottom: 0,
-                }
-              : {
-                  backgroundColor: tokens.background,
-                  left: PARENT_LINE_LEFT - 1,
-                  top: THREAD_CENTER_Y - THREAD_ELBOW_R + 2,
-                  bottom: 0,
-                },
+            {
+              backgroundColor: tokens.background,
+              left: PARENT_LINE_LEFT - 1,
+              top: THREAD_CENTER_Y - THREAD_ELBOW_R + 2,
+              bottom: 0,
+            },
           ]}
         />
       ) : null}
-      {/* Elbow: rounded connector from the parent's line into the avatar's center.
-          (Capped nodes sit on the parent's line directly — no elbow needed.) */}
+      {/* Elbow: rounded connector from the parent's line into the avatar's center. */}
       {hasParentLine ? (
         <View
           style={[
@@ -333,8 +325,7 @@ export function ThreadNode({
       {/* Own line: avatar bottom center → element bottom (→ the ⊕ icon's center when
           collapsed, so the marker stays connected to the avatar). Only while replies
           show or the comment is collapsed with replies. Rendered BEFORE the content
-          so the collapse icon masks it on top. Capped nodes keep the line: their
-          children stack at the same x and the line runs through the avatars. */}
+          so the collapse icon masks it on top. */}
       {showKids || (isCollapsed && node.repliesCount > 0) ? (
         <View
           style={[
