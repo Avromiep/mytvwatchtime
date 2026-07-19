@@ -1,4 +1,14 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from './roles.guard';
@@ -24,17 +34,23 @@ export class AdminController {
   // ---------------- Dashboard ----------------
   @Get('stats')
   @RequireRoles('VIEWER')
-  getStats() { return this.admin.getStats(); }
+  getStats() {
+    return this.admin.getStats();
+  }
 
   // ---------------- Provider status (multi-provider console) ----------------
   @Get('providers')
   @RequireRoles('ADMIN')
-  getProviderStatus() { return this.admin.getProviderStatus(); }
+  getProviderStatus() {
+    return this.admin.getProviderStatus();
+  }
 
   // ---------------- Metadata health + backfill ----------------
   @Get('metadata-health')
   @RequireRoles('ADMIN')
-  getMetadataHealth() { return this.metadataBackfill.getHealthStats(); }
+  getMetadataHealth() {
+    return this.metadataBackfill.getHealthStats();
+  }
 
   @Post('metadata-backfill/run')
   @RequireRoles('ADMIN')
@@ -42,7 +58,9 @@ export class AdminController {
     const n = count ? Number(count) : undefined;
     const r = rps ? Number(rps) : undefined;
     this.metadataBackfill.backfillBatch(n, r).catch(() => undefined);
-    return { message: `Backfill started (${n ?? 200} items, ${r ? r + ' items/s' : 'full speed'}). Check API logs.` };
+    return {
+      message: `Backfill started (${n ?? 200} items, ${r ? r + ' items/s' : 'full speed'}). Check API logs.`,
+    };
   }
 
   @Post('anime-tvdb-rehydrate/run')
@@ -72,44 +90,64 @@ export class AdminController {
     this.metadataBackfill.backfillCharacterIds(n).catch((e) => {
       console.error('[Cast Character IDs] FAILED:', (e as Error)?.message ?? e);
     });
-    return { message: `Cast character-id backfill started (${n ?? 500} shows max). Check API logs.` };
+    return {
+      message: `Cast character-id backfill started (${n ?? 500} shows max). Check API logs.`,
+    };
   }
 
   @Post('tmdb-changes/run')
   @RequireRoles('ADMIN')
-  runTmdbChanges() {
-    this.metadataBackfill.syncTmdbChanges().catch((e) => {
+  runTmdbChanges(@Query('start') start?: string) {
+    this.metadataBackfill.syncTmdbChanges(start).catch((e) => {
       // Log the error so the admin can see it in API logs (fire-and-forget otherwise swallows).
       console.error('[TMDB Changes Sync] FAILED:', (e as Error)?.message ?? e);
     });
-    return { message: 'TMDB changes sync started in background. Check API logs for progress + results.' };
+    return {
+      message: start
+        ? `TMDB changes sync (custom range from ${start}) started in background. Check API logs for progress + results.`
+        : 'TMDB changes sync started in background. Check API logs for progress + results.',
+    };
   }
 
   @Get('charts')
   @RequireRoles('VIEWER')
-  getCharts() { return this.admin.getCharts(); }
+  getCharts() {
+    return this.admin.getCharts();
+  }
 
   // ---------------- Media ----------------
   @Get('media')
   @RequireRoles('VIEWER')
-  getMedia(@Query() q: any) { return this.admin.getMedia(q); }
+  getMedia(@Query() q: any) {
+    return this.admin.getMedia(q);
+  }
 
   @Get('media/:id')
   @RequireRoles('VIEWER')
-  getMediaDetail(@Param('id') id: string) { return this.admin.getMediaDetail(id); }
+  getMediaDetail(@Param('id') id: string) {
+    return this.admin.getMediaDetail(id);
+  }
 
   // ---------------- Users ----------------
   @Get('users')
   @RequireRoles('SUPPORT')
-  getUsers(@Query() q: any) { return this.admin.getUsers(q); }
+  getUsers(@Query() q: any) {
+    return this.admin.getUsers(q);
+  }
 
   @Get('users/:id')
   @RequireRoles('SUPPORT')
-  getUserDetail(@Param('id') id: string) { return this.admin.getUserDetail(id); }
+  getUserDetail(@Param('id') id: string) {
+    return this.admin.getUserDetail(id);
+  }
 
   @Patch('users/:id')
   @RequireRoles('ADMIN')
-  updateUser(@CurrentUser('id') adminId: string, @Param('id') id: string, @Body() dto: { role?: string; isSuspended?: boolean }) {
+  updateUser(
+    @CurrentUser('id') adminId: string,
+    @Param('id') id: string,
+    @Body() dto: { role?: string; isSuspended?: boolean },
+  ) {
     return this.admin.updateUser(adminId, id, dto);
   }
 
@@ -122,22 +160,34 @@ export class AdminController {
   // ---------------- Admins ----------------
   @Get('admins')
   @RequireRoles('ADMIN')
-  getAdmins() { return this.admin.getAdmins(); }
+  getAdmins() {
+    return this.admin.getAdmins();
+  }
 
   // ---------------- Hydration Jobs ----------------
   @Post('jobs/hydrate')
   @RequireRoles('CONTENT_MANAGER')
-  triggerHydration(@CurrentUser('id') adminId: string, @Body() body: { type: string; tmdbId?: number; pages?: number }) {
-    return this.admin.triggerHydration(adminId, body.type, { tmdbId: body.tmdbId, pages: body.pages });
+  triggerHydration(
+    @CurrentUser('id') adminId: string,
+    @Body() body: { type: string; tmdbId?: number; pages?: number },
+  ) {
+    return this.admin.triggerHydration(adminId, body.type, {
+      tmdbId: body.tmdbId,
+      pages: body.pages,
+    });
   }
 
   @Get('jobs')
   @RequireRoles('VIEWER')
-  getJobs(@Query() q: any) { return this.admin.getJobs(q); }
+  getJobs(@Query() q: any) {
+    return this.admin.getJobs(q);
+  }
 
   @Get('jobs/:id')
   @RequireRoles('VIEWER')
-  getJobDetail(@Param('id') id: string) { return this.admin.getJobDetail(id); }
+  getJobDetail(@Param('id') id: string) {
+    return this.admin.getJobDetail(id);
+  }
 
   @Post('jobs/:id/cancel')
   @RequireRoles('CONTENT_MANAGER')
@@ -154,23 +204,32 @@ export class AdminController {
   // ---------------- Audit Logs ----------------
   @Get('audit-logs')
   @RequireRoles('ADMIN')
-  getAuditLogs(@Query() q: any) { return this.admin.getAuditLogs(q); }
+  getAuditLogs(@Query() q: any) {
+    return this.admin.getAuditLogs(q);
+  }
 
   // ---------------- Feature Flags ----------------
   @Get('feature-flags')
   @RequireRoles('ADMIN')
-  getFeatureFlags() { return this.admin.getFeatureFlags(); }
+  getFeatureFlags() {
+    return this.admin.getFeatureFlags();
+  }
 
   @Patch('feature-flags')
   @RequireRoles('ADMIN')
-  updateFeatureFlag(@CurrentUser('id') adminId: string, @Body() body: { key: string; value: boolean }) {
+  updateFeatureFlag(
+    @CurrentUser('id') adminId: string,
+    @Body() body: { key: string; value: boolean },
+  ) {
     return this.admin.updateFeatureFlag(adminId, body.key, body.value);
   }
 
   // ---------------- Cron Jobs ----------------
   @Get('cron')
   @RequireRoles('VIEWER')
-  getCronJobs() { return this.cron.getAll(); }
+  getCronJobs() {
+    return this.cron.getAll();
+  }
 
   @Get('cron/:name/history')
   @RequireRoles('VIEWER')
@@ -180,7 +239,11 @@ export class AdminController {
 
   @Patch('cron/:name')
   @RequireRoles('ADMIN')
-  updateCronJob(@CurrentUser('id') adminId: string, @Param('name') name: string, @Body() body: { schedule?: string; enabled?: boolean }) {
+  updateCronJob(
+    @CurrentUser('id') adminId: string,
+    @Param('name') name: string,
+    @Body() body: { schedule?: string; enabled?: boolean; timezone?: string | null },
+  ) {
     return this.cron.update(adminId, name, body);
   }
 
@@ -193,32 +256,57 @@ export class AdminController {
   // ---------------- Settings ----------------
   @Get('settings')
   @RequireRoles('ADMIN')
-  getSettings() { return this.admin.getSettings(); }
+  getSettings() {
+    return this.admin.getSettings();
+  }
 
   @Get('settings/:key')
   @RequireRoles('SUPER_ADMIN')
-  getSettingValue(@Param('key') key: string) { return this.admin.getSettingValue(key); }
+  getSettingValue(@Param('key') key: string) {
+    return this.admin.getSettingValue(key);
+  }
 
   @Patch('settings/:key')
   @RequireRoles('SUPER_ADMIN')
-  updateSetting(@CurrentUser('id') adminId: string, @Param('key') key: string, @Body() body: { value: string; encrypted: boolean }) {
+  updateSetting(
+    @CurrentUser('id') adminId: string,
+    @Param('key') key: string,
+    @Body() body: { value: string; encrypted: boolean },
+  ) {
     return this.admin.updateSetting(adminId, key, body.value, body.encrypted);
   }
 
   // ---------------- Scheduled Hydrations ----------------
   @Get('scheduled-hydrations')
   @RequireRoles('VIEWER')
-  getScheduledHydrations() { return this.admin.getScheduledHydrations(); }
+  getScheduledHydrations() {
+    return this.admin.getScheduledHydrations();
+  }
 
   @Post('scheduled-hydrations')
   @RequireRoles('ADMIN')
-  createScheduledHydration(@CurrentUser('id') adminId: string, @Body() body: { type: string; label: string; schedule: string; pages?: number; enabled?: boolean }) {
+  createScheduledHydration(
+    @CurrentUser('id') adminId: string,
+    @Body()
+    body: {
+      type: string;
+      label: string;
+      schedule: string;
+      timezone?: string | null;
+      pages?: number;
+      enabled?: boolean;
+    },
+  ) {
     return this.admin.createScheduledHydration(body);
   }
 
   @Patch('scheduled-hydrations/:id')
   @RequireRoles('ADMIN')
-  updateScheduledHydration(@Param('id') id: string, @Body() body: { schedule?: string; pages?: number; enabled?: boolean }) {
+  updateScheduledHydration(
+    @Param('id') id: string,
+    @Body()
+    body: { schedule?: string; pages?: number; enabled?: boolean; timezone?: string | null },
+  ) {
     return this.admin.updateScheduledHydration(id, body);
   }
 
@@ -280,7 +368,11 @@ export class AdminController {
 
   @Patch('announcements/:id')
   @RequireRoles('ADMIN')
-  updateAnnouncement(@CurrentUser('id') adminId: string, @Param('id') id: string, @Body() dto: any) {
+  updateAnnouncement(
+    @CurrentUser('id') adminId: string,
+    @Param('id') id: string,
+    @Body() dto: any,
+  ) {
     return this.admin.updateAnnouncement(adminId, id, dto);
   }
 
@@ -292,7 +384,11 @@ export class AdminController {
 
   @Post('announcements/:id/activate')
   @RequireRoles('ADMIN')
-  activateAnnouncement(@CurrentUser('id') adminId: string, @Param('id') id: string, @Body() body: { alsoPush?: boolean }) {
+  activateAnnouncement(
+    @CurrentUser('id') adminId: string,
+    @Param('id') id: string,
+    @Body() body: { alsoPush?: boolean },
+  ) {
     return this.admin.activateAnnouncement(adminId, id, !!body.alsoPush);
   }
 
@@ -348,7 +444,11 @@ export class AdminController {
 
   @Post('contacts/:id/messages')
   @RequireRoles('SUPPORT')
-  replyContact(@CurrentUser('id') adminId: string, @Param('id') id: string, @Body() body: { body: string }) {
+  replyContact(
+    @CurrentUser('id') adminId: string,
+    @Param('id') id: string,
+    @Body() body: { body: string },
+  ) {
     return this.admin.replyContact(adminId, id, body.body);
   }
 

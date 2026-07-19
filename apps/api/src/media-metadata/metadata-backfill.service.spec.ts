@@ -402,6 +402,36 @@ describe('MetadataBackfillService', () => {
       expect(meta.ensureShowFull).toHaveBeenCalledTimes(1); // only the non-animation show
       expect(res).toMatchObject({ matched: 2, hydrated: 1, skippedAnime: 1 });
     });
+
+    it('uses the custom start date for one-off runs without moving the Redis cursor', async () => {
+      const calls: any[] = [];
+      tmdb.get.mockImplementation((path: string, params: any) => {
+        calls.push({ path, params });
+        return Promise.resolve({ results: [], total_pages: 1 });
+      });
+      redis.get.mockResolvedValue('2026-07-18T00:00:00.000Z'); // stored cursor (ignored for custom)
+
+      await service.syncTmdbChanges('2026-07-01');
+
+      const tvCall = calls.find((c) => c.path === '/tv/changes');
+      expect(tvCall.params).toMatchObject({ start_date: '2026-07-01' });
+      // The daily progression is never disturbed by one-off backfills.
+      expect(redis.set).not.toHaveBeenCalledWith(
+        'TMDB_CHANGES_LAST_RUN',
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('stores the cursor for normal (non-custom) runs', async () => {
+      tmdb.get.mockResolvedValue({ results: [], total_pages: 1 });
+      await service.syncTmdbChanges();
+      expect(redis.set).toHaveBeenCalledWith(
+        'TMDB_CHANGES_LAST_RUN',
+        expect.any(String),
+        86400 * 30,
+      );
+    });
   });
 
   describe('backfillCharacterIds', () => {

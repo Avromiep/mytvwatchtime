@@ -811,8 +811,11 @@ export class MetadataBackfillService {
    *
    * First run goes back 14 days; subsequent runs use the date stored in Redis.
    * Fully paginated (no arbitrary cap).
+   *
+   * `startDate` (YYYY-MM-DD): manual one-off backfill from a specific date. Custom-range
+   * runs do NOT move the Redis cursor, so the daily progression is never disturbed.
    */
-  async syncTmdbChanges(): Promise<{
+  async syncTmdbChanges(startDate?: string): Promise<{
     tvChanged: number;
     movieChanged: number;
     matched: number;
@@ -825,22 +828,25 @@ export class MetadataBackfillService {
       return { tvChanged: 0, movieChanged: 0, matched: 0, hydrated: 0, failed: 0, skippedAnime: 0 };
     }
 
-    // Start date: since last sync (Redis), or 14 days ago on first run.
+    // Start date: explicit param (one-off), else last sync (Redis), else 14 days ago.
     const lastRunStr = await this.redis.get<string>('TMDB_CHANGES_LAST_RUN');
-    const startDate = lastRunStr ? new Date(lastRunStr) : new Date(Date.now() - 1000 * 60 * 60 * 24 * 14);
+    const startDate_ = startDate && /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? new Date(`${startDate}T00:00:00Z`) : lastRunStr ? new Date(lastRunStr) : new Date(Date.now() - 1000 * 60 * 60 * 24 * 14);
     const endDate = new Date();
     const fmt = (d: Date) => d.toISOString().slice(0, 10);
 
-    this.logger.log(`TMDB changes sync: ${fmt(startDate)} → ${fmt(endDate)}`);
+    this.logger.log(`TMDB changes sync: ${fmt(startDate_)} → ${fmt(endDate)}${startDate ? ' (custom range)' : ''}`);
 
     // Fetch ALL changed IDs from TMDB (fully paginated).
-    const tvIds = await this.fetchChangedIds('tv', fmt(startDate), fmt(endDate));
-    const movieIds = await this.fetchChangedIds('movie', fmt(startDate), fmt(endDate));
+    const tvIds = await this.fetchChangedIds('tv', fmt(startDate_), fmt(endDate));
+    const movieIds = await this.fetchChangedIds('movie', fmt(startDate_), fmt(endDate));
     const allIds = [...tvIds, ...movieIds];
     this.logger.log(`TMDB changes: ${tvIds.length} TV + ${movieIds.length} movie = ${allIds.length} total changed IDs`);
 
-    // Store the end date so the next run starts from here.
-    await this.redis.set('TMDB_CHANGES_LAST_RUN', endDate.toISOString(), 86400 * 30);
+    // Store the end date so the next run starts from here — EXCEPT for custom-range
+    // one-offs, which must never disturb the daily progression.
+    if (!startDate) {
+      await this.redis.set('TMDB_CHANGES_LAST_RUN', endDate.toISOString(), 86400 * 30);
+    }
 
     if (allIds.length === 0)
       return { tvChanged: 0, movieChanged: 0, matched: 0, hydrated: 0, failed: 0, skippedAnime: 0 };

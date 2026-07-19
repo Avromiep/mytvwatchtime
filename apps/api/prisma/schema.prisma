@@ -1660,6 +1660,8 @@ model CronJob {
   name           String    @unique
   label          String
   schedule       String
+  /// IANA timezone for the schedule (null = server default).
+  timezone       String?
   enabled        Boolean   @default(true)
   lastRunAt      DateTime? @map("last_run_at")
   lastStatus     String?   @map("last_status")
@@ -1679,6 +1681,8 @@ model CronJobRun {
   jobId      String   @map("job_id")
   status     String
   error      String?
+  /// Outcome summary of the run (counts/result payload), when the handler returns one.
+  result     Json?
   durationMs Int      @map("duration_ms")
   startedAt  DateTime @map("started_at")
   finishedAt DateTime @map("finished_at")
@@ -1694,6 +1698,8 @@ model ScheduledHydration {
   type          String
   label         String
   schedule      String
+  /// IANA timezone for the schedule (null = server default).
+  timezone      String?
   pages         Int      @default(1)
   enabled       Boolean  @default(false)
   lastRunAt     DateTime? @map("last_run_at")

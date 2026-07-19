@@ -12,10 +12,17 @@ import { TmdbProvider } from '../../media-metadata/providers/tmdb.provider';
 import { TvdbProvider } from '../../media-metadata/providers/tvdb.provider';
 import { normTitle } from './inference';
 import { isAnimeSignal } from '../../media-metadata/classification/anime-signal';
+import { isProviderError } from '../../media-metadata/providers/shared/provider-errors';
 import type { TraktIds } from './trakt/types';
 
 /** Shared return shape of all media-matching entry points. */
-type MediaMatch = { mediaId: string | null; confidence: number; matchedTitle: string | null };
+type MediaMatch = {
+  mediaId: string | null;
+  confidence: number;
+  matchedTitle: string | null;
+  /** Set on unresolved TVDB-id matches: the id is provably dead (404) vs inconclusive. */
+  dead?: boolean;
+};
 
 export interface MatchResult {
   mediaId: string | null;
@@ -99,12 +106,18 @@ export class ImportMatcher {
 
     if (ids.length) {
       const r = await this.matchByTvdbIds(ids, title, type, year ?? null);
-      this.mediaCache.set(key, {
-        mediaId: r.mediaId,
-        confidence: r.confidence,
-        title: r.matchedTitle,
-      });
-      return r;
+      // Only all-ids-dead (404) falls through to title matching: stale export ids from a
+      // TVDB merge carry no identity signal, while an inconclusive failure keeps the
+      // refusal (we can't tell whether the id is live).
+      if (r.mediaId || !r.allDead) {
+        this.mediaCache.set(key, {
+          mediaId: r.mediaId,
+          confidence: r.confidence,
+          title: r.matchedTitle,
+        });
+        return r;
+      }
+      this.logger.log(`All ${ids.length} TVDB id(s) for "${title}" are dead (404) — falling back to title search`);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -298,29 +311,40 @@ export class ImportMatcher {
       include: { media: true },
     });
     if (ext?.media) {
-      // The local id mapping is authoritative — but never cross entity types: a MOVIE
-      // item must not resolve to a SHOW row (and vice versa). A mismatch means the item
-      // itself is mis-tagged (e.g. a show-rating row flowing through the movie path) —
-      // refuse rather than misapply user data to the wrong entity.
+      // The local id mapping is authoritative — EVEN across entity types. Legacy TV Time
+      // rows mis-track shows through the movie entity (a v1 "movie" row titled "Bleach"
+      // IS the anime), so when the id says SHOW we resolve to the show regardless of the
+      // item's declared type. Data safety is enforced downstream: the apply-time type
+      // guard drops e.g. a WATCHED_MOVIE matched to a SHOW, so nothing wrong is written.
       const expected = type === 'SHOW' ? MediaType.SHOW : MediaType.MOVIE;
       if (ext.media.type !== expected) {
-        this.logger.warn(
-          `TVDB id ${rawTvdbSeriesId} ("${title}") maps to a ${ext.media.type} row but the item is ${type} — refusing cross-type match`,
+        this.logger.log(
+          `TVDB id ${rawTvdbSeriesId} ("${title}") resolves to a ${ext.media.type} row — accepting cross-type match for ${type} item`,
         );
-        return { mediaId: null, confidence: 0, matchedTitle: null };
+        return { mediaId: ext.media.id, confidence: 0.9, matchedTitle: ext.media.title };
       }
       return { mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title };
     }
 
     // 0a) Exact TMDB /find translation (one call, no title search). Anime shows take the
-    //     TVDB-authoritative branch instead of the TMDB record.
+    //     TVDB-authoritative branch instead of the TMDB record. The id is authoritative
+    //     even across entity types (see step 0): when /find only returns the SIBLING kind
+    //     (a series id on a MOVIE item, or a movie id on a SHOW item), resolve to it.
     if (this.tmdb.enabled) {
       try {
         const found = await this.tmdb.findByExternalId(rawTvdbSeriesId, 'tvdb_id');
-        const hit = type === 'SHOW' ? found?.show : found?.movie;
+        const preferred = (type === 'SHOW' ? found?.show : found?.movie) ?? null;
+        const sibling = (type === 'SHOW' ? found?.movie : found?.show) ?? null;
+        const hit = preferred ?? sibling;
         if (hit) {
+          const kind: 'SHOW' | 'MOVIE' = preferred ? type : type === 'SHOW' ? 'MOVIE' : 'SHOW';
+          if (!preferred) {
+            this.logger.log(
+              `TVDB id ${rawTvdbSeriesId} ("${title}") is a ${kind} per TMDB /find — accepting cross-type match for ${type} item`,
+            );
+          }
           if (
-            type === 'SHOW' &&
+            kind === 'SHOW' &&
             this.tvdb.enabled &&
             isAnimeSignal(found!.show!.genreIds, found!.show!.originCountries)
           ) {
@@ -350,10 +374,10 @@ export class ImportMatcher {
             }
           }
           const mediaId =
-            type === 'SHOW'
+            kind === 'SHOW'
               ? await this.meta.lightUpsertShow({ tmdbId: hit.tmdbId, title, year })
               : await this.meta.lightUpsertMovie({ tmdbId: hit.tmdbId, title, year });
-          return { mediaId, confidence: 0.95, matchedTitle: title };
+          return { mediaId, confidence: preferred ? 0.95 : 0.9, matchedTitle: title };
         }
       } catch (e) {
         this.logger.debug(
@@ -362,46 +386,71 @@ export class ImportMatcher {
       }
     }
 
-    // 0b) TMDB didn't resolve the TVDB ID → fetch from TVDB directly.
+    // 0b) TMDB didn't resolve the TVDB ID → fetch from TVDB directly. A 404 on the expected
+    //     entity kind triggers ONE probe of the sibling kind first: mis-typed legacy rows
+    //     carry a LIVE id of the other kind (a series id on a movie item) — only a 404 on
+    //     BOTH kinds means the id is truly dead (TVDB merged/deleted it).
+    let dead = false;
     if (this.tvdb.enabled) {
+      const numId = Number(rawTvdbSeriesId);
+      const upsertShow = async () => {
+        const s = await this.tvdb.getShow(numId);
+        const mediaId = await this.meta.lightUpsertShowTvdb({
+          tvdbId: numId,
+          title: s.title,
+          overview: s.overview ?? null,
+          posterUrl: s.posterUrl ?? null,
+          backdropUrl: s.backdropUrl ?? null,
+          popularity: s.popularity ?? 0,
+          year: s.yearStart ?? null,
+        });
+        return { mediaId, title: s.title };
+      };
+      const upsertMovie = async () => {
+        const mv = await this.tvdb.getMovie(numId);
+        const mediaId = await this.meta.lightUpsertMovieTvdb({
+          tvdbId: numId,
+          title: mv.title,
+          overview: mv.overview ?? null,
+          posterUrl: mv.posterUrl ?? null,
+          backdropUrl: mv.backdropUrl ?? null,
+          popularity: mv.popularity ?? 0,
+          year: mv.releaseYear ?? null,
+        });
+        return { mediaId, title: mv.title };
+      };
       try {
-        if (type === 'SHOW') {
-          const s = await this.tvdb.getShow(Number(rawTvdbSeriesId));
-          const mediaId = await this.meta.lightUpsertShowTvdb({
-            tvdbId: Number(rawTvdbSeriesId),
-            title: s.title,
-            overview: s.overview ?? null,
-            posterUrl: s.posterUrl ?? null,
-            backdropUrl: s.backdropUrl ?? null,
-            popularity: s.popularity ?? 0,
-            year: s.yearStart ?? null,
-          });
-          return { mediaId, confidence: 0.85, matchedTitle: s.title };
-        } else {
-          const mv = await this.tvdb.getMovie(Number(rawTvdbSeriesId));
-          const mediaId = await this.meta.lightUpsertMovieTvdb({
-            tvdbId: Number(rawTvdbSeriesId),
-            title: mv.title,
-            overview: mv.overview ?? null,
-            posterUrl: mv.posterUrl ?? null,
-            backdropUrl: mv.backdropUrl ?? null,
-            popularity: mv.popularity ?? 0,
-            year: mv.releaseYear ?? null,
-          });
-          return { mediaId, confidence: 0.85, matchedTitle: mv.title };
-        }
+        const r = type === 'SHOW' ? await upsertShow() : await upsertMovie();
+        return { mediaId: r.mediaId, confidence: 0.85, matchedTitle: r.title };
       } catch (e) {
-        this.logger.warn(
-          `TVDB exact-id recovery failed for ${rawTvdbSeriesId}: ${(e as Error).message}`,
-        );
+        if (isProviderError(e) && e.category === 'not_found') {
+          try {
+            const r = type === 'SHOW' ? await upsertMovie() : await upsertShow();
+            this.logger.log(
+              `TVDB id ${rawTvdbSeriesId} ("${title}") exists as a ${type === 'SHOW' ? 'movie' : 'series'} — accepting cross-type match for ${type} item`,
+            );
+            return { mediaId: r.mediaId, confidence: 0.8, matchedTitle: r.title };
+          } catch (e2) {
+            // A 404 on BOTH kinds means the id is DEAD — it carries no identity signal,
+            // so a title fallback is legitimate. Any other failure (throttle, timeout,
+            // upstream) is inconclusive: keep refusing, we can't tell if it's live.
+            dead = isProviderError(e2) && e2.category === 'not_found';
+            if (!dead) {
+              this.logger.warn(`TVDB exact-id recovery failed for ${rawTvdbSeriesId}: ${(e2 as Error).message}`);
+            }
+          }
+        } else {
+          this.logger.warn(`TVDB exact-id recovery failed for ${rawTvdbSeriesId}: ${(e as Error).message}`);
+        }
       }
     }
 
-    // 0c) TVDB ID present but UNRESOLVABLE — do NOT fall back to title matching.
+    // 0c) TVDB ID present but UNRESOLVABLE — do NOT fall back to title matching
+    //     (unless the id is provably dead — see matchByTvdbIds).
     this.logger.warn(
       `TVDB series ID ${rawTvdbSeriesId} for "${title}" could not be resolved via TMDB or TVDB — refusing title fallback`,
     );
-    return { mediaId: null, confidence: 0, matchedTitle: null };
+    return { mediaId: null, confidence: 0, matchedTitle: null, dead };
   }
 
   /**
@@ -415,17 +464,22 @@ export class ImportMatcher {
     title: string,
     type: 'SHOW' | 'MOVIE',
     year: number | null,
-  ): Promise<MediaMatch> {
+  ): Promise<MediaMatch & { allDead?: boolean }> {
+    let sawInconclusive = false;
     for (const id of ids) {
       const r = await this.matchByTvdbId(id, title, type, year);
       if (r.mediaId) return r;
+      if (!r.dead) sawInconclusive = true;
     }
     if (ids.length > 1) {
       this.logger.warn(
         `None of the ${ids.length} TVDB ids for "${title}" resolved (${ids.join(', ')}) — refusing title fallback`,
       );
     }
-    return { mediaId: null, confidence: 0, matchedTitle: null };
+    // Every id is provably dead (404) → the export's identity info is stale (TVDB merged
+    // the series into a new id). A title search is the only remaining signal — allow it.
+    // Any inconclusive failure keeps the refusal (we can't tell whether the id is live).
+    return { mediaId: null, confidence: 0, matchedTitle: null, allDead: !sawInconclusive };
   }
 
   /**

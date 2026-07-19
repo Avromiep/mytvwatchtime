@@ -20,6 +20,25 @@ interface MetadataHealth {
   movieDataOnShows: number;
 }
 
+/** One-line guidance per stat: what it means and what to do about it. */
+const STAT_HINTS: Record<string, string> = {
+  total: 'All media rows in the local catalog (shows + movies).',
+  neverHydrated: 'Rows with only a title (no metadata yet). Run Backfill to hydrate them.',
+  showsMissingEpisodes:
+    'Shows with zero seasons/episodes stored. Run Backfill to rehydrate their structure.',
+  moviesMissingOverview: 'Movies missing their description text. Run Backfill to fill it.',
+  tvdbOnly: 'Shows/movies that exist only on TVDB (no TMDB id) — informational, usually anime.',
+  stale: 'Metadata older than 30 days. These refresh lazily on view; Run Backfill for a bulk pass.',
+  animeOnTmdb:
+    'Animation-genre shows whose structure came from TMDB (wrong season splits for anime). Fix moves them to TVDB and transfers watch data.',
+  structuralTypeMismatch:
+    'Movie and show merged into ONE row by a bad id cross-link. Repair splits them and transfers watch data.',
+  castMissingCharacterIds:
+    'Shows whose cast lacks TVDB character ids — needed to resolve imported character votes. Backfill rehydrates them from TVDB.',
+  movieDataOnShows:
+    'Movie statuses/history wrongly written on shows (import bug). The Repair button above purges these too.',
+};
+
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
   GENERAL: { label: 'General', color: 'default' },
   ANIME: { label: 'Anime', color: 'info' },
@@ -43,6 +62,7 @@ export default function MetadataHealthPage() {
   const [castResult, setCastResult] = useState<string | null>(null);
   const [batchCount, setBatchCount] = useState('200');
   const [batchRps, setBatchRps] = useState('');
+  const [syncStart, setSyncStart] = useState('');
 
   const canView = user?.role && ['ADMIN', 'SUPER_ADMIN'].includes(user.role);
 
@@ -64,7 +84,9 @@ export default function MetadataHealthPage() {
     api
       .post(`/admin/metadata-backfill/run?count=${batchCount}${batchRps ? `&rps=${batchRps}` : ''}`)
       .then(() => {
-        setBackfillResult(`Backfill started (${batchCount} items${batchRps ? `, ${batchRps}/min` : ', full speed'}). Stats refresh in 30s.`);
+        setBackfillResult(
+          `Backfill started (${batchCount} items${batchRps ? `, ${batchRps}/min` : ', full speed'}). Stats refresh in 30s.`,
+        );
         setTimeout(() => load(), 30000); // auto-refresh stats after 30s
       })
       .catch(() => setBackfillResult('Backfill failed to start.'))
@@ -74,10 +96,15 @@ export default function MetadataHealthPage() {
   const runTmdbSync = () => {
     setSyncing(true);
     setSyncResult(null);
+    const qs = syncStart ? `?start=${syncStart}` : '';
     api
-      .post('/admin/tmdb-changes/run')
+      .post(`/admin/tmdb-changes/run${qs}`)
       .then(() => {
-        setSyncResult('TMDB changes sync started in background. Check API logs for results.');
+        setSyncResult(
+          syncStart
+            ? `TMDB changes sync (custom range from ${syncStart}) started in background. The daily cursor is untouched. Stats refresh in 60s.`
+            : 'TMDB changes sync started in background. Check API logs for results.',
+        );
         setTimeout(() => load(), 60000); // auto-refresh after 60s (sync takes longer)
       })
       .catch(() => setSyncResult('TMDB sync failed to start.'))
@@ -131,37 +158,23 @@ export default function MetadataHealthPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Metadata Health</h1>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button onClick={load} className="text-sm text-blue-600 hover:underline">
             Refresh
           </button>
+          <span className="text-xs text-zinc-400">TMDB sync from:</span>
+          <input
+            type="date"
+            value={syncStart}
+            onChange={(e) => setSyncStart(e.target.value)}
+            className="rounded border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-800"
+          />
           <button
             onClick={runTmdbSync}
             disabled={syncing}
             className="rounded border border-blue-600 px-3 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
           >
-            {syncing ? 'Syncing…' : 'TMDB Changes Sync'}
-          </button>
-          <button
-            onClick={runAnimeFix}
-            disabled={fixingAnime}
-            className="rounded border border-blue-600 px-3 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
-          >
-            {fixingAnime ? 'Starting…' : 'Fix Anime → TVDB'}
-          </button>
-          <button
-            onClick={runTypeRepair}
-            disabled={repairing}
-            className="rounded border border-blue-600 px-3 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
-          >
-            {repairing ? 'Starting…' : 'Repair Type Mismatch'}
-          </button>
-          <button
-            onClick={runCastBackfill}
-            disabled={backfillingCast}
-            className="rounded border border-blue-600 px-3 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
-          >
-            {backfillingCast ? 'Starting…' : 'Backfill Character IDs'}
+            {syncing ? 'Syncing…' : syncStart ? 'Sync (custom range)' : 'TMDB Changes Sync'}
           </button>
           <button
             onClick={runBackfill}
@@ -220,36 +233,96 @@ export default function MetadataHealthPage() {
         <>
           {/* Health metrics */}
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-            <MetricCard label="Total Media" value={stats.total} />
-            <MetricCard label="Never Hydrated" value={stats.neverHydrated} sub={`${pct(stats.neverHydrated)}% of total`} highlight={stats.neverHydrated > 0} />
-            <MetricCard label="Shows Missing Episodes" value={stats.showsMissingEpisodes} sub={`${pct(stats.showsMissingEpisodes)}% of total`} highlight={stats.showsMissingEpisodes > 0} />
-            <MetricCard label="Movies Missing Overview" value={stats.moviesMissingOverview} sub={`${pct(stats.moviesMissingOverview)}% of total`} highlight={stats.moviesMissingOverview > 0} />
-            <MetricCard label="TVDB-Only (no TMDB)" value={stats.tvdbOnly} sub={`${pct(stats.tvdbOnly)}% of total`} />
+            <MetricCard label="Total Media" value={stats.total} hint={STAT_HINTS.total} />
+            <MetricCard
+              label="Never Hydrated"
+              value={stats.neverHydrated}
+              sub={`${pct(stats.neverHydrated)}% of total`}
+              hint={STAT_HINTS.neverHydrated}
+              highlight={stats.neverHydrated > 0}
+            />
+            <MetricCard
+              label="Shows Missing Episodes"
+              value={stats.showsMissingEpisodes}
+              sub={`${pct(stats.showsMissingEpisodes)}% of total`}
+              hint={STAT_HINTS.showsMissingEpisodes}
+              highlight={stats.showsMissingEpisodes > 0}
+            />
+            <MetricCard
+              label="Movies Missing Overview"
+              value={stats.moviesMissingOverview}
+              sub={`${pct(stats.moviesMissingOverview)}% of total`}
+              hint={STAT_HINTS.moviesMissingOverview}
+              highlight={stats.moviesMissingOverview > 0}
+            />
+            <MetricCard
+              label="TVDB-Only (no TMDB)"
+              value={stats.tvdbOnly}
+              sub={`${pct(stats.tvdbOnly)}% of total`}
+              hint={STAT_HINTS.tvdbOnly}
+            />
+            <MetricCard
+              label="Stale (30+ days)"
+              value={stats.stale}
+              sub={`${pct(stats.stale)}% of total`}
+              hint={STAT_HINTS.stale}
+              highlight={stats.stale > 0}
+            />
             <MetricCard
               label="Anime on TMDB"
               value={stats.animeOnTmdb}
               sub={`should be TVDB · ${stats.animeOnTmdbNoTvdbId} missing TVDB id`}
+              hint={STAT_HINTS.animeOnTmdb}
               highlight={stats.animeOnTmdb > 0}
+              action={
+                <button
+                  onClick={runAnimeFix}
+                  disabled={fixingAnime}
+                  className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                >
+                  {fixingAnime ? 'Starting…' : 'Fix Anime → TVDB'}
+                </button>
+              }
             />
             <MetricCard
               label="Type Mismatch"
               value={stats.structuralTypeMismatch}
               sub="movie/show merged into one row"
+              hint={STAT_HINTS.structuralTypeMismatch}
               highlight={stats.structuralTypeMismatch > 0}
+              action={
+                <button
+                  onClick={runTypeRepair}
+                  disabled={repairing}
+                  className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                >
+                  {repairing ? 'Starting…' : 'Repair Type Mismatch'}
+                </button>
+              }
+            />
+            <MetricCard
+              label="Movie Data on Shows"
+              value={stats.movieDataOnShows}
+              sub="movie statuses/history on shows"
+              hint={STAT_HINTS.movieDataOnShows}
+              highlight={stats.movieDataOnShows > 0}
             />
             <MetricCard
               label="Cast Missing Character IDs"
               value={stats.castMissingCharacterIds}
               sub="shows with cast but no TVDB character ids"
+              hint={STAT_HINTS.castMissingCharacterIds}
               highlight={stats.castMissingCharacterIds > 0}
+              action={
+                <button
+                  onClick={runCastBackfill}
+                  disabled={backfillingCast}
+                  className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                >
+                  {backfillingCast ? 'Starting…' : 'Backfill Character IDs'}
+                </button>
+              }
             />
-            <MetricCard
-              label="Movie Data on Shows"
-              value={stats.movieDataOnShows}
-              sub="movie statuses/history on shows — Repair purges"
-              highlight={stats.movieDataOnShows > 0}
-            />
-            <MetricCard label="Stale (30+ days)" value={stats.stale} sub={`${pct(stats.stale)}% of total`} highlight={stats.stale > 0} />
           </div>
 
           {/* Classification breakdown */}
@@ -270,11 +343,12 @@ export default function MetadataHealthPage() {
           </div>
 
           <p className="text-xs text-zinc-400">
-            Backfill processes 20 items per run (oldest/never-hydrated first). It hydrates from TMDB (or TVDB for
-            TVDB-only media), respects global rate limits, and enqueues anime classification (Kitsu &gt; Jikan &gt; TVDB
-            &gt; TMDB). Watch history is never affected. Animation-genre shows are TVDB-authoritative: the daily Anime
-            TVDB Rehydration job (Scheduled Jobs) and the Fix Anime button re-hydrate any TMDB-structured ones from
-            TVDB, and TMDB Changes Sync skips them.
+            Backfill processes 20 items per run (oldest/never-hydrated first). It hydrates from TMDB
+            (or TVDB for TVDB-only media), respects global rate limits, and enqueues anime
+            classification (Kitsu &gt; Jikan &gt; TVDB &gt; TMDB). Watch history is never affected.
+            Animation-genre shows are TVDB-authoritative: the daily Anime TVDB Rehydration job
+            (Scheduled Jobs) and the Fix Anime button re-hydrate any TMDB-structured ones from TVDB,
+            and TMDB Changes Sync skips them.
           </p>
         </>
       )}
@@ -282,12 +356,32 @@ export default function MetadataHealthPage() {
   );
 }
 
-function MetricCard({ label, value, sub, highlight }: { label: string; value: number; sub?: string; highlight?: boolean }) {
+function MetricCard({
+  label,
+  value,
+  sub,
+  hint,
+  highlight,
+  action,
+}: {
+  label: string;
+  value: number;
+  sub?: string;
+  hint?: string;
+  highlight?: boolean;
+  action?: React.ReactNode;
+}) {
   return (
-    <div className={`rounded-lg border p-4 ${highlight ? 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950' : 'border-zinc-200 dark:border-zinc-700'}`}>
+    <div
+      className={`rounded-lg border p-4 ${highlight ? 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950' : 'border-zinc-200 dark:border-zinc-700'}`}
+    >
       <p className="text-xs uppercase tracking-wide text-zinc-400">{label}</p>
       <p className="mt-1 text-2xl font-semibold">{value.toLocaleString()}</p>
       {sub && <p className="mt-0.5 text-xs text-zinc-400">{sub}</p>}
+      {hint && (
+        <p className="mt-2 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">{hint}</p>
+      )}
+      {action && <div className="mt-3">{action}</div>}
     </div>
   );
 }

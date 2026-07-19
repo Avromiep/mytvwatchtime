@@ -22,13 +22,13 @@ export class NotificationScheduler {
     private readonly settings: SettingService,
   ) {}
 
-  /** Hourly: episodes airing TODAY for tracked shows.
+  /** Hourly: episodes airing TODAY for tracked shows. Scheduled by CronManagerService
+   *  (DB-driven — NOT a @Cron decorator, or the job would fire twice).
    *  - Batch per user, spread push times across the afternoon
    *  - Season premiere (S2+E1) → "X is back!" message
    *  - Series premiere (S1E1) → notify watchlist users
    *  - Only notify users who have watched at least 1 episode (cross-referenced)
    */
-  @Cron(CronExpression.EVERY_HOUR)
   async scheduleEpisodeNotifications() {
     const now = new Date();
     const startOfToday = new Date(now);
@@ -121,10 +121,11 @@ export class NotificationScheduler {
   }
 
   /** Daily: watchlist reminders — max 1 per user per day, rotating across shows.
+   *  Scheduled by CronManagerService (DB-driven — NOT a @Cron decorator, or the job
+   *  would fire twice).
    *  Skips shows where the user has watched ALL available episodes (nothing left to watch).
    *  A show isn't reminded again until WATCHLIST_REMINDER_SHOW_COOLDOWN_DAYS elapses, so a
    *  different show surfaces each day. Still fires daily (one reminder per user). */
-  @Cron('0 22 * * *')
   async watchlistReminders() {
     const cooldownDays = await this.settings.getNumber('WATCHLIST_REMINDER_SHOW_COOLDOWN_DAYS', 30);
     const staleDays = await this.settings.getNumber('WATCHLIST_REMINDER_STALE_DAYS', 14);
@@ -198,8 +199,8 @@ export class NotificationScheduler {
       );
   }
 
-  /** Daily at 3 AM local: refresh air times from TVmaze. */
-  @Cron('0 7 * * *')
+  /** Daily at 7 AM local: refresh air times from TVmaze. Scheduled by CronManagerService
+   *  (DB-driven — NOT a @Cron decorator, or the job would fire twice). */
   async refreshAirtimes() {
     const needsRefresh = await this.prisma.mediaItem.findMany({
       where: {

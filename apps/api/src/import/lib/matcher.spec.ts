@@ -1,5 +1,6 @@
 import { ExternalProvider, MediaType } from '@tvwatch/shared';
 import { ImportMatcher, needsTvdbRehydration } from './matcher';
+import { ProviderError } from '../../media-metadata/providers/shared/provider-errors';
 
 /** Minimal fake Prisma for the matcher's DB surface. */
 function fakePrisma(
@@ -52,7 +53,10 @@ describe('ImportMatcher — conditional TVDB recovery (Phase 9)', () => {
     expect(tvdb.getShow).not.toHaveBeenCalled(); // no external call
   });
 
-  it('Step 0: refuses a cross-type match (MOVIE item hitting a SHOW row)', async () => {
+  it('Step 0: accepts a cross-type match (MOVIE item hitting a SHOW row) — the id is authoritative', async () => {
+    // Legacy TV Time rows mis-track shows through the movie entity, so a MOVIE item can
+    // carry a live TVDB SERIES id. The id says what the entity really is — resolve to it.
+    // Data safety lives downstream: the apply-time type guard writes nothing cross-type.
     const prisma = fakePrisma({
       extByTvdb: { media: { id: 'm1', title: 'Sense8', type: MediaType.SHOW } },
     });
@@ -64,8 +68,9 @@ describe('ImportMatcher — conditional TVDB recovery (Phase 9)', () => {
       tvdb as any,
     );
     const res = await matcher.matchMedia('sense8', 'Sense8', 'MOVIE', null, null, null, '268156');
-    expect(res.mediaId).toBeNull(); // a movie item must never resolve to a show row
-    expect(res.confidence).toBe(0);
+    expect(res.mediaId).toBe('m1');
+    expect(res.confidence).toBe(0.9);
+    expect(tvdb.getShow).not.toHaveBeenCalled(); // local mapping — no external call
   });
 
   it('with raw TVDB id present but no local mapping: refuses title fallback → NEEDS_REVIEW', async () => {
@@ -712,5 +717,180 @@ describe('needsTvdbRehydration (structural guard)', () => {
     expect(
       needsTvdbRehydration({ seasonEpisodes: [{ season: 0, maxEpisode: 5 }] }, hydrated(3, {})),
     ).toBe(false);
+  });
+});
+
+describe('ImportMatcher — dead TVDB id title fallback', () => {
+  const meta = () => ({
+    lightUpsertShow: jest.fn(async () => 'm-lotm'),
+    lightUpsertMovie: jest.fn(async () => 'm-lotm'),
+    lightUpsertShowTvdb: jest.fn(async () => 'm-tvdb'),
+    lightUpsertMovieTvdb: jest.fn(async () => 'm-tvdb'),
+    ensureShowFull: jest.fn(async () => undefined),
+  });
+
+  it('falls back to title search when every id is dead (404)', async () => {
+    const prisma = fakePrisma({});
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      searchShows: jest.fn(async () => ({ items: [{ tmdbId: 240001, title: 'Lord of Mysteries' }], total: 1 })),
+    };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      getMovie: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      searchShows: jest.fn(),
+    };
+    const matcher = new ImportMatcher(prisma as any, meta() as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia('lord of the mysteries', 'Lord of the Mysteries', 'SHOW', null, undefined, null, '438102');
+
+    expect(tmdb.searchShows).toHaveBeenCalledWith('Lord of the Mysteries', 1);
+    expect(res).toEqual({ mediaId: 'm-lotm', confidence: 0.5, matchedTitle: 'Lord of Mysteries' });
+  });
+
+  it('still refuses title fallback on an inconclusive failure (non-404)', async () => {
+    const prisma = fakePrisma({});
+    const tmdb = { enabled: true, findByExternalId: jest.fn(async () => null), searchShows: jest.fn() };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => {
+        throw new Error('throttled internally: tvdb');
+      }),
+      searchShows: jest.fn(),
+    };
+    const matcher = new ImportMatcher(prisma as any, meta() as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia('lord of the mysteries', 'Lord of the Mysteries', 'SHOW', null, undefined, null, '438102');
+
+    expect(res.mediaId).toBeNull();
+    expect(tmdb.searchShows).not.toHaveBeenCalled();
+  });
+});
+
+describe('ImportMatcher — cross-type id authority (legacy movie-typed show rows)', () => {
+  const meta = () => ({
+    lightUpsertShow: jest.fn(async () => 'm-show'),
+    lightUpsertMovie: jest.fn(async () => 'm-movie'),
+    lightUpsertShowTvdb: jest.fn(async () => 'm-tvdb-show'),
+    lightUpsertMovieTvdb: jest.fn(async () => 'm-tvdb-movie'),
+    ensureShowFull: jest.fn(async () => undefined),
+  });
+
+  it('SHOW item hitting a local MOVIE mapping resolves to the movie (id is authoritative)', async () => {
+    const prisma = fakePrisma({
+      extByTvdb: { media: { id: 'm-mov', title: 'Some Movie', type: MediaType.MOVIE } },
+    });
+    const tvdb = { enabled: true, getShow: jest.fn(), searchShows: jest.fn() };
+    const matcher = new ImportMatcher(prisma as any, meta() as any, fakeTmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia('some movie', 'Some Movie', 'SHOW', null, null, null, '555');
+
+    expect(res).toEqual({ mediaId: 'm-mov', confidence: 0.9, matchedTitle: 'Some Movie' });
+  });
+
+  it('MOVIE item whose id /finds only a SERIES resolves to the show via TMDB', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => ({
+        movie: null,
+        show: { tmdbId: 45950, genreIds: [], originCountries: ['US'] },
+        episode: null,
+      })),
+    };
+    const tvdb = { enabled: false, getShow: jest.fn(), getMovie: jest.fn() };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia('one piece', 'One Piece', 'MOVIE', null, undefined, null, '81797');
+
+    expect(m.lightUpsertShow).toHaveBeenCalledWith({ tmdbId: 45950, title: 'One Piece', year: null });
+    expect(m.lightUpsertMovie).not.toHaveBeenCalled();
+    expect(res).toEqual({ mediaId: 'm-show', confidence: 0.9, matchedTitle: 'One Piece' });
+  });
+
+  it('MOVIE item: a 404 on the movie endpoint probes the series endpoint before declaring dead', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = { enabled: true, findByExternalId: jest.fn(async () => null) };
+    const tvdb = {
+      enabled: true,
+      getMovie: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      getShow: jest.fn(async () => ({
+        title: 'Bleach',
+        overview: 'O',
+        posterUrl: null,
+        backdropUrl: null,
+        popularity: 0,
+        yearStart: 2004,
+      })),
+      searchShows: jest.fn(),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia('bleach', 'Bleach', 'MOVIE', null, undefined, null, '74796');
+
+    expect(tvdb.getMovie).toHaveBeenCalledWith(74796);
+    expect(tvdb.getShow).toHaveBeenCalledWith(74796);
+    expect(m.lightUpsertShowTvdb).toHaveBeenCalled();
+    expect(res).toEqual({ mediaId: 'm-tvdb-show', confidence: 0.8, matchedTitle: 'Bleach' });
+  });
+
+  it('MOVIE item: 404 on BOTH endpoints is dead → movie title fallback is allowed', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      searchMovies: jest.fn(async () => ({ items: [{ tmdbId: 777, title: 'Dracula' }], total: 1 })),
+    };
+    const tvdb = {
+      enabled: true,
+      getMovie: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      getShow: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia('dracula', 'Dracula', 'MOVIE', null, undefined, null, '361160');
+
+    expect(tmdb.searchMovies).toHaveBeenCalledWith('Dracula', 1);
+    expect(res).toEqual({ mediaId: 'm-movie', confidence: 0.75, matchedTitle: 'Dracula' });
+  });
+
+  it('MOVIE item: 404 on the movie endpoint + throttle on the series probe stays inconclusive (no title fallback)', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      searchMovies: jest.fn(),
+    };
+    const tvdb = {
+      enabled: true,
+      getMovie: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      getShow: jest.fn(async () => {
+        throw new Error('throttled internally: tvdb');
+      }),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia('bleach', 'Bleach', 'MOVIE', null, undefined, null, '74796');
+
+    expect(res.mediaId).toBeNull();
+    expect(tmdb.searchMovies).not.toHaveBeenCalled();
   });
 });
