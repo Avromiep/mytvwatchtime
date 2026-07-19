@@ -15,6 +15,12 @@ Notifications.setNotificationHandler({
   }),
 });
 
+// Responses already navigated for. Both the tap listener AND
+// getLastNotificationResponseAsync() can deliver the same response (the "last"
+// response persists until a newer one arrives), and the effect below re-runs
+// when `enabled` flips — without dedupe each tap would push the route twice.
+const handledResponses = new Set<string>();
+
 export function usePushNotifications(enabled: boolean) {
   useEffect(() => {
     if (!enabled || Platform.OS === 'web') return;
@@ -86,10 +92,17 @@ export function usePushNotifications(enabled: boolean) {
     if (!enabled || Platform.OS === 'web') return;
     const open = (response: Notifications.NotificationResponse | null) => {
       const link = (response?.notification.request.content.data as any)?.link;
-      if (typeof link === 'string') navigateFromLink(link);
+      if (typeof link !== 'string' || !response) return;
+      const key = `${response.notification.request.identifier}:${response.notification.date}:${link}`;
+      if (handledResponses.has(key)) return;
+      if (handledResponses.size > 100) handledResponses.clear();
+      handledResponses.add(key);
+      navigateFromLink(link);
     };
     const sub = Notifications.addNotificationResponseReceivedListener(open);
-    Notifications.getLastNotificationResponseAsync().then(open).catch(() => undefined);
+    Notifications.getLastNotificationResponseAsync()
+      .then(open)
+      .catch(() => undefined);
     return () => sub.remove();
   }, [enabled]);
 }

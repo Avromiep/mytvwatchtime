@@ -7,6 +7,7 @@ import { CandidateDetectorService } from '../classification/candidate-detector.s
 import { ClassifierService } from '../classification/classifier.service';
 import { AnimeMatchService } from '../matching/anime-match.service';
 import { TvdbProvider } from '../providers/tvdb.provider';
+import { TmdbProvider } from '../providers/tmdb.provider';
 import {
   METADATA_QUEUE,
   HydrationQueue,
@@ -31,6 +32,7 @@ export class HydrationProcessor implements OnModuleInit {
     private readonly classifier: ClassifierService,
     private readonly animeMatch: AnimeMatchService,
     private readonly tvdb: TvdbProvider,
+    private readonly tmdb: TmdbProvider,
     private readonly queue: HydrationQueue,
   ) {}
 
@@ -129,7 +131,15 @@ export class HydrationProcessor implements OnModuleInit {
   async animeHydrate(mediaId: string): Promise<void> {
     const media = await this.loadMedia(mediaId);
     if (!media || media.manualClassification) return;
-    const candidate = this.detector.detect(this.inputFromMedia(media));
+    const input = this.inputFromMedia(media);
+    // Old row (predates keywords persistence): one light TMDB keywords lookup BEFORE any
+    // Kitsu/Jikan call — persisted so it never re-checks ([] = checked, none found).
+    const keywordsRaw = media.type === 'MOVIE' ? media.movie?.keywords : media.show?.keywords;
+    if (keywordsRaw == null) {
+      const fetched = await this.fetchKeywords(media);
+      if (fetched) input.keywords = fetched;
+    }
+    const candidate = this.detector.detect(input);
     let match = null;
     // TMDB `anime` keyword is decisive — skip the Kitsu/Jikan calls entirely.
     if (candidate.isCandidate && !candidate.signals.includes('anime_keyword')) {
@@ -149,6 +159,33 @@ export class HydrationProcessor implements OnModuleInit {
       result.evidence,
       media.manualClassification,
     );
+  }
+
+  /** One light TMDB keywords lookup for rows that predate keywords persistence. Returns
+   *  null on provider error (stays eligible for a later retry — never persisted then). */
+  private async fetchKeywords(media: {
+    id: string;
+    type: string;
+    externalIds: { provider: string; value: string }[];
+  }): Promise<string[] | null> {
+    if (!this.tmdb.enabled) return null;
+    const tmdbExt = media.externalIds.find((e) => e.provider === 'TMDB');
+    if (!tmdbExt) return null;
+    const isMovie = media.type === 'MOVIE';
+    const keywords = isMovie
+      ? await this.tmdb.getMovieKeywords(Number(tmdbExt.value))
+      : await this.tmdb.getShowKeywords(Number(tmdbExt.value));
+    if (!keywords) return null;
+    if (isMovie) {
+      await this.prisma.movie
+        .update({ where: { mediaId: media.id }, data: { keywords } })
+        .catch(() => undefined);
+    } else {
+      await this.prisma.show
+        .update({ where: { mediaId: media.id }, data: { keywords } })
+        .catch(() => undefined);
+    }
+    return keywords;
   }
 
   /** Background TVDB search: store TVDB-only results as provisional candidates (Redis TTL),

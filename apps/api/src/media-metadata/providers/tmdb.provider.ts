@@ -344,6 +344,28 @@ export class TmdbProvider {
     };
   }
 
+  /** Lightweight keywords fetch (old rows predate keywords persistence). TV shape: `results`. */
+  async getShowKeywords(tmdbId: number): Promise<string[] | null> {
+    try {
+      const res = await this.tmdb.get<{ results?: { name?: string }[] }>(`/tv/${tmdbId}/keywords`);
+      return (res.results ?? []).map((k) => k.name).filter((n): n is string => !!n);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Lightweight keywords fetch (old rows predate keywords persistence). Movie shape: `keywords`. */
+  async getMovieKeywords(tmdbId: number): Promise<string[] | null> {
+    try {
+      const res = await this.tmdb.get<{ keywords?: { name?: string }[] }>(
+        `/movie/${tmdbId}/keywords`,
+      );
+      return (res.keywords ?? []).map((k) => k.name).filter((n): n is string => !!n);
+    } catch {
+      return null;
+    }
+  }
+
   /** Lightweight external-IDs check — returns the TVDB ID for a TMDB show, or null. */
   async getTvdbIdForShow(tmdbId: number): Promise<number | null> {
     try {
