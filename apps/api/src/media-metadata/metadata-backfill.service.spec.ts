@@ -12,15 +12,23 @@ function model(fns: string[]): FnMap {
 }
 
 function mockPrisma() {
-  return {
+  const p = {
     mediaItem: model(['count', 'findMany', 'findUnique', 'groupBy', 'update']),
     episode: model(['count']),
     externalId: model(['findMany', 'findFirst', 'create', 'deleteMany']),
     show: model(['delete']),
     movie: model(['delete']),
     userEpisodeStatus: model(['count']),
+    rating: model(['count']),
+    reaction: model(['count']),
+    characterVote: model(['count']),
     $queryRaw: jest.fn().mockResolvedValue([{ c: BigInt(0) }]),
   } as any;
+  p.userEpisodeStatus.count.mockResolvedValue(0);
+  p.rating.count.mockResolvedValue(0);
+  p.reaction.count.mockResolvedValue(0);
+  p.characterVote.count.mockResolvedValue(0);
+  return p;
 }
 
 function mockMeta() {
@@ -443,6 +451,22 @@ describe('MetadataBackfillService', () => {
 
       expect(res.skipped).toBe(1);
       expect(prisma.show.delete).not.toHaveBeenCalled(); // stray row holds user data
+      expect(meta.ensureMovieFull).not.toHaveBeenCalled();
+    });
+
+    it('never deletes the stray structure when the new entity came back empty (partial fetch)', async () => {
+      prisma.mediaItem.findMany.mockResolvedValue([mismatchRow()]);
+      prisma.externalId.deleteMany.mockResolvedValue({ count: 1 });
+      meta.ensureShowFullTvdb.mockResolvedValue('show-new');
+      // Remap early-exits (target has 0 episodes): mapped=0 AND unmapped=0 — the explicit
+      // remaining-user-data check is the only thing standing between us and data loss.
+      structureRemap.remapEpisodesToMedia = jest.fn().mockResolvedValue({ mapped: 0, unmapped: 0 });
+      prisma.userEpisodeStatus.count.mockResolvedValue(1);
+
+      const res = await service.repairTypeMismatches();
+
+      expect(res.skipped).toBe(1);
+      expect(prisma.show.delete).not.toHaveBeenCalled();
       expect(meta.ensureMovieFull).not.toHaveBeenCalled();
     });
 

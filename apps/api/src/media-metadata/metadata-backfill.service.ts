@@ -616,7 +616,12 @@ export class MetadataBackfillService {
       // 3. Transfer watch data from the stray episodes onto the new entity.
       if (isMovieRow) {
         const remap = await this.structureRemap.remapEpisodesToMedia(mediaId, newEntityId);
-        if (remap.unmapped > 0) {
+        // Safety net independent of the remap result: NEVER delete the stray structure
+        // while any of its episodes still carries user data — e.g. when the new entity
+        // came back with 0 episodes (partial provider fetch) the remap early-exits with
+        // unmapped=0 and the data would cascade away silently.
+        const remaining = await this.strayShowHasUserData(mediaId);
+        if (remap.unmapped > 0 || remaining) {
           this.logger.warn(
             `type mismatch: ${title} (${mediaId}) split into ${newEntityId}, but ${remap.unmapped} episodes kept unmapped user data — stray shows row retained`,
           );
@@ -656,13 +661,29 @@ export class MetadataBackfillService {
     }
   }
 
-  /** Any episodes with user data under the stray shows row of a MOVIE media? */
+  /** Any user data (status/rating/reaction/vote/comment) on episodes of a media's shows row? */
   private async strayShowHasUserData(mediaId: string): Promise<boolean> {
-    const withData = await this.prisma.userEpisodeStatus.count({
-      where: { episode: { season: { show: { mediaId } } } },
-      take: 1,
-    });
-    return withData > 0;
+    const episodeScope = { episode: { season: { show: { mediaId } } } };
+    const [statuses, ratings, reactions, votes, comments] = await Promise.all([
+      this.prisma.userEpisodeStatus.count({ where: { ...episodeScope }, take: 1 }),
+      this.prisma.rating.count({ where: { ...episodeScope }, take: 1 }),
+      this.prisma.reaction.count({ where: { ...episodeScope }, take: 1 }),
+      this.prisma.characterVote.count({ where: { ...episodeScope }, take: 1 }),
+      // Comments key episodes by thread_id string (no FK relation) — raw count instead.
+      this.countEpisodeThreadComments(mediaId),
+    ]);
+    return statuses + ratings + reactions + votes + comments > 0;
+  }
+
+  /** Episode-thread comments for any episode of a media's shows row. */
+  private async countEpisodeThreadComments(mediaId: string): Promise<number> {
+    const rows = await this.prisma.$queryRaw<{ c: bigint }[]>`
+      SELECT count(*)::bigint AS c FROM comments cm
+      JOIN episodes e ON cm.thread_id = e.id
+      JOIN seasons s ON e.season_id = s.id
+      JOIN shows sh ON s.show_id = sh.id
+      WHERE cm.thread_type = 'EPISODE' AND sh.media_id = ${mediaId}`;
+    return Number(rows?.[0]?.c ?? 0);
   }
 
   /** Delete the stray structural row (shows on a MOVIE row cascades seasons+episodes). */
