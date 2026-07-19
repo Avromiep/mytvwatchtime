@@ -336,6 +336,7 @@ function ReviewItems({
     { key: 'MOVIE_EMOTION', label: t('import:movieEmotions') },
     { key: 'EPISODE_COMMENT', label: t('import:episodeComments') },
     { key: 'MOVIE_COMMENT', label: t('import:movieComments') },
+    { key: 'EPISODE_CHARACTER_VOTE', label: t('import:characterVotes') },
   ];
 
   const FILTERS: { key: string | undefined; label: string }[] = [
@@ -448,6 +449,7 @@ function describeItem(
   const isRating = entityType.endsWith('_RATING');
   const isEmotion = entityType.endsWith('_EMOTION');
   const isComment = entityType.endsWith('_COMMENT');
+  const isCharacterVote = entityType === 'EPISODE_CHARACTER_VOTE';
 
   // Target title: episode/show use showTitle, movie uses movieTitle, legacy items use title.
   const title = norm.showTitle ?? norm.movieTitle ?? norm.title ?? t('import:noTitle');
@@ -465,6 +467,9 @@ function describeItem(
   if (isEmotion) {
     const emo = norm.normalizedEmotion ? String(norm.normalizedEmotion).toLowerCase() : '';
     return emo ? `${title}  ·  ${emo}` : title;
+  }
+  if (isCharacterVote) {
+    return `${title}  ·  ${t('import:characterVoteLabel')}`;
   }
   return title;
 }

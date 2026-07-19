@@ -55,6 +55,8 @@
   "seasons_one": "{{count}} season",
   "seasons_other": "{{count}} seasons",
   "noTitle": "(no title)",
+  "characterVoteLabel": "character vote",
+  "characterVotes": "Character votes",
   "noItems": "No items in this view.",
   "disabledTitle": "Imports are temporarily disabled",
   "disabledDesc": "Please check back later.",

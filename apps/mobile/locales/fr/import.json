@@ -28,6 +28,8 @@
   "watchedMovies": "Films vus",
   "episodes": "Épisodes",
   "noTitle": "(sans titre)",
+  "characterVoteLabel": "vote de personnage",
+  "characterVotes": "Votes de personnages",
   "noItems": "Aucun élément dans cette vue.",
   "disabledTitle": "Les importations sont temporairement désactivées",
   "disabledDesc": "Veuillez réessayer plus tard.",

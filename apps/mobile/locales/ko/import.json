@@ -28,6 +28,8 @@
   "watchedMovies": "시청한 영화",
   "episodes": "에피소드",
   "noTitle": "(제목 없음)",
+  "characterVoteLabel": "캐릭터 투표",
+  "characterVotes": "캐릭터 투표",
   "noItems": "이 보기에는 항목이 없습니다.",
   "disabledTitle": "가져오기가 일시적으로 비활성화되었습니다",
   "disabledDesc": "나중에 다시 확인해 주세요.",

@@ -65,6 +65,16 @@ export class AdminController {
     return { message: 'Type mismatch repair started in background. Check API logs.' };
   }
 
+  @Post('cast-character-ids/run')
+  @RequireRoles('ADMIN')
+  runCastCharacterIds(@Query('count') count?: string) {
+    const n = count ? Number(count) : undefined;
+    this.metadataBackfill.backfillCharacterIds(n).catch((e) => {
+      console.error('[Cast Character IDs] FAILED:', (e as Error)?.message ?? e);
+    });
+    return { message: `Cast character-id backfill started (${n ?? 500} shows max). Check API logs.` };
+  }
+
   @Post('tmdb-changes/run')
   @RequireRoles('ADMIN')
   runTmdbChanges() {

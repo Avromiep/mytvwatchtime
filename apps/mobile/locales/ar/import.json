@@ -28,6 +28,8 @@
   "watchedMovies": "أفلام تمت مشاهدتها",
   "episodes": "حلقات",
   "noTitle": "(بلا عنوان)",
+  "characterVoteLabel": "تصويت الشخصية",
+  "characterVotes": "أصوات الشخصيات",
   "noItems": "لا توجد عناصر في هذا العرض.",
   "disabledTitle": "عمليات الاستيراد معطلة مؤقتًا",
   "disabledDesc": "يرجى العودة لاحقًا.",

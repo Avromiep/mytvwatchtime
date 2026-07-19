@@ -73,6 +73,8 @@ interface TvdbArtwork {
 }
 
 interface TvdbCharacter {
+  /** TVDB character id (role-level) — used to resolve TVTime character votes locally. */
+  id?: number;
   name?: string;
   personName?: string;
   personImgURL?: string;
@@ -315,6 +317,7 @@ export class TvdbProvider {
         character: c.name ?? null,
         profileUrl: c.personImgURL ?? c.image ?? null,
         order: c.sort ?? i,
+        characterExternalId: c.id ?? null,
       }));
 
     return {

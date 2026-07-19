@@ -17,6 +17,8 @@ export interface NormalizedCast {
   character?: string | null;
   profileUrl?: string | null;
   order: number;
+  /** TVDB character id of the role (TVDB hydration only) — TVTime character-vote resolution. */
+  characterExternalId?: number | null;
 }
 export interface NormalizedProvider {
   name: string;

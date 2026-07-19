@@ -70,9 +70,11 @@ export class DataDeletionService {
       return { deleted: true };
     }
 
-    // Delete all user data — Prisma cascades to all related records
+    // Delete all user data — Prisma cascades to all related records.
+    // Evict the JWT existence cache BEFORE the row delete so in-flight requests
+    // re-check the DB instead of racing through on the stale positive entry.
+    await this.redis.del(`auth:user:${req.userId}`);
     await this.prisma.user.delete({ where: { id: req.userId } });
-    await this.redis.del(`auth:user:${req.userId}`); // evict the JWT existence cache
 
     await this.prisma.deletionRequest.update({ where: { id: req.id }, data: { usedAt: new Date() } });
 

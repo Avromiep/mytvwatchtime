@@ -15,6 +15,7 @@ import { HydrationQueue } from '../media-metadata/hydration/hydration.queue';
 import { buildSeriesIdNameMap, isListsFile, normalizeLists } from './lib/lists';
 import { normalizeRatings, dedupeRatings, type NormalizedImportedRating } from './lib/ratings';
 import { normalizeEmotions, dedupeEmotions, type NormalizedImportedEmotion } from './lib/emotions';
+import { normalizeCharacterVotes, dedupeCharacterVotes, type NormalizedCharacterVote } from './lib/character-votes';
 import {
   resolveArchiveOwner,
   resolveArchiveLanguage,
@@ -1255,6 +1256,10 @@ export class ImportProcessor implements OnModuleInit {
       commentsSkippedUnresolved: 0,
       commentDuplicatesIgnored: 0,
       commentsSkippedInvalid: 0,
+      characterVotesDetected: 0,
+      characterVotesSkippedUnresolved: 0,
+      characterVoteDuplicatesIgnored: 0,
+      characterVotesSkippedInvalid: 0,
     };
 
     const fileInputs = files.map((f) => ({ filename: f.filename, rows: f.rows }));
@@ -1318,8 +1323,36 @@ export class ImportProcessor implements OnModuleInit {
     }
     await this.flushItems(importId, commentItems);
 
+    // ----- Character votes (show_character_episode_vote.csv) -----
+    // Episodes resolve via TVDB episode external ids (local), characters resolve at apply
+    // time via media_cast.characterExternalId (local) — no provider calls per vote.
+    const allCharVotes: NormalizedCharacterVote[] = [];
+    for (const f of files) {
+      const res = normalizeCharacterVotes(f.filename, f.rows);
+      counts.characterVotesDetected += res.detected;
+      counts.characterVotesSkippedInvalid += res.invalid;
+      allCharVotes.push(...res.candidates);
+    }
+    const charVoteUnique = dedupeCharacterVotes(allCharVotes);
+    counts.characterVoteDuplicatesIgnored += allCharVotes.length - charVoteUnique.length;
+    const charVoteItems: any[] = [];
+    for (const c of charVoteUnique) {
+      const { mediaId, episodeId, confidence, status } = await this.resolveShowEpisode(
+        c.showTitle,
+        c.seasonNumber,
+        c.episodeNumber,
+        showMediaByNorm,
+        false, // episode required — a character vote without an episode is meaningless
+        archiveLang,
+        c.externalEpisodeId,
+      );
+      if (status !== 'MATCHED') counts.characterVotesSkippedUnresolved++;
+      charVoteItems.push(this.buildCharacterVoteItem(importId, c, mediaId, episodeId, confidence, status));
+    }
+    await this.flushItems(importId, charVoteItems);
+
     this.logger.log(
-      `Import ${importId} staged ratings=${ratingDedup.unique.length} emotions=${emotionDedup.unique.length} comments=${commentDedup.unique.length}` +
+      `Import ${importId} staged ratings=${ratingDedup.unique.length} emotions=${emotionDedup.unique.length} comments=${commentDedup.unique.length} characterVotes=${charVoteUnique.length}` +
         (ownerId ? '' : ' (comment owner unknown — no comments imported)'),
     );
 
@@ -1474,6 +1507,38 @@ export class ImportProcessor implements OnModuleInit {
         seasonNumber: (c as any).seasonNumber ?? null,
         episodeNumber: (c as any).episodeNumber ?? null,
         externalEpisodeId: (c as any).externalEpisodeId ?? null,
+        sourceCreatedAt: c.sourceCreatedAt?.toISOString() ?? null,
+        sourceUpdatedAt: c.sourceUpdatedAt?.toISOString() ?? null,
+      } as any,
+      matchedMediaId: mediaId,
+      matchedEpisodeId: episodeId,
+      confidenceScore: confidence,
+    };
+  }
+
+  /** Build a staged ImportItem for a character-vote candidate. */
+  private buildCharacterVoteItem(
+    importId: string,
+    c: NormalizedCharacterVote,
+    mediaId: string | null,
+    episodeId: string | null,
+    confidence: number,
+    status: string,
+  ): any {
+    return {
+      importId,
+      rowNumber: c.sourceRow,
+      sourceEntityType: 'EPISODE_CHARACTER_VOTE' as ImportEntityType,
+      targetEntityType: 'EPISODE_CHARACTER_VOTE' as ImportEntityType,
+      status,
+      rawData: { sourceRow: c.sourceRow } as any,
+      normalizedData: {
+        showTitle: c.showTitle,
+        seasonNumber: c.seasonNumber,
+        episodeNumber: c.episodeNumber,
+        externalEpisodeId: c.externalEpisodeId,
+        showCharacterId: c.showCharacterId,
+        voteKey: c.voteKey,
         sourceCreatedAt: c.sourceCreatedAt?.toISOString() ?? null,
         sourceUpdatedAt: c.sourceUpdatedAt?.toISOString() ?? null,
       } as any,

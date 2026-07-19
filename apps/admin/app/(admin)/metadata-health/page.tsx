@@ -16,6 +16,7 @@ interface MetadataHealth {
   animeOnTmdb: number;
   animeOnTmdbNoTvdbId: number;
   structuralTypeMismatch: number;
+  castMissingCharacterIds: number;
 }
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -37,6 +38,8 @@ export default function MetadataHealthPage() {
   const [animeResult, setAnimeResult] = useState<string | null>(null);
   const [repairing, setRepairing] = useState(false);
   const [repairResult, setRepairResult] = useState<string | null>(null);
+  const [backfillingCast, setBackfillingCast] = useState(false);
+  const [castResult, setCastResult] = useState<string | null>(null);
   const [batchCount, setBatchCount] = useState('200');
   const [batchRps, setBatchRps] = useState('');
 
@@ -106,6 +109,19 @@ export default function MetadataHealthPage() {
       .finally(() => setRepairing(false));
   };
 
+  const runCastBackfill = () => {
+    setBackfillingCast(true);
+    setCastResult(null);
+    api
+      .post('/admin/cast-character-ids/run')
+      .then(() => {
+        setCastResult('Cast character-id backfill started in background. Stats refresh in 30s.');
+        setTimeout(() => load(), 30000);
+      })
+      .catch(() => setCastResult('Cast backfill failed to start.'))
+      .finally(() => setBackfillingCast(false));
+  };
+
   if (!canView) return <p className="p-6 text-sm text-zinc-500">Admins only.</p>;
 
   const pct = (n: number) => (stats && stats.total > 0 ? Math.round((n / stats.total) * 100) : 0);
@@ -138,6 +154,13 @@ export default function MetadataHealthPage() {
             className="rounded border border-blue-600 px-3 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
           >
             {repairing ? 'Starting…' : 'Repair Type Mismatch'}
+          </button>
+          <button
+            onClick={runCastBackfill}
+            disabled={backfillingCast}
+            className="rounded border border-blue-600 px-3 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+          >
+            {backfillingCast ? 'Starting…' : 'Backfill Character IDs'}
           </button>
           <button
             onClick={runBackfill}
@@ -184,6 +207,11 @@ export default function MetadataHealthPage() {
           {repairResult}
         </div>
       )}
+      {castResult && (
+        <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-800 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-200">
+          {castResult}
+        </div>
+      )}
 
       {loading || !stats ? (
         <p className="text-sm text-zinc-500">Loading…</p>
@@ -207,6 +235,12 @@ export default function MetadataHealthPage() {
               value={stats.structuralTypeMismatch}
               sub="movie/show merged into one row"
               highlight={stats.structuralTypeMismatch > 0}
+            />
+            <MetricCard
+              label="Cast Missing Character IDs"
+              value={stats.castMissingCharacterIds}
+              sub="shows with cast but no TVDB character ids"
+              highlight={stats.castMissingCharacterIds > 0}
             />
             <MetricCard label="Stale (30+ days)" value={stats.stale} sub={`${pct(stats.stale)}% of total`} highlight={stats.stale > 0} />
           </div>

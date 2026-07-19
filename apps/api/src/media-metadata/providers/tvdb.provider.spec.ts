@@ -44,16 +44,16 @@ describe('TvdbProvider — episode + translations', () => {
 
   it('returns localized series translations', async () => {
     const provider = new TvdbProvider(
-      fakeClient({ '/series/77/translations/ja': { name: 'タイトル', overview: 'あらすじ' } }) as any,
+      fakeClient({
+        '/series/77/translations/ja': { name: 'タイトル', overview: 'あらすじ' },
+      }) as any,
     );
     const t = await provider.getSeriesTranslations(77, 'ja');
     expect(t).toEqual({ title: 'タイトル', overview: 'あらすじ', locale: 'ja' });
   });
 
   it('returns null fields when a translation is missing', async () => {
-    const provider = new TvdbProvider(
-      fakeClient({ '/movies/9/translations/fr': {} }) as any,
-    );
+    const provider = new TvdbProvider(fakeClient({ '/movies/9/translations/fr': {} }) as any);
     const t = await provider.getMovieTranslations(9, 'fr');
     expect(t).toEqual({ title: null, overview: null, locale: 'fr' });
   });
@@ -101,10 +101,26 @@ describe('TvdbProvider — episode + translations', () => {
           name: 'Anime',
           status: { name: 'Continuing' },
           companies: [
-            { id: 433, name: 'AT-X', companyType: { companyTypeId: 1, companyTypeName: 'Network' } },
-            { id: 46193, name: 'WHITE FOX', companyType: { companyTypeId: 2, companyTypeName: 'Studio' } },
-            { id: 280, name: 'TV Tokyo', companyType: { companyTypeId: 1, companyTypeName: 'Network' } },
-            { id: 999, name: 'Third Net', companyType: { companyTypeId: 1, companyTypeName: 'Network' } },
+            {
+              id: 433,
+              name: 'AT-X',
+              companyType: { companyTypeId: 1, companyTypeName: 'Network' },
+            },
+            {
+              id: 46193,
+              name: 'WHITE FOX',
+              companyType: { companyTypeId: 2, companyTypeName: 'Studio' },
+            },
+            {
+              id: 280,
+              name: 'TV Tokyo',
+              companyType: { companyTypeId: 1, companyTypeName: 'Network' },
+            },
+            {
+              id: 999,
+              name: 'Third Net',
+              companyType: { companyTypeId: 1, companyTypeName: 'Network' },
+            },
           ],
         },
         '/series/42/episodes': { episodes: [] },
@@ -128,5 +144,45 @@ describe('TvdbProvider — episode + translations', () => {
     );
     const show = await provider.getShow(7, 'en');
     expect(show.network).toBe('HBO');
+  });
+
+  it('maps TVDB character ids onto cast (characterExternalId for TVTime vote resolution)', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/series/5/extended': {
+          id: 5,
+          name: 'Show',
+          status: { name: 'Ended' },
+          characters: [
+            {
+              id: 64771402,
+              name: 'Michael Scott',
+              personName: 'Steve Carell',
+              peopleId: 296807,
+              peopleType: 'Actor',
+              sort: 0,
+            },
+            {
+              id: 64771393,
+              name: 'Dwight Schrute',
+              personName: 'Rainn Wilson',
+              peopleId: 296808,
+              peopleType: 'Actor',
+              sort: 1,
+            },
+            { id: 999, name: 'Crew Person', personName: 'Someone', peopleType: 'Crew', sort: 2 }, // non-Actor filtered
+          ],
+        },
+        '/series/5/episodes': { episodes: [] },
+      }) as any,
+    );
+    const show = await provider.getShow(5, 'en');
+    expect(show.cast).toHaveLength(2);
+    expect(show.cast[0]).toMatchObject({
+      name: 'Steve Carell',
+      character: 'Michael Scott',
+      characterExternalId: 64771402,
+    });
+    expect(show.cast[1]).toMatchObject({ characterExternalId: 64771393 });
   });
 });

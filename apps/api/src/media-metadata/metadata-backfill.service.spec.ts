@@ -399,6 +399,42 @@ describe('MetadataBackfillService', () => {
     });
   });
 
+  describe('backfillCharacterIds', () => {
+    it('rehydrates shows whose cast lacks characterExternalId (one TVDB call per show)', async () => {
+      prisma.mediaItem.findMany.mockResolvedValue([
+        { id: 'm1', title: 'The Office', externalIds: [{ value: '73255' }] },
+        { id: 'm2', title: 'Broadchurch', externalIds: [{ value: '73996' }] },
+      ]);
+      const res = await service.backfillCharacterIds();
+      expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+        where: { id: 'm1' },
+        data: { metadataRefreshedAt: null },
+      });
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledTimes(2);
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(73255);
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(73996);
+      expect(res).toMatchObject({ processed: 2, succeeded: 2, failed: 0, rateLimited: 0 });
+    });
+
+    it('stops early on TVDB rate limits', async () => {
+      prisma.mediaItem.findMany.mockResolvedValue([
+        { id: 'm1', title: 'The Office', externalIds: [{ value: '73255' }] },
+        { id: 'm2', title: 'Broadchurch', externalIds: [{ value: '73996' }] },
+      ]);
+      meta.ensureShowFullTvdb.mockRejectedValue(new ProviderThrottled('tvdb', 1000));
+      const res = await service.backfillCharacterIds();
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledTimes(1);
+      expect(res.rateLimited).toBe(1);
+    });
+
+    it('does nothing when TVDB is not configured', async () => {
+      tvdb.enabled = false;
+      const res = await service.backfillCharacterIds();
+      expect(res.processed).toBe(0);
+      expect(prisma.mediaItem.findMany).not.toHaveBeenCalled();
+    });
+  });
+
   describe('repairTypeMismatches', () => {
     const mismatchRow = (over: Record<string, unknown> = {}) => ({
       id: 'movie-1',

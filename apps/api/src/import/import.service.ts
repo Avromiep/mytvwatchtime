@@ -166,7 +166,7 @@ export class ImportService {
     let resolved = 0;
     let matched = 0;
     let needsReview = 0;
-    const EPISODE_ENTITIES = ['WATCHED_EPISODE', 'EPISODE_RATING', 'EPISODE_EMOTION', 'EPISODE_COMMENT'];
+    const EPISODE_ENTITIES = ['WATCHED_EPISODE', 'EPISODE_RATING', 'EPISODE_EMOTION', 'EPISODE_COMMENT', 'EPISODE_CHARACTER_VOTE'];
 
     for (const it of items) {
       const norm: any = it.normalizedData ?? {};
@@ -299,6 +299,11 @@ export class ImportService {
       commentsSkippedUnresolved: imp.commentsSkippedUnresolved,
       commentDuplicatesIgnored: imp.commentDuplicatesIgnored,
       commentsSkippedInvalid: imp.commentsSkippedInvalid,
+      characterVotesDetected: imp.characterVotesDetected,
+      characterVotesImported: imp.characterVotesImported,
+      characterVotesSkippedUnresolved: imp.characterVotesSkippedUnresolved,
+      characterVoteDuplicatesIgnored: imp.characterVoteDuplicatesIgnored,
+      characterVotesSkippedInvalid: imp.characterVotesSkippedInvalid,
     };
   }
 
@@ -320,9 +325,9 @@ export class ImportService {
     let created = 0;
     let skipped = 0;
 
-    // Apply progress: 8 fixed sections run sequentially below; bump after each one.
+    // Apply progress: 9 fixed sections run sequentially below; bump after each one.
     let sectionsDone = 0;
-    const SECTIONS_TOTAL = 8;
+    const SECTIONS_TOTAL = 9;
     const sectionDone = async () => {
       sectionsDone++;
       await this.prisma.import
@@ -601,6 +606,10 @@ export class ImportService {
     const c = await this.applyComments(userId, importId, items, source);
     created += c.created;
     skipped += c.skipped;
+    await sectionDone();
+    const cv = await this.applyCharacterVotes(userId, importId, items, source);
+    created += cv.created;
+    skipped += cv.skipped;
     await sectionDone();
 
     return { created, skipped };
@@ -883,6 +892,139 @@ export class ImportService {
     }
 
     await this.prisma.import.update({ where: { id: importId }, data: { emotionsImported: { increment: created } } });
+    return { created, skipped };
+  }
+
+  /**
+   * Apply character votes (favorite character per episode) with fully local resolution:
+   *   episode  → staged matchedEpisodeId (resolved at staging via TVDB episode external ids)
+   *   character → media_cast.characterExternalId (TVDB character id, persisted by hydration)
+   * When a show's cast rows predate the characterExternalId field, the show is re-hydrated
+   * from TVDB ONCE per apply run (never one call per vote). Items whose character still
+   * can't be resolved stay MATCHED (retry on the next confirm) and are counted unresolved.
+   * Conflict policy mirrors ratings: create only when no vote exists; idempotent re-import
+   * via (source, sourceKey); manual votes are NEVER overwritten. Historical createdAt kept.
+   */
+  private async applyCharacterVotes(
+    userId: string,
+    importId: string,
+    items: any[],
+    source: ListSource = 'TVTIME',
+  ): Promise<{ created: number; skipped: number }> {
+    const voteItems = items.filter(
+      (it) => it.sourceEntityType === 'EPISODE_CHARACTER_VOTE' && it.status === 'MATCHED' && it.matchedEpisodeId && it.matchedMediaId,
+    );
+    if (!voteItems.length) return { created: 0, skipped: 0 };
+
+    let created = 0;
+    let skipped = 0;
+    let unresolved = 0;
+
+    const mediaIds = [...new Set(voteItems.map((it: any) => it.matchedMediaId as string))];
+    const charIds = [
+      ...new Set(
+        voteItems
+          .map((it: any) => Number(it.normalizedData?.showCharacterId))
+          .filter((n) => Number.isFinite(n) && n > 0),
+      ),
+    ];
+
+    const castKey = (mediaId: string, charId: number) => `${mediaId}:${charId}`;
+    const castMap = new Map<string, string>();
+    const loadCastRows = async () => {
+      const rows = await this.prisma.mediaCast.findMany({
+        where: { mediaId: { in: mediaIds }, characterExternalId: { in: charIds } },
+        select: { id: true, mediaId: true, characterExternalId: true },
+      });
+      for (const r of rows) castMap.set(castKey(r.mediaId, r.characterExternalId!), r.id);
+      return rows.length;
+    };
+    await loadCastRows();
+
+    // Shows whose requested characters are ALL missing and that predate the
+    // characterExternalId field: one TVDB re-hydration each (fills the whole cast), then
+    // a single re-read. Bounded to one call per show per run, zero per vote.
+    const missingMediaIds = mediaIds.filter((m) =>
+      charIds.some((c) => voteItems.some((it) => it.matchedMediaId === m && Number(it.normalizedData?.showCharacterId) === c) && !castMap.has(castKey(m, c))),
+    );
+    if (missingMediaIds.length > 0) {
+      for (const mediaId of missingMediaIds) {
+        await this.matcher.rehydrateWithTvdb(mediaId).catch(() => false);
+      }
+      await loadCastRows();
+    }
+
+    const epIds = [...new Set(voteItems.map((it: any) => it.matchedEpisodeId as string))];
+    const existingVotes = await this.prisma.characterVote.findMany({
+      where: { userId, episodeId: { in: epIds } },
+    });
+    const voteMap = new Map(existingVotes.map((v: any) => [v.episodeId, v]));
+
+    const toCreate: any[] = [];
+    const audit: any[] = [];
+    const appliedIds: string[] = [];
+
+    for (const it of voteItems) {
+      const norm: any = it.normalizedData ?? {};
+      const charId = Number(norm.showCharacterId);
+      const sourceKey: string = norm.voteKey ?? `episode:${norm.externalEpisodeId}:char:${charId}`;
+      const castId = castMap.get(castKey(it.matchedMediaId, charId));
+      if (!castId) {
+        // Not resolvable now (id not in top-20 cast, or id type mismatch) — leave MATCHED
+        // for a future confirm once cast data is richer; counted as unresolved.
+        unresolved++;
+        continue;
+      }
+      const existing: any = voteMap.get(it.matchedEpisodeId);
+      if (!existing) {
+        toCreate.push({
+          id: randomUUID(),
+          userId,
+          episodeId: it.matchedEpisodeId,
+          castId,
+          source,
+          sourceKey,
+          createdAt: norm.sourceCreatedAt ? new Date(norm.sourceCreatedAt) : new Date(),
+        });
+        audit.push({
+          id: randomUUID(),
+          importId,
+          importItemId: it.id,
+          targetTable: 'character_votes',
+          targetRecordId: castId,
+          action: 'created',
+        });
+        appliedIds.push(it.id);
+        created++;
+      } else {
+        // Already voted (manual, same import, or a different character): never overwrite.
+        skipped++;
+        appliedIds.push(it.id);
+      }
+    }
+
+    if (toCreate.length) {
+      await this.prisma.$transaction(
+        async (tx) => {
+          await this.chunkedCreateMany(tx, 'characterVote', toCreate, true);
+          await this.chunkedCreateMany(tx, 'importAppliedRecord', audit);
+          if (appliedIds.length) {
+            await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+          }
+        },
+        { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
+      );
+    } else if (appliedIds.length) {
+      await this.prisma.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+    }
+
+    await this.prisma.import.update({
+      where: { id: importId },
+      data: {
+        characterVotesImported: { increment: created },
+        characterVotesSkippedUnresolved: { increment: unresolved },
+      },
+    });
     return { created, skipped };
   }
 

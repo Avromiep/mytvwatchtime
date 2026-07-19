@@ -1,4 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { mapCurrentUser, mapPublicUser, dtoThemeToDb, dtoLangToDb } from '../common/utils/mapper.util';
@@ -86,27 +87,41 @@ export class UsersService {
   }
 
   async deleteMe(userId: string) {
-    await this.prisma.user.delete({ where: { id: userId } });
-    await this.redis.del(`auth:user:${userId}`); // evict the JWT existence cache
+    // Evict the JWT existence cache BEFORE the row delete so in-flight requests
+    // re-check the DB instead of racing through on the stale positive entry.
+    await this.redis.del(`auth:user:${userId}`);
+    // Idempotent: a retried delete (double-tap / client retry after a timeout)
+    // is a success — the account is already gone, which is the desired end state.
+    await this.prisma.user.deleteMany({ where: { id: userId } });
     return { ok: true };
   }
 
   async registerDevice(userId: string, dto: DeviceRegisterDto) {
-    const device = await this.prisma.device.upsert({
-      where: { token: dto.token },
-      create: {
-        userId,
-        token: dto.token,
-        platform: dto.platform,
-        appVersion: dto.appVersion,
-        timezone: dto.timezone,
-        pushP256dh: dto.pushP256dh,
-        pushAuth: dto.pushAuth,
-        active: true,
-      },
-      update: { userId, platform: dto.platform, appVersion: dto.appVersion, timezone: dto.timezone, pushP256dh: dto.pushP256dh, pushAuth: dto.pushAuth, active: true },
-    });
-    return { id: device.id };
+    try {
+      const device = await this.prisma.device.upsert({
+        where: { token: dto.token },
+        create: {
+          userId,
+          token: dto.token,
+          platform: dto.platform,
+          appVersion: dto.appVersion,
+          timezone: dto.timezone,
+          pushP256dh: dto.pushP256dh,
+          pushAuth: dto.pushAuth,
+          active: true,
+        },
+        update: { userId, platform: dto.platform, appVersion: dto.appVersion, timezone: dto.timezone, pushP256dh: dto.pushP256dh, pushAuth: dto.pushAuth, active: true },
+      });
+      return { id: device.id };
+    } catch (e) {
+      // The JWT guard caches user existence briefly (60s), so a request can arrive
+      // right after the account was deleted — the FK to users fails. That's an
+      // auth-state problem, not a server error.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2003') {
+        throw new NotFoundException('User not found');
+      }
+      throw e;
+    }
   }
 
   async removeDevice(userId: string, deviceId: string) {

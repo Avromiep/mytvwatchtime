@@ -28,6 +28,8 @@
   "watchedMovies": "已看电影",
   "episodes": "集数",
   "noTitle": "（无标题）",
+  "characterVoteLabel": "角色投票",
+  "characterVotes": "角色投票",
   "noItems": "此视图中没有项目。",
   "disabledTitle": "导入功能暂时关闭",
   "disabledDesc": "请稍后再试。",

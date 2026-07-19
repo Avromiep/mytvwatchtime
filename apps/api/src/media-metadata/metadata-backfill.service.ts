@@ -33,6 +33,8 @@ export class MetadataBackfillService {
   private animeFixRunning = false;
   /** Prevents concurrent type-mismatch repair batches. */
   private typeRepairRunning = false;
+  /** Prevents concurrent cast character-id backfills. */
+  private charIdFixRunning = false;
   /** In-flight per-show repairs — concurrent callers (detail + episodes requests arriving
    *  together, or a view racing the cron) share ONE repair instead of double-hydrating. */
   private readonly animeFixInflight = new Map<string, Promise<{ fixed: boolean; remapped: number }>>();
@@ -62,6 +64,7 @@ export class MetadataBackfillService {
       animeOnTmdb,
       animeOnTmdbNoTvdbId,
       structuralTypeMismatch,
+      castMissingCharacterIds,
     ] = await Promise.all([
       this.prisma.mediaItem.count(),
       this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
@@ -113,6 +116,12 @@ export class MetadataBackfillService {
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
           WHERE (m.type='MOVIE' AND EXISTS (SELECT 1 FROM shows sh WHERE sh.media_id = m.id))
              OR (m.type='SHOW' AND EXISTS (SELECT 1 FROM movies mv WHERE mv.media_id = m.id))`,
+      // Shows with a cast but NO TVDB character ids yet (cast predates the
+      // characterExternalId field — a TVDB rehydration fills the whole cast at once).
+      this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
+          WHERE m.type='SHOW'
+            AND EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id)
+            AND NOT EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id AND mc.character_external_id IS NOT NULL)`,
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     return {
@@ -131,6 +140,7 @@ export class MetadataBackfillService {
       animeOnTmdb: toNum(animeOnTmdb as any),
       animeOnTmdbNoTvdbId: toNum(animeOnTmdbNoTvdbId as any),
       structuralTypeMismatch: toNum(structuralTypeMismatch as any),
+      castMissingCharacterIds: toNum(castMissingCharacterIds as any),
     };
   }
 
@@ -692,6 +702,82 @@ export class MetadataBackfillService {
   private async deleteStrayStructure(mediaId: string, isMovieRow: boolean): Promise<void> {
     if (isMovieRow) await this.prisma.show.delete({ where: { mediaId } }).catch(() => undefined);
     else await this.prisma.movie.delete({ where: { mediaId } }).catch(() => undefined);
+  }
+
+  // ---- Cast character-id backfill (admin button) ----
+
+  /**
+   * Fill `media_cast.characterExternalId` (TVDB character ids) for shows whose cast rows
+   * predate the field. One full TVDB hydration per show — the cast rewrite fills every
+   * role at once; never per-character calls. Powers TVTime character-vote resolution.
+   * Stops early on TVDB rate limits (the stat shows the remainder).
+   */
+  async backfillCharacterIds(limit?: number): Promise<{
+    processed: number;
+    succeeded: number;
+    failed: number;
+    rateLimited: number;
+    sample: string[];
+  }> {
+    const empty = { processed: 0, succeeded: 0, failed: 0, rateLimited: 0, sample: [] as string[] };
+    if (this.charIdFixRunning) {
+      this.logger.log('Character-id backfill already running — skipping');
+      return empty;
+    }
+    if (!this.tvdb.enabled) {
+      this.logger.warn('TVDB not configured — skipping character-id backfill');
+      return empty;
+    }
+    this.charIdFixRunning = true;
+    try {
+      const candidates = await this.prisma.mediaItem.findMany({
+        where: {
+          type: 'SHOW',
+          cast: { some: {} },
+          NOT: { cast: { some: { characterExternalId: { not: null } } } },
+          externalIds: { some: { provider: ExternalProvider.THE_TVDB } },
+        },
+        orderBy: { title: 'asc' },
+        take: Math.max(1, Math.min(limit ?? 500, 100000)),
+        select: {
+          id: true,
+          title: true,
+          externalIds: { where: { provider: ExternalProvider.THE_TVDB }, take: 1, select: { value: true } },
+        },
+      });
+
+      let succeeded = 0;
+      let failed = 0;
+      let rateLimited = 0;
+      const sample: string[] = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const m = candidates[i];
+        try {
+          // Bypass the 24h isStale gate — the cast rewrite only happens on a full refresh.
+          await this.prisma.mediaItem.update({ where: { id: m.id }, data: { metadataRefreshedAt: null } });
+          await this.meta.ensureShowFullTvdb(Number(m.externalIds[0].value));
+          succeeded++;
+          if (sample.length < 5) sample.push(m.title);
+        } catch (e) {
+          if (this.isRateLimitError(e)) {
+            rateLimited++;
+            this.logger.warn(`Character-id backfill rate-limited after ${i} shows — deferring the rest`);
+            break;
+          }
+          failed++;
+          this.logger.debug(`character-id backfill failed for ${m.title}: ${(e as Error).message}`);
+        }
+        if ((i + 1) % 25 === 0) {
+          this.logger.log(`Character-id backfill progress: ${i + 1}/${candidates.length} (${succeeded} ok, ${failed} fail)`);
+        }
+      }
+      this.logger.log(
+        `Character-id backfill: ${succeeded}/${candidates.length} rehydrated, ${failed} failed, ${rateLimited} rate-limited`,
+      );
+      return { processed: candidates.length, succeeded, failed, rateLimited, sample };
+    } finally {
+      this.charIdFixRunning = false;
+    }
   }
 
   // ---- TMDB Changes sync (daily cron) ----

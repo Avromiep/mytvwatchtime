@@ -230,6 +230,7 @@ enum ImportEntityType {
   EPISODE_COMMENT
   MOVIE_COMMENT
   SHOW_COMMENT
+  EPISODE_CHARACTER_VOTE
   LIST
   LIST_ITEM
   UNKNOWN
@@ -710,6 +711,8 @@ model MediaCast {
   character   String?
   sortOrder   Int      @map("sort_order")
   seasonNumber Int?    @map("season_number")
+  /// TVDB character id of this role — enables local resolution of TVTime character votes.
+  characterExternalId Int? @map("character_external_id")
 
   media      MediaItem   @relation(fields: [mediaId], references: [id], onDelete: Cascade)
   castMember CastMember  @relation(fields: [castMemberId], references: [id], onDelete: Cascade)
@@ -718,6 +721,7 @@ model MediaCast {
   characterVotes CharacterVote[]
 
   @@index([mediaId])
+  @@index([mediaId, characterExternalId])
   @@map("media_cast")
 }
 
@@ -926,6 +930,8 @@ model CharacterVote {
   userId        String   @map("user_id")
   episodeId     String   @map("episode_id")
   castId        String   @map("cast_id")
+  source        ListSource? @default(MANUAL) @map("source")
+  sourceKey     String?     @map("source_key")
   createdAt     DateTime @default(now()) @map("created_at")
 
   user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -935,6 +941,7 @@ model CharacterVote {
   @@unique([userId, episodeId])
   @@index([episodeId])
   @@index([castId])
+  @@index([userId, source, sourceKey])
   @@map("character_votes")
 }
 
@@ -1212,6 +1219,11 @@ model Import {
   commentsSkippedUnresolved      Int @default(0) @map("comments_skipped_unresolved")
   commentDuplicatesIgnored       Int @default(0) @map("comment_duplicates_ignored")
   commentsSkippedInvalid         Int @default(0) @map("comments_skipped_invalid")
+  characterVotesDetected           Int @default(0) @map("character_votes_detected")
+  characterVotesImported           Int @default(0) @map("character_votes_imported")
+  characterVotesSkippedUnresolved  Int @default(0) @map("character_votes_skipped_unresolved")
+  characterVoteDuplicatesIgnored   Int @default(0) @map("character_vote_duplicates_ignored")
+  characterVotesSkippedInvalid     Int @default(0) @map("character_votes_skipped_invalid")
   locale             String?        @map("locale")
   errorMessage     String?        @map("error_message")
   createdAt        DateTime       @default(now()) @map("created_at")

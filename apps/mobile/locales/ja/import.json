@@ -28,6 +28,8 @@
   "watchedMovies": "視聴済み映画",
   "episodes": "エピソード",
   "noTitle": "（タイトルなし）",
+  "characterVoteLabel": "キャラクター投票",
+  "characterVotes": "キャラクター投票",
   "noItems": "この表示には項目がありません。",
   "disabledTitle": "インポートは一時的に無効です",
   "disabledDesc": "しばらくしてからもう一度お試しください。",

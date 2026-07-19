@@ -1314,9 +1314,9 @@ export class MediaMetadataService {
     tx: PrismaTransaction,
     mediaId: string,
     castMemberIds: string[],
-    cast: { tmdbPersonId?: number; character?: string | null; order: number }[],
+    cast: { tmdbPersonId?: number; character?: string | null; characterExternalId?: number | null; order: number }[],
     lang: string = currentLanguage(),
-    enCast?: { tmdbPersonId?: number; character?: string | null; order: number }[],
+    enCast?: { tmdbPersonId?: number; character?: string | null; characterExternalId?: number | null; order: number }[],
   ) {
     // Preserve other locales' characters: read existing JSON before recreating rows.
     const existing = await tx.mediaCast.findMany({
@@ -1337,6 +1337,9 @@ export class MediaMetadataService {
           character: enChar ?? c?.character ?? null,
           characters,
           sortOrder: c?.order ?? i,
+          // TVDB character id of the role (null for TMDB-hydrated casts) — enables
+          // local resolution of TVTime character votes without provider calls.
+          characterExternalId: c?.characterExternalId ?? null,
         },
       });
     }
