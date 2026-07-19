@@ -135,9 +135,13 @@ export const useSearch = (q: string, type?: MediaType) =>
     getNextPageParam: (last) => (last?.hasMore ? last.page + 1 : undefined),
     enabled: q.length > 1,
   });
-export const useDiscoverSections = () =>
+export const useDiscoverSections = (userId?: string) =>
+  // User-scoped key: the server's anonymous fallback (topForYou = trending) must NEVER
+  // share a cache entry with the personalized sections — otherwise a token-less early
+  // request (cold start / expired token) shows trending as "Top shows for you" until
+  // the next manual refetch.
   useQuery({
-    queryKey: qk.discover(),
+    queryKey: [...qk.discover(), userId ?? 'anon'],
     queryFn: () => api.get<DiscoverSectionsDto>('/discover/sections'),
   });
 export const useDiscoverShows = (p: any) =>

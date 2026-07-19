@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { AuthProvider } from '@prisma/client';
-import { IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsBoolean, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class EmailRegisterDto {
   @ApiProperty()
@@ -26,6 +26,12 @@ export class EmailLoginDto {
   @ApiProperty()
   @IsString()
   password!: string;
+
+  /** Long-lived access token (30d) for trusted "stay connected" sessions (admin console). */
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  rememberMe?: boolean;
 }
 
 export class SocialLoginDto {

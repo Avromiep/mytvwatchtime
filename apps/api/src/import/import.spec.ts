@@ -42,6 +42,12 @@ describe('import inference', () => {
     expect(detectProfile('x.csv', ['title', 'season', 'episode'])).toBe('generic_episode');
   });
 
+  it('skips tv_show_rate.csv (owned by the ratings pass — never a watched-movie source)', () => {
+    expect(detectProfile('tv_show_rate.csv', ['user_id', 'tv_show_id', 'rating', 'created_at', 'tv_show_name'])).toBe(
+      'unknown',
+    );
+  });
+
   it('normalizes a watched episode row', () => {
     const items = normalizeRow('tvtime_watched_episode', {
       tv_show_name: 'FROM',

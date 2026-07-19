@@ -19,15 +19,20 @@ function mockPrisma() {
     show: model(['delete']),
     movie: model(['delete']),
     userEpisodeStatus: model(['count']),
+    userMovieStatus: model(['deleteMany']),
+    watchHistory: model(['deleteMany']),
     rating: model(['count']),
     reaction: model(['count']),
     characterVote: model(['count']),
     $queryRaw: jest.fn().mockResolvedValue([{ c: BigInt(0) }]),
+    $transaction: jest.fn(async (arg: any) => (Array.isArray(arg) ? Promise.all(arg) : arg(p))),
   } as any;
   p.userEpisodeStatus.count.mockResolvedValue(0);
   p.rating.count.mockResolvedValue(0);
   p.reaction.count.mockResolvedValue(0);
   p.characterVote.count.mockResolvedValue(0);
+  p.userMovieStatus.deleteMany.mockResolvedValue({ count: 0 });
+  p.watchHistory.deleteMany.mockResolvedValue({ count: 0 });
   return p;
 }
 
@@ -436,6 +441,22 @@ describe('MetadataBackfillService', () => {
   });
 
   describe('repairTypeMismatches', () => {
+    it('purges movie statuses/history on show rows before structural repairs', async () => {
+      prisma.mediaItem.findMany.mockResolvedValue([]);
+      prisma.userMovieStatus.deleteMany.mockResolvedValue({ count: 536 });
+      prisma.watchHistory.deleteMany.mockResolvedValue({ count: 536 });
+
+      const res = await service.repairTypeMismatches();
+
+      expect(prisma.userMovieStatus.deleteMany).toHaveBeenCalledWith({
+        where: { media: { type: 'SHOW' } },
+      });
+      expect(prisma.watchHistory.deleteMany).toHaveBeenCalledWith({
+        where: { mediaType: 'MOVIE', media: { type: 'SHOW' } },
+      });
+      expect(res).toMatchObject({ processed: 0, repaired: 0, failed: 0 });
+    });
+
     const mismatchRow = (over: Record<string, unknown> = {}) => ({
       id: 'movie-1',
       type: 'MOVIE',

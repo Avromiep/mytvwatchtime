@@ -9,6 +9,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -16,7 +17,7 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true); setError('');
     try {
-      await login(email, password);
+      await login(email, password, rememberMe);
       router.push('/');
     } catch (err: any) {
       setError(err?.response?.data?.message || err.message || 'Login failed');
@@ -48,6 +49,15 @@ export default function LoginPage() {
               className="w-full mt-1 px-4 py-3 bg-surface-alt rounded-lg border border-border text-white focus:border-accent focus:outline-none transition"
             />
           </div>
+          <label className="flex items-center gap-2 text-sm text-white/60 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="h-4 w-4 accent-[var(--accent)]"
+            />
+            Stay connected for 30 days
+          </label>
           {error ? <div className="text-danger text-sm bg-danger/10 rounded-lg px-4 py-2 border border-danger/20">{error}</div> : null}
           <button
             type="submit" disabled={loading}

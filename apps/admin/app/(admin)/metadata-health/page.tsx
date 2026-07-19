@@ -17,6 +17,7 @@ interface MetadataHealth {
   animeOnTmdbNoTvdbId: number;
   structuralTypeMismatch: number;
   castMissingCharacterIds: number;
+  movieDataOnShows: number;
 }
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -241,6 +242,12 @@ export default function MetadataHealthPage() {
               value={stats.castMissingCharacterIds}
               sub="shows with cast but no TVDB character ids"
               highlight={stats.castMissingCharacterIds > 0}
+            />
+            <MetricCard
+              label="Movie Data on Shows"
+              value={stats.movieDataOnShows}
+              sub="movie statuses/history on shows — Repair purges"
+              highlight={stats.movieDataOnShows > 0}
             />
             <MetricCard label="Stale (30+ days)" value={stats.stale} sub={`${pct(stats.stale)}% of total`} highlight={stats.stale > 0} />
           </div>

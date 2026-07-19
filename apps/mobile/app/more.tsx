@@ -6,6 +6,7 @@ import { Header } from '../components/Header';
 import { PosterCard, cardProgress } from '../components/cards';
 import { EmptyState, Screen, Spinner } from '../components/primitives';
 import { useDiscoverSections, useAllFavorites, useAllWatchlist } from '../api/hooks';
+import { useAuth } from '../context/AuthContext';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAppearance } from '../context/PreferencesProvider';
@@ -58,7 +59,8 @@ export default function MoreScreen() {
 
   const pageQuery = useQuery({
     queryKey: ['trending-page', trendingType, page],
-    queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/${trendingType}?page=${page}`),
+    queryFn: () =>
+      api.get<{ items: any[]; hasMore: boolean }>(`/trending/${trendingType}?page=${page}`),
     enabled: isTrending,
     staleTime: 60000,
   });
@@ -88,7 +90,8 @@ export default function MoreScreen() {
   }, [hasMore, loadingMore, pageQuery.isFetching]);
 
   // --- Collection hooks (auto-paged to the end — see-alls show exactly what the user has) ---
-  const sections = useDiscoverSections();
+  const { user } = useAuth();
+  const sections = useDiscoverSections(user?.id);
   const watchlistShows = useAllWatchlist(MediaType.SHOW);
   const watchlistMovies = useAllWatchlist(MediaType.MOVIE);
   const favShows = useAllFavorites(MediaType.SHOW);
@@ -102,11 +105,26 @@ export default function MoreScreen() {
     loading = page === 1 && allItems.length === 0 && pageQuery.isLoading;
   } else {
     switch (tab) {
-      case 'top-for-you': items = sections.data?.topForYou ?? []; loading = sections.isLoading; break;
-      case 'watchlist-shows': items = watchlistShows.items; loading = watchlistShows.isLoading; break;
-      case 'watchlist-movies': items = watchlistMovies.items; loading = watchlistMovies.isLoading; break;
-      case 'favorites-shows': items = favShows.items; loading = favShows.isLoading; break;
-      case 'favorites-movies': items = favMovies.items; loading = favMovies.isLoading; break;
+      case 'top-for-you':
+        items = sections.data?.topForYou ?? [];
+        loading = sections.isLoading;
+        break;
+      case 'watchlist-shows':
+        items = watchlistShows.items;
+        loading = watchlistShows.isLoading;
+        break;
+      case 'watchlist-movies':
+        items = watchlistMovies.items;
+        loading = watchlistMovies.isLoading;
+        break;
+      case 'favorites-shows':
+        items = favShows.items;
+        loading = favShows.isLoading;
+        break;
+      case 'favorites-movies':
+        items = favMovies.items;
+        loading = favMovies.isLoading;
+        break;
     }
   }
 
@@ -126,7 +144,12 @@ export default function MoreScreen() {
           key={cols}
           data={rows}
           keyExtractor={(r) => r.key}
-          contentContainerStyle={{ padding: spacing.lg, maxWidth: 1200, width: '100%', alignSelf: 'center' }}
+          contentContainerStyle={{
+            padding: spacing.lg,
+            maxWidth: 1200,
+            width: '100%',
+            alignSelf: 'center',
+          }}
           ListEmptyComponent={<EmptyState title={t('common:nothingHereYet')} icon="film-outline" />}
           onEndReached={isTrending ? loadMore : undefined}
           onEndReachedThreshold={0.5}

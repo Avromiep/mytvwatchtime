@@ -380,23 +380,57 @@ export class ImportService {
     const epItems = items.filter(
       (it) => it.sourceEntityType === 'WATCHED_EPISODE' && it.matchedMediaId && it.matchedEpisodeId,
     );
-    const movieItems = items.filter(
+    const movieItemsRaw = items.filter(
       (it) => it.sourceEntityType === 'WATCHED_MOVIE' && it.matchedMediaId,
     );
-    const watchlistItems = items.filter(
+    const watchlistItemsRaw = items.filter(
       (it) =>
         (it.sourceEntityType === 'WATCHLIST_SHOW' || it.sourceEntityType === 'WATCHLIST_MOVIE') &&
         it.matchedMediaId,
     );
-    const favoriteItems = items.filter(
+    const favoriteItemsRaw = items.filter(
       (it) =>
         (it.sourceEntityType === 'FAVORITE_SHOW' || it.sourceEntityType === 'FAVORITE_MOVIE') &&
         it.matchedMediaId,
     );
 
+    // Cross-type guard: user data must never be applied to a media row of the wrong
+    // entity type (a mis-tagged import item or a bad external-id cross-link could
+    // otherwise write movie statuses/history onto shows). One batched type read.
+    const guardIds = [
+      ...new Set(
+        [...epItems, ...movieItemsRaw, ...watchlistItemsRaw, ...favoriteItemsRaw].map(
+          (it) => it.matchedMediaId as string,
+        ),
+      ),
+    ];
+    const typeRows = guardIds.length
+      ? await this.prisma.mediaItem.findMany({
+          where: { id: { in: guardIds } },
+          select: { id: true, type: true },
+        })
+      : [];
+    const typeById = new Map(typeRows.map((r) => [r.id, r.type]));
+    const guardFilter = (it: any, expected: string): boolean => {
+      if (typeById.get(it.matchedMediaId) === expected) return true;
+      skipped++;
+      this.logger.warn(
+        `apply guard: dropping ${it.sourceEntityType} item ${it.id} — matched media is ${typeById.get(it.matchedMediaId) ?? 'missing'}, expected ${expected}`,
+      );
+      return false;
+    };
+    const epItemsGuarded = epItems.filter((it) => guardFilter(it, 'SHOW'));
+    const movieItems = movieItemsRaw.filter((it) => guardFilter(it, 'MOVIE'));
+    const watchlistItems = watchlistItemsRaw.filter((it) =>
+      guardFilter(it, it.sourceEntityType === 'WATCHLIST_MOVIE' ? 'MOVIE' : 'SHOW'),
+    );
+    const favoriteItems = favoriteItemsRaw.filter((it) =>
+      guardFilter(it, it.sourceEntityType === 'FAVORITE_MOVIE' ? 'MOVIE' : 'SHOW'),
+    );
+
     // --- WATCHED EPISODES ---
-    if (epItems.length) {
-      const episodeIds = epItems.map((it) => it.matchedEpisodeId);
+    if (epItemsGuarded.length) {
+      const episodeIds = epItemsGuarded.map((it) => it.matchedEpisodeId);
       const [episodeData, existingWatched] = await Promise.all([
         this.prisma.episode.findMany({
           where: { id: { in: episodeIds } },
@@ -421,7 +455,7 @@ export class ImportService {
       // even when the two files spell the show title differently (→ different normTitle,
       // → not merged earlier, but same matchedEpisodeId here).
       const watchCountByEpisode = new Map<string, number>();
-      for (const it of epItems) {
+      for (const it of epItemsGuarded) {
         const c = Math.max(1, Number(it.normalizedData?.watchCount) || 1);
         watchCountByEpisode.set(
           it.matchedEpisodeId,
@@ -437,7 +471,7 @@ export class ImportService {
       const bumpUpdates: { id: string; watchCount: number }[] = [];
       let sectionCreated = 0;
       let sectionBumped = 0;
-      for (const it of epItems) {
+      for (const it of epItemsGuarded) {
         const epId = it.matchedEpisodeId;
         const importedCount = watchCountByEpisode.get(epId) ?? 1;
 

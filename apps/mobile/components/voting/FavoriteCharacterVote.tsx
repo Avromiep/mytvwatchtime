@@ -121,7 +121,7 @@ export function FavoriteCharacterVote({
 }
 
 const styles = StyleSheet.create({
-  item: { width: 84, marginRight: spacing.md, alignItems: 'center' },
+  item: { width: 84, marginRight: spacing.xs, alignItems: 'center' },
   avatarWrap: {
     width: PORTRAIT_W,
     height: PORTRAIT_H,

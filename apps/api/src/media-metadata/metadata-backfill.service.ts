@@ -65,6 +65,7 @@ export class MetadataBackfillService {
       animeOnTmdbNoTvdbId,
       structuralTypeMismatch,
       castMissingCharacterIds,
+      movieDataOnShows,
     ] = await Promise.all([
       this.prisma.mediaItem.count(),
       this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
@@ -122,6 +123,11 @@ export class MetadataBackfillService {
           WHERE m.type='SHOW'
             AND EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id)
             AND NOT EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id AND mc.character_external_id IS NOT NULL)`,
+      // User-data type mismatch: movie statuses/history written onto SHOW rows (never
+      // legitimate — purged by the type-mismatch repair).
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT (SELECT count(*)::bigint FROM user_movie_status u JOIN media_items m ON m.id = u.media_id WHERE m.type='SHOW')
+             + (SELECT count(*)::bigint FROM watch_history h JOIN media_items m ON m.id = h.media_id WHERE m.type='SHOW' AND h.media_type='MOVIE') AS c`,
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     return {
@@ -141,6 +147,7 @@ export class MetadataBackfillService {
       animeOnTmdbNoTvdbId: toNum(animeOnTmdbNoTvdbId as any),
       structuralTypeMismatch: toNum(structuralTypeMismatch as any),
       castMissingCharacterIds: toNum(castMissingCharacterIds as any),
+      movieDataOnShows: toNum(movieDataOnShows as any),
     };
   }
 
@@ -534,6 +541,19 @@ export class MetadataBackfillService {
     }
     this.typeRepairRunning = true;
     try {
+      // User-data type mismatches first: movie statuses/history written onto SHOW rows
+      // (e.g. by a mis-tagged import item). These rows are provably garbage — a movie
+      // status/history on a show can never be legitimate — and hide shows under My Movies.
+      const [statusDel, historyDel] = await this.prisma.$transaction([
+        this.prisma.userMovieStatus.deleteMany({ where: { media: { type: 'SHOW' } } }),
+        this.prisma.watchHistory.deleteMany({ where: { mediaType: 'MOVIE', media: { type: 'SHOW' } } }),
+      ]);
+      if (statusDel.count + historyDel.count > 0) {
+        this.logger.log(
+          `Type mismatch repair: removed ${statusDel.count} movie statuses + ${historyDel.count} movie history rows on shows`,
+        );
+      }
+
       const mismatches = await this.prisma.mediaItem.findMany({
         where: {
           OR: [

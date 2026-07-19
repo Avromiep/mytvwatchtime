@@ -1,11 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
+import {
+  FlatList,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { Header } from '../../components/Header';
 import { Carousel, PosterCard } from '../../components/cards';
 import { Chip, Screen, Spinner, T } from '../../components/primitives';
 import { useDiscoverSections, useSearch } from '../../api/hooks';
+import { useAuth } from '../../context/AuthContext';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing, typography } from '../../theme/theme';
@@ -28,9 +38,14 @@ export default function ExploreScreen() {
 
   const searching = debouncedQ.length > 1;
   const search = useSearch(debouncedQ, undefined);
-  const sections = useDiscoverSections();
+  const { user } = useAuth();
+  const sections = useDiscoverSections(user?.id);
   const [refreshing, setRefreshing] = useState(false);
-  const onRefresh = useCallback(async () => { setRefreshing(true); await sections.refetch(); setRefreshing(false); }, [sections]);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await sections.refetch();
+    setRefreshing(false);
+  }, [sections]);
 
   // Adaptive grid: column count scales with the available width (same approach
   // as My Shows). Renders pre-grouped rows per the project grid pattern.
@@ -39,9 +54,13 @@ export default function ExploreScreen() {
   const cols = Math.max(2, Math.floor((containerW + gridGap) / (110 + gridGap)));
   const cellW = Math.floor((containerW - gridGap * (cols - 1)) / cols);
 
-  const searchItems = useMemo(() => (search.data?.pages ?? []).flatMap((p) => p.items ?? []), [search.data]);
-  const searchRows: typeof searchItems[] = [];
-  for (let i = 0; i < searchItems.length; i += cols) searchRows.push(searchItems.slice(i, i + cols));
+  const searchItems = useMemo(
+    () => (search.data?.pages ?? []).flatMap((p) => p.items ?? []),
+    [search.data],
+  );
+  const searchRows: (typeof searchItems)[] = [];
+  for (let i = 0; i < searchItems.length; i += cols)
+    searchRows.push(searchItems.slice(i, i + cols));
 
   useTabPressReset(() => {
     setQ('');
@@ -54,7 +73,12 @@ export default function ExploreScreen() {
       <Header title={t('explore:title')} />
       <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }}>
         <View style={[styles.search, { backgroundColor: tokens.surface }]}>
-          <Ionicons name="search" size={18} color={tokens.textMuted} style={{ marginHorizontal: spacing.sm }} />
+          <Ionicons
+            name="search"
+            size={18}
+            color={tokens.textMuted}
+            style={{ marginHorizontal: spacing.sm }}
+          />
           <TextInput
             value={q}
             onChangeText={setQ}
@@ -63,14 +87,29 @@ export default function ExploreScreen() {
             style={[styles.input, { color: tokens.textPrimary }]}
           />
           {q.length > 0 ? (
-            <Pressable onPress={() => { setQ(''); setDebouncedQ(''); }} hitSlop={10} style={{ paddingHorizontal: spacing.sm }}>
+            <Pressable
+              onPress={() => {
+                setQ('');
+                setDebouncedQ('');
+              }}
+              hitSlop={10}
+              style={{ paddingHorizontal: spacing.sm }}
+            >
               <Ionicons name="close-circle" size={20} color={tokens.textMuted} />
             </Pressable>
           ) : null}
         </View>
         <View style={{ flexDirection: 'row', marginTop: spacing.sm }}>
-          <Chip label={t('explore:discover')} active={category === 'discover'} onPress={() => setCategory('discover')} />
-          <Chip label={t('explore:feed')} active={category === 'feed'} onPress={() => setCategory('feed')} />
+          <Chip
+            label={t('explore:discover')}
+            active={category === 'discover'}
+            onPress={() => setCategory('discover')}
+          />
+          <Chip
+            label={t('explore:feed')}
+            active={category === 'feed'}
+            onPress={() => setCategory('feed')}
+          />
           <Chip label={t('explore:groups')} onPress={() => router.push('/groups' as any)} />
         </View>
       </View>
@@ -85,8 +124,14 @@ export default function ExploreScreen() {
             key={`grid-${cols}`}
             contentContainerStyle={{ padding: spacing.lg }}
             keyExtractor={(row, i) => row[0]?.id ?? `row-${i}`}
-            ListEmptyComponent={<T variant="body" muted>{t('explore:noResults', { query: debouncedQ })}</T>}
-            onEndReached={() => { if (search.hasNextPage && !search.isFetchingNextPage) search.fetchNextPage(); }}
+            ListEmptyComponent={
+              <T variant="body" muted>
+                {t('explore:noResults', { query: debouncedQ })}
+              </T>
+            }
+            onEndReached={() => {
+              if (search.hasNextPage && !search.isFetchingNextPage) search.fetchNextPage();
+            }}
             onEndReachedThreshold={0.6}
             ListFooterComponent={search.isFetchingNextPage ? <Spinner /> : null}
             renderItem={({ item: row }) => {
@@ -96,10 +141,25 @@ export default function ExploreScreen() {
                   {row.map((item) => {
                     const year = (item as any).yearStart ?? (item as any).releaseYear ?? null;
                     return (
-                      <View key={item.id} style={{ width: cellW, marginRight: gridGap, marginBottom: gridGap }}>
-                        <PosterCard id={item.id} kind={item.type === 'SHOW' ? 'shows' : 'movies'} title={item.title} poster={item.images?.poster ?? item.images?.backdrop} width={cellW} style={{ marginRight: 0 }} />
+                      <View
+                        key={item.id}
+                        style={{ width: cellW, marginRight: gridGap, marginBottom: gridGap }}
+                      >
+                        <PosterCard
+                          id={item.id}
+                          kind={item.type === 'SHOW' ? 'shows' : 'movies'}
+                          title={item.title}
+                          poster={item.images?.poster ?? item.images?.backdrop}
+                          width={cellW}
+                          style={{ marginRight: 0 }}
+                        />
                         <T variant="micro" muted numberOfLines={1} style={{ marginTop: 2 }}>
-                          {t(item.type === 'SHOW' ? 'explore:mediaTypeShow' : 'explore:mediaTypeMovie')}{year ? ` · ${year}` : ''}
+                          {t(
+                            item.type === 'SHOW'
+                              ? 'explore:mediaTypeShow'
+                              : 'explore:mediaTypeMovie',
+                          )}
+                          {year ? ` · ${year}` : ''}
                         </T>
                       </View>
                     );
@@ -115,14 +175,43 @@ export default function ExploreScreen() {
           />
         )
       ) : (
-        <ScrollView ref={discoverRef} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
+        <ScrollView
+          ref={discoverRef}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[tokens.primary]}
+              tintColor={tokens.primary}
+            />
+          }
+        >
           {sections.isLoading ? (
             <Spinner />
           ) : (
             <>
-              <Carousel title={t('explore:topShowsForYou')} data={sections.data?.topForYou ?? []} kind="shows" action={t('explore:seeAll')} onAction={() => router.push('/more?t=top-for-you')} />
-              <Carousel title={t('explore:trendingShows')} data={sections.data?.trendingShows ?? []} kind="shows" action={t('explore:seeAll')} onAction={() => router.push('/more?t=trending-shows')} />
-              <Carousel title={t('explore:trendingMovies')} data={sections.data?.trendingMovies ?? []} kind="movies" action={t('explore:seeAll')} onAction={() => router.push('/more?t=trending-movies')} />
+              <Carousel
+                title={t('explore:topShowsForYou')}
+                data={sections.data?.topForYou ?? []}
+                kind="shows"
+                action={t('explore:seeAll')}
+                onAction={() => router.push('/more?t=top-for-you')}
+              />
+              <Carousel
+                title={t('explore:trendingShows')}
+                data={sections.data?.trendingShows ?? []}
+                kind="shows"
+                action={t('explore:seeAll')}
+                onAction={() => router.push('/more?t=trending-shows')}
+              />
+              <Carousel
+                title={t('explore:trendingMovies')}
+                data={sections.data?.trendingMovies ?? []}
+                kind="movies"
+                action={t('explore:seeAll')}
+                onAction={() => router.push('/more?t=trending-movies')}
+              />
             </>
           )}
         </ScrollView>

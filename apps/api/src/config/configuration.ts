@@ -17,6 +17,8 @@ export default () => ({
     secret: process.env.JWT_SECRET || 'dev-insecure-secret-change-me',
     accessTtl: process.env.JWT_ACCESS_TTL || '15m',
     refreshTtl: process.env.JWT_REFRESH_TTL || '30d',
+    /** Long-lived access token for "stay connected" logins (admin console remember-me). */
+    rememberTtl: process.env.JWT_REMEMBER_TTL || '30d',
   },
   auth: {
     google: { clientId: process.env.GOOGLE_CLIENT_ID, clientSecret: process.env.GOOGLE_CLIENT_SECRET },

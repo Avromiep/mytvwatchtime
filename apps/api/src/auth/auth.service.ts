@@ -91,7 +91,7 @@ export class AuthService {
     if (!user || !user.passwordHash) throw new UnauthorizedException('Invalid credentials');
     const ok = await argon2.verify(user.passwordHash, dto.password);
     if (!ok) throw new UnauthorizedException('Invalid credentials');
-    return this.issueSession(user.id, user.username, user.email, user.role, user.mustChangePassword);
+    return this.issueSession(user.id, user.username, user.email, user.role, user.mustChangePassword, dto.rememberMe === true);
   }
 
   async changePassword(userId: string, oldPassword: string, newPassword: string): Promise<void> {
@@ -222,8 +222,12 @@ export class AuthService {
     email: string,
     role: string,
     mustChangePassword: boolean,
+    rememberMe = false,
   ): Promise<AuthSessionDto> {
-    const access = this.signToken({ sub: userId, username, email, role }, 'access');
+    // "Stay connected" sessions (admin console) get a long-lived access token; the
+    // refresh token TTL is unchanged either way.
+    const accessTtl = rememberMe ? this.config.get<string>('jwt.rememberTtl') : undefined;
+    const access = this.signToken({ sub: userId, username, email, role }, 'access', accessTtl);
     const refresh = this.signToken({ sub: userId, username, email, role }, 'refresh');
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -256,12 +260,12 @@ export class AuthService {
     };
   }
 
-  private signToken(payload: JwtPayload, kind: 'access' | 'refresh'): string {
+  private signToken(payload: JwtPayload, kind: 'access' | 'refresh', ttlOverride?: string): string {
     return this.jwt.sign(
       { ...payload, kind },
       {
         secret: this.config.get<string>('jwt.secret')!,
-        expiresIn: kind === 'access' ? this.config.get<string>('jwt.accessTtl') : this.config.get<string>('jwt.refreshTtl'),
+        expiresIn: ttlOverride ?? (kind === 'access' ? this.config.get<string>('jwt.accessTtl') : this.config.get<string>('jwt.refreshTtl')),
       },
     );
   }

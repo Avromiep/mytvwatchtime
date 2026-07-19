@@ -35,6 +35,24 @@ import { showConfirm, showError } from '../lib/dialog';
 
 const HERO_HEIGHT = 240;
 
+/** Localized "Month D, YYYY" for air dates. Date-only ISO strings are parsed as a LOCAL
+ *  date (not UTC midnight), so the displayed day never shifts with the timezone. */
+function formatAirDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(iso);
+  return d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+/** Localized "H:MM" for a raw 24h air time, matching the watched-time format. */
+function formatAirTime(hhmm: string): string {
+  const m = /^(\d{1,2}):(\d{2})/.exec(hhmm);
+  if (!m) return hhmm;
+  return new Date(2000, 0, 1, Number(m[1]), Number(m[2])).toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 /**
  * Full episode detail body for a single episode. Fetches its own detail so it can be
  * rendered independently inside the pager (one per page).
@@ -122,13 +140,14 @@ export function EpisodeDetailContent({
               </Pressable>
               <T
                 variant="title"
+                numberOfLines={2}
                 style={{ fontSize: 24, marginTop: spacing.sm, color: tokens.mediaText }}
               >
                 {ep.title}
               </T>
             </View>
-            {/* Network(s) anchored at the hero bottom, right above the (absolutely
-                positioned) navigation arrows — the full joined string
+            {/* Network(s) pinned ABOVE the (absolutely positioned) navigation arrows, so a
+                two-line episode title can never push it onto them — the full joined string
                 ("TV Tokyo · AT-X"); compact surfaces show the first network only. */}
             {ep.network ? (
               <View style={styles.networkWrap}>
@@ -160,7 +179,6 @@ export function EpisodeDetailContent({
                   <T variant="caption" muted>
                     {t('episode:watchedAt', {
                       date: new Date(ep.watchedAt).toLocaleDateString(undefined, {
-                        weekday: 'long',
                         month: 'long',
                         day: 'numeric',
                         year: 'numeric',
@@ -185,12 +203,18 @@ export function EpisodeDetailContent({
               {ep.airDate ? (
                 <T variant="caption" muted>
                   {(() => {
-                    const dateStr = new Date(ep.airDate).toLocaleDateString();
+                    const dateStr = formatAirDate(ep.airDate);
                     const isFuture = new Date(ep.airDate) > new Date();
                     if (ep.airTime) {
                       return isFuture
-                        ? t('episode:willAirAtTime', { date: dateStr, time: ep.airTime })
-                        : t('episode:airedAtTime', { date: dateStr, time: ep.airTime });
+                        ? t('episode:willAirAtTime', {
+                            date: dateStr,
+                            time: formatAirTime(ep.airTime),
+                          })
+                        : t('episode:airedAtTime', {
+                            date: dateStr,
+                            time: formatAirTime(ep.airTime),
+                          });
                     }
                     return isFuture
                       ? t('episode:willAirOn', { date: dateStr })
@@ -372,8 +396,14 @@ export function EpisodeDetailContent({
 const styles = StyleSheet.create({
   hero: { height: HERO_HEIGHT },
   overlay: { flex: 1 },
-  // Pushes the network line to the hero bottom; paddingBottom reserves the arrows' row (~42px).
-  networkWrap: { marginTop: 'auto', paddingHorizontal: spacing.lg, paddingBottom: 44 },
+  // Pinned above the arrows row (~44px) instead of flow-positioned: a long (2-line)
+  // episode title can't push the network text onto the arrows.
+  networkWrap: {
+    position: 'absolute',
+    left: spacing.lg,
+    right: spacing.lg,
+    bottom: 44,
+  },
   pill: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
   indicator: {
     fontWeight: '700',

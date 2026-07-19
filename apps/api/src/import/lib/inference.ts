@@ -36,7 +36,7 @@ export type Profile =
   | 'unknown';
 
 const SKIP_PATTERNS =
-  /vote|rating|emotion|comment|character|badge|where-to-watch|notification|count\.by\.timeframe|deployment|friend|connection|\bip\b|token|session|device|\bad_|ads_|install|facebook|quiz|poll|recommend|similar|webhook|gdpr|auth|routing|addiction|mail|social|special_status|appsflyer|access_token|refresh_token|last_updated|object_last|statistics|cache|seen_episode_latest|show_seen_episode_latest|recommended_show_excluded|similar_show|installed_app|install_tracking|user_setting|user_personal_data|user_leaderboard|user\.csv/i;
+  /vote|rating|tv_show_rate|emotion|comment|character|badge|where-to-watch|notification|count\.by\.timeframe|deployment|friend|connection|\bip\b|token|session|device|\bad_|ads_|install|facebook|quiz|poll|recommend|similar|webhook|gdpr|auth|routing|addiction|mail|social|special_status|appsflyer|access_token|refresh_token|last_updated|object_last|statistics|cache|seen_episode_latest|show_seen_episode_latest|recommended_show_excluded|similar_show|installed_app|install_tracking|user_setting|user_personal_data|user_leaderboard|user\.csv/i;
 
 /** Parse a date that may be epoch-seconds, epoch-ms, "YYYY-MM-DD HH:MM:SS", or ISO. Treats 0001 dates and <nil> as null. */
 export function parseDate(v: string | undefined): Date | null {
@@ -94,11 +94,27 @@ export function normTitle(s: string): string {
     .trim();
 }
 
-const TITLE_KEYS = ['title', 'name', 'show', 'show_name', 'tv_show_name', 'series_name', 'movie_name', 'movie_title'];
+const TITLE_KEYS = [
+  'title',
+  'name',
+  'show',
+  'show_name',
+  'tv_show_name',
+  'series_name',
+  'movie_name',
+  'movie_title',
+];
 const SEASON_KEYS = ['season', 'season_number', 's', 'episode_season_number'];
 const EPISODE_KEYS = ['episode', 'episode_number', 'ep', 'ep_no'];
 const YEAR_KEYS = ['year', 'release_year', 'first_air_date', 'aired_year'];
-const WATCHED_KEYS = ['watched_at', 'created_at', 'watchedon', 'watched_date', 'date', 'updated_at'];
+const WATCHED_KEYS = [
+  'watched_at',
+  'created_at',
+  'watchedon',
+  'watched_date',
+  'date',
+  'updated_at',
+];
 // Per-episode total view count (TVTime's rewatched_episode.csv uses `cpt`).
 // NOTE: deliberately excludes `ep_watch_count` — that column is a *show-level*
 // aggregate in user_tv_show_data.csv, not a per-episode count.
@@ -111,7 +127,8 @@ export function detectProfile(filename: string, headers: string[]): Profile {
   if (SKIP_PATTERNS.test(f)) return 'unknown';
 
   // TVTime known files
-  if (f.includes('seen_episode_source') || f.includes('watched_on_episode')) return 'tvtime_watched_episode';
+  if (f.includes('seen_episode_source') || f.includes('watched_on_episode'))
+    return 'tvtime_watched_episode';
   // rewatched_episode.csv carries the per-episode total watch count (cpt), the
   // authoritative source for rewatch tallies — must beat the generic fallback.
   if (f.includes('rewatched_episode')) return 'tvtime_rewatched_episode';
@@ -121,14 +138,17 @@ export function detectProfile(filename: string, headers: string[]): Profile {
 
   const h = headers.map((x) => x.toLowerCase().trim());
   const has = (...keys: string[]) => keys.some((k) => h.includes(k));
-  const hasSeasonEpisode = has('season', 'season_number', 'episode_season_number') && has('episode', 'episode_number');
+  const hasSeasonEpisode =
+    has('season', 'season_number', 'episode_season_number') && has('episode', 'episode_number');
   const hasTitle = has(...TITLE_KEYS);
   const looksMovie = f.includes('movie') || has('movie_name', 'movie_title');
 
   if (hasSeasonEpisode && hasTitle) return 'generic_episode';
-  if (has(...FOLLOW_KEYS) && hasTitle) return looksMovie ? 'generic_watchlist' : 'generic_watchlist';
+  if (has(...FOLLOW_KEYS) && hasTitle)
+    return looksMovie ? 'generic_watchlist' : 'generic_watchlist';
   if (has(...FAV_KEYS) && hasTitle) return 'generic_favorite';
-  if (has(...WATCHED_KEYS) && hasTitle) return looksMovie ? 'generic_movie_watched' : 'generic_movie_watched';
+  if (has(...WATCHED_KEYS) && hasTitle)
+    return looksMovie ? 'generic_movie_watched' : 'generic_movie_watched';
   return 'unknown';
 }
 
@@ -140,8 +160,8 @@ function baseItem(
 ): NormalizedItem {
   const { title: clean, year } = splitTitleYear((title || '').trim());
   // Extract raw TVDB identity signals (header-based, nil→null). Never promoted automatically.
-    const tvdbSeriesRaw = pick(row, ['s_id', 'series_id', 'tv_show_id']) ?? null;
-    const tvdbEpisodeRaw = pick(row, ['episode_id', 'ep_id']) ?? null;
+  const tvdbSeriesRaw = pick(row, ['s_id', 'series_id', 'tv_show_id']) ?? null;
+  const tvdbEpisodeRaw = pick(row, ['episode_id', 'ep_id']) ?? null;
   const absoluteRaw = pick(row, ['absolute_number', 'absolute_episode_number', 'absolute_episode']);
   return {
     entityType,
@@ -150,7 +170,8 @@ function baseItem(
     year: extra.year ?? year,
     raw: row,
     rawTvdbSeriesId: extra.rawTvdbSeriesId !== undefined ? extra.rawTvdbSeriesId : tvdbSeriesRaw,
-    rawTvdbEpisodeId: extra.rawTvdbEpisodeId !== undefined ? extra.rawTvdbEpisodeId : tvdbEpisodeRaw,
+    rawTvdbEpisodeId:
+      extra.rawTvdbEpisodeId !== undefined ? extra.rawTvdbEpisodeId : tvdbEpisodeRaw,
     absoluteEpisode: extra.absoluteEpisode ?? (absoluteRaw ? toInt(absoluteRaw) : null),
     ...extra,
   };
@@ -201,7 +222,10 @@ export function normalizeRow(profile: Profile, row: Record<string, string>): Nor
       const title = pick(row, TITLE_KEYS) ?? '';
       if (!title) return [];
       items.push(
-        baseItem('WATCHED_MOVIE', row, title, { year: toInt(pick(row, YEAR_KEYS)), watchedAt: toDate(pick(row, WATCHED_KEYS)) }),
+        baseItem('WATCHED_MOVIE', row, title, {
+          year: toInt(pick(row, YEAR_KEYS)),
+          watchedAt: toDate(pick(row, WATCHED_KEYS)),
+        }),
       );
       break;
     }
@@ -209,10 +233,17 @@ export function normalizeRow(profile: Profile, row: Record<string, string>): Nor
     case 'generic_watchlist': {
       const title = pick(row, TITLE_KEYS) ?? '';
       if (!title) return [];
-      const on = profile === 'tvtime_followed' ? boolVal(pick(row, FOLLOW_KEYS)) || pick(row, FOLLOW_KEYS) == null : boolVal(pick(row, FOLLOW_KEYS));
+      const on =
+        profile === 'tvtime_followed'
+          ? boolVal(pick(row, FOLLOW_KEYS)) || pick(row, FOLLOW_KEYS) == null
+          : boolVal(pick(row, FOLLOW_KEYS));
       if (on) {
         const looksMovie = /movie/i.test(JSON.stringify(row));
-        items.push(baseItem(looksMovie ? 'WATCHLIST_MOVIE' : 'WATCHLIST_SHOW', row, title, { year: toInt(pick(row, YEAR_KEYS)) }));
+        items.push(
+          baseItem(looksMovie ? 'WATCHLIST_MOVIE' : 'WATCHLIST_SHOW', row, title, {
+            year: toInt(pick(row, YEAR_KEYS)),
+          }),
+        );
       }
       break;
     }
@@ -240,7 +271,15 @@ export function normalizeRow(profile: Profile, row: Record<string, string>): Nor
       const movie = pick(row, ['movie_name', 'movie', 'movie_title']);
       const season = toInt(pick(row, ['season_number', 'season', 's_no']));
       const episode = toInt(pick(row, ['episode_number', 'episode', 'ep_no']));
-      const watchedAt = parseDate(pick(row, ['watch_date', 'watched_at', 'most_recent_ep_watched', 'created_at', 'updated_at']));
+      const watchedAt = parseDate(
+        pick(row, [
+          'watch_date',
+          'watched_at',
+          'most_recent_ep_watched',
+          'created_at',
+          'updated_at',
+        ]),
+      );
       const followed = boolVal(pick(row, ['is_followed']));
       const forLater = boolVal(pick(row, ['is_for_later']));
 
