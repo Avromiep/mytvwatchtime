@@ -3,10 +3,31 @@ import { ImageBackground, Pressable, ScrollView, StyleSheet, View } from 'react-
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from './Header';
-import { Card, EmptyState, PosterImage, Screen, SectionHeader, Spinner, T, WatchButton, useWatchMenu } from './primitives';
+import {
+  Card,
+  EmptyState,
+  PosterImage,
+  Screen,
+  SectionHeader,
+  Spinner,
+  T,
+  WatchButton,
+  useWatchMenu,
+} from './primitives';
 import { EpisodeNavigationArrows } from './EpisodeNavigationArrows';
-import { VotingSection, DeviceTiles, StarRatingControl, ReactionGrid, FavoriteCharacterVote } from './voting';
-import { useEpisode, useMarkEpisodeWatched, useEpisodeVotes, useRewatchEpisode } from '../api/hooks';
+import {
+  VotingSection,
+  DeviceTiles,
+  StarRatingControl,
+  ReactionGrid,
+  FavoriteCharacterVote,
+} from './voting';
+import {
+  useEpisode,
+  useMarkEpisodeWatched,
+  useEpisodeVotes,
+  useRewatchEpisode,
+} from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../theme/theme';
@@ -47,7 +68,11 @@ export function EpisodeDetailContent({
     return (
       <Screen>
         <Header showBack />
-        <EmptyState title={t('episode:episodeNotFound')} subtitle={t('episode:episodeRemoved')} icon="alert-circle-outline" />
+        <EmptyState
+          title={t('episode:episodeNotFound')}
+          subtitle={t('episode:episodeRemoved')}
+          icon="alert-circle-outline"
+        />
       </Screen>
     );
   }
@@ -86,17 +111,39 @@ export function EpisodeDetailContent({
               }
             />
             <View style={{ padding: spacing.lg }}>
-              <Pressable onPress={() => router.push(`/show/${ep.showId}` as any)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={[styles.pill, { backgroundColor: tokens.primary }]}>
-                <T variant="caption" style={{ color: tokens.primaryForeground, fontWeight: '700' }}>{ep.showTitle}</T>
+              <Pressable
+                onPress={() => router.push(`/show/${ep.showId}` as any)}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                style={[styles.pill, { backgroundColor: tokens.primary }]}
+              >
+                <T variant="caption" style={{ color: tokens.primaryForeground, fontWeight: '700' }}>
+                  {ep.showTitle}
+                </T>
               </Pressable>
-              <T variant="title" style={{ fontSize: 24, marginTop: spacing.sm, color: tokens.mediaText }}>{ep.title}</T>
+              <T
+                variant="title"
+                style={{ fontSize: 24, marginTop: spacing.sm, color: tokens.mediaText }}
+              >
+                {ep.title}
+              </T>
             </View>
+            {/* Network(s) anchored at the hero bottom, right above the (absolutely
+                positioned) navigation arrows — the full joined string
+                ("TV Tokyo · AT-X"); compact surfaces show the first network only. */}
+            {ep.network ? (
+              <View style={styles.networkWrap}>
+                <T variant="caption" numberOfLines={1} style={{ color: tokens.mediaText }}>
+                  {ep.network}
+                </T>
+              </View>
+            ) : null}
             <EpisodeNavigationArrows
               onPrev={onPrev}
               onNext={onNext}
               center={
                 <T variant="caption" style={[styles.indicator, { color: tokens.mediaText }]}>
-                  S{String(ep.seasonNumber).padStart(2, '0')} | E{String(ep.number).padStart(2, '0')}
+                  S{String(ep.seasonNumber).padStart(2, '0')} | E
+                  {String(ep.number).padStart(2, '0')}
                 </T>
               }
             />
@@ -104,7 +151,9 @@ export function EpisodeDetailContent({
         </ImageBackground>
 
         <View style={{ paddingHorizontal: spacing.lg, gap: spacing.lg, marginTop: spacing.md }}>
-          <Card style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Card
+            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+          >
             <View>
               {ep.watched ? (
                 ep.watchedAt ? (
@@ -124,10 +173,14 @@ export function EpisodeDetailContent({
                     {(ep.watchCount ?? 0) >= 2 ? `  ·  ×${ep.watchCount}` : ''}
                   </T>
                 ) : (
-                  <T variant="caption" muted>{t('episode:watched')}</T>
+                  <T variant="caption" muted>
+                    {t('episode:watched')}
+                  </T>
                 )
               ) : (
-                <T variant="caption" muted>{t('episode:notWatchedYet')}</T>
+                <T variant="caption" muted>
+                  {t('episode:notWatchedYet')}
+                </T>
               )}
               {ep.airDate ? (
                 <T variant="caption" muted>
@@ -208,13 +261,31 @@ export function EpisodeDetailContent({
           {/* Where to watch */}
           <Card>
             <SectionHeader title={t('episode:whereToWatch')} />
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginTop: spacing.sm }}>
-              {ep.providers?.length ? ep.providers.map((p: any) => (
-                <View key={p.id} style={{ alignItems: 'center', width: 64 }}>
-                  <PosterImage uri={p.logoUrl} style={{ width: 44, height: 44, borderRadius: 8 }} />
-                  <T variant="micro" muted style={{ textAlign: 'center', marginTop: 2 }}>{p.name}</T>
-                </View>
-              )) : <T variant="caption" muted>{t('episode:noProviders')}</T>}
+            <View
+              style={{
+                flexDirection: 'row',
+                flexWrap: 'wrap',
+                gap: spacing.md,
+                marginTop: spacing.sm,
+              }}
+            >
+              {ep.providers?.length ? (
+                ep.providers.map((p: any) => (
+                  <View key={p.id} style={{ alignItems: 'center', width: 64 }}>
+                    <PosterImage
+                      uri={p.logoUrl}
+                      style={{ width: 44, height: 44, borderRadius: 8 }}
+                    />
+                    <T variant="micro" muted style={{ textAlign: 'center', marginTop: 2 }}>
+                      {p.name}
+                    </T>
+                  </View>
+                ))
+              ) : (
+                <T variant="caption" muted>
+                  {t('episode:noProviders')}
+                </T>
+              )}
             </View>
           </Card>
 
@@ -222,12 +293,34 @@ export function EpisodeDetailContent({
           {ep.cast?.length ? (
             <View>
               <SectionHeader title={t('episode:castAndCharacters')} />
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                // Inside the episode pager: consume horizontal swipes here first (Android);
+                // the pager takes over only at this row's edge.
+                nestedScrollEnabled
+              >
                 {ep.cast.map((c: any) => (
-                  <View key={c.creditId} style={{ width: 84, marginRight: spacing.md, alignItems: 'center' }}>
-                    <PosterImage uri={c.profileUrl} style={{ width: 64, height: 64, borderRadius: 32 }} />
-                    <T variant="micro" numberOfLines={2} style={{ textAlign: 'center', marginTop: 4 }}>{c.name}</T>
-                    {c.character ? <T variant="micro" muted numberOfLines={1} style={{ textAlign: 'center' }}>{c.character}</T> : null}
+                  <View
+                    key={c.creditId}
+                    style={{ width: 84, marginRight: spacing.md, alignItems: 'center' }}
+                  >
+                    <PosterImage
+                      uri={c.profileUrl}
+                      style={{ width: 64, height: 64, borderRadius: 32 }}
+                    />
+                    <T
+                      variant="micro"
+                      numberOfLines={2}
+                      style={{ textAlign: 'center', marginTop: 4 }}
+                    >
+                      {c.name}
+                    </T>
+                    {c.character ? (
+                      <T variant="micro" muted numberOfLines={1} style={{ textAlign: 'center' }}>
+                        {c.character}
+                      </T>
+                    ) : null}
                   </View>
                 ))}
               </ScrollView>
@@ -236,17 +329,37 @@ export function EpisodeDetailContent({
 
           <Card>
             <SectionHeader title={t('episode:episodeInfo')} />
-            {ep.rating ? <T variant="caption" muted>{t('episode:ratingLabel', { value: ep.rating.toFixed(1) })}</T> : null}
-            <T variant="body" muted style={{ marginTop: spacing.sm }}>{ep.overview ?? t('episode:noDescription')}</T>
+            {ep.rating ? (
+              <T variant="caption" muted>
+                {t('episode:ratingLabel', { value: ep.rating.toFixed(1) })}
+              </T>
+            ) : null}
+            <T variant="body" muted style={{ marginTop: spacing.sm }}>
+              {ep.overview ?? t('episode:noDescription')}
+            </T>
           </Card>
 
           <Pressable onPress={openComments}>
-            <Card style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Card
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
               <View>
-                <T variant="h2" style={{ color: tokens.primary }}>{t('episode:comments')}</T>
-                {!ep.watched ? <T variant="micro" style={{ color: tokens.orange }}>{t('episode:mayContainSpoilers')}</T> : null}
+                <T variant="h2" style={{ color: tokens.primary }}>
+                  {t('episode:comments')}
+                </T>
+                {!ep.watched ? (
+                  <T variant="micro" style={{ color: tokens.orange }}>
+                    {t('episode:mayContainSpoilers')}
+                  </T>
+                ) : null}
               </View>
-              <T variant="caption" muted>{ep.commentsCount}</T>
+              <T variant="caption" muted>
+                {ep.commentsCount}
+              </T>
             </Card>
           </Pressable>
         </View>
@@ -259,6 +372,8 @@ export function EpisodeDetailContent({
 const styles = StyleSheet.create({
   hero: { height: HERO_HEIGHT },
   overlay: { flex: 1 },
+  // Pushes the network line to the hero bottom; paddingBottom reserves the arrows' row (~42px).
+  networkWrap: { marginTop: 'auto', paddingHorizontal: spacing.lg, paddingBottom: 44 },
   pill: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
   indicator: {
     fontWeight: '700',

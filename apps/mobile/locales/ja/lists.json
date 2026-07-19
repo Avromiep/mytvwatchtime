@@ -1,6 +1,9 @@
 {
   "createList": "リストを作成",
   "createListButton": "リストを作成",
+  "addToList": "リストに追加",
+  "addedToList": "リストに追加しました",
+  "removedFromList": "リストから削除しました",
   "titleField": "タイトル",
   "titlePlaceholder": "お気に入りの番組",
   "descField": "説明（任意）",

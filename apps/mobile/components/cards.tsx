@@ -26,6 +26,7 @@ import {
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
 import { useTranslation } from 'react-i18next';
+import { firstNetwork } from '@tvwatch/shared';
 
 
 
@@ -183,7 +184,7 @@ function EpisodeCardImpl({
         </Pressable>
         {item.network ? (
           <T variant="micro" muted style={{ marginLeft: spacing.sm }}>
-            {item.network}
+            {firstNetwork(item.network)}
           </T>
         ) : null}
       </View>
@@ -357,7 +358,7 @@ export function UpcomingCard({ item }: { item: any }) {
             </T>
             {item.network ? (
               <T variant="micro" style={{ marginLeft: 'auto', color: tokens.primary }}>
-                {item.network}
+                {firstNetwork(item.network)}
               </T>
             ) : null}
           </View>

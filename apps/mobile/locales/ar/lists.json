@@ -1,6 +1,9 @@
 {
   "createList": "إنشاء قائمة",
   "createListButton": "إنشاء قائمة",
+  "addToList": "أضف إلى قائمة",
+  "addedToList": "تمت الإضافة إلى القائمة",
+  "removedFromList": "تمت الإزالة من القائمة",
   "titleField": "العنوان",
   "titlePlaceholder": "مسلسلاتي المفضلة",
   "descField": "الوصف (اختياري)",

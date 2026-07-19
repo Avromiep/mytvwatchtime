@@ -74,7 +74,10 @@ export class DiscoveryService {
     }
 
     const start = (page - 1) * want;
-    const slice = entry.ids.slice(start, start + want);
+    // Rank media without posters last (stable: the merged local+TMDB relevance order is
+    // preserved within each group). Done at read time so late-hydrated posters count.
+    const orderedIds = await this.posterLast(entry.ids);
+    const slice = orderedIds.slice(start, start + want);
     const items = await this.fetchListDtos(slice, userId, want);
     // hasMore via paginate's formula: +1 while more pages may exist upstream.
     const total = entry.ids.length + (entry.exhausted ? 0 : 1);
@@ -170,6 +173,24 @@ export class DiscoveryService {
     };
   }
 
+  /**
+   * Stable poster-last ordering for a merged id window: ids whose media row has a poster
+   * keep their existing (relevance) order, ids without one are pushed to the end.
+   * One batched read per search request.
+   */
+  async posterLast(ids: string[]): Promise<string[]> {
+    if (ids.length === 0) return ids;
+    const rows = await this.prisma.mediaItem.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, posterUrl: true },
+    });
+    const withPoster = new Set(rows.filter((r) => r.posterUrl).map((r) => r.id));
+    const poster: string[] = [];
+    const noPoster: string[] = [];
+    for (const id of ids) (withPoster.has(id) ? poster : noPoster).push(id);
+    return [...poster, ...noPoster];
+  }
+
   private async searchViaDb(term: string, q: SearchQueryDto, userId?: string) {
     const where = {
       title: { contains: term, mode: 'insensitive' as const },
@@ -184,7 +205,9 @@ export class DiscoveryService {
       }),
       this.prisma.mediaItem.count({ where }),
     ]);
-    const ids = rows.map((r) => r.id);
+    // Poster-last within the page (same ranking rule as the provider search).
+    const ordered = [...rows.filter((r) => r.posterUrl), ...rows.filter((r) => !r.posterUrl)];
+    const ids = ordered.map((r) => r.id);
     const items = await this.fetchListDtos(ids, userId);
     return paginate(items, q.page, q.pageSize, total);
   }

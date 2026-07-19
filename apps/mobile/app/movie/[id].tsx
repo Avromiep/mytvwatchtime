@@ -11,6 +11,7 @@ import {
   useToggleFavorite,
   useToggleMovieWatchlist,
 } from '../../api/hooks';
+import { useAddToList } from '../../hooks/useAddToList';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../theme/theme';
@@ -25,6 +26,7 @@ export default function MovieDetailScreen() {
   const movieWatchlist = useToggleMovieWatchlist();
   const favorite = useToggleFavorite();
   const menu = useWatchMenu();
+  const addToList = useAddToList();
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
 
@@ -35,7 +37,14 @@ export default function MovieDetailScreen() {
       <ScrollView showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
         <ImageBackground source={{ uri: movie.images.backdrop ?? movie.images.poster ?? undefined }} style={styles.backdrop} imageStyle={{ opacity: 0.6 }}>
           <View style={[styles.overlay, { backgroundColor: tokens.mediaScrim }]}>
-            <Header showBack />
+            <Header
+              showBack
+              right={
+                <Pressable hitSlop={10} onPress={() => addToList.openMediaMenu({ id: movie.id, title: movie.title })}>
+                  <Ionicons name="ellipsis-horizontal" size={24} color={tokens.mediaText} />
+                </Pressable>
+              }
+            />
             <View style={{ flexDirection: 'row', padding: spacing.lg }}>
               <PosterImage uri={movie.images.poster} style={{ width: 100, height: 150, borderRadius: radius.md }} />
               <View style={{ flex: 1, marginLeft: spacing.md }}>
@@ -59,7 +68,7 @@ export default function MovieDetailScreen() {
                   ? (movie.watchCount ?? 0) >= 2
                     ? t('movies:watchedButtonCount', { count: movie.watchCount })
                     : t('movies:watchedButton')
-                  : t('movies:markAsWatched')
+                  : t('common:watch')
               }
               variant={movie.watched ? 'watched' : 'primary'}
               icon={movie.watched ? 'checkmark' : 'eye-outline'}
@@ -133,6 +142,8 @@ export default function MovieDetailScreen() {
 const styles = StyleSheet.create({
   backdrop: { height: 240 },
   overlay: { flex: 1 },
-  actions: { flexDirection: 'row', alignItems: 'center' },
-  favBtn: { marginLeft: spacing.sm, width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center' },
+  // stretch (default) so the two action buttons are always equal height — in some
+  // languages one label wraps to two lines while the other stays on one.
+  actions: { flexDirection: 'row' },
+  favBtn: { marginLeft: spacing.sm, width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center', alignSelf: 'center' },
 });

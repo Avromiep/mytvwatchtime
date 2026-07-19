@@ -89,7 +89,7 @@ export class ListsService {
     };
   }
 
-  async list(userId: string) {
+  async list(userId: string, mediaId?: string) {
     const lists = await this.prisma.customList.findMany({
       where: { userId },
       orderBy: { updatedAt: 'desc' },
@@ -101,6 +101,16 @@ export class ListsService {
 
     // One GROUP BY for all show/movie counts (was 2 COUNT queries per list).
     const typeCounts = await this.itemCountsByType(lists.map((l) => l.id));
+    // Optional membership annotation for the add-to-list picker (media detail ⋯ menu):
+    // which of the user's lists already contain this media + the item id for removal.
+    const itemIdByList = new Map<string, string>();
+    if (mediaId && lists.length) {
+      const membership = await this.prisma.customListItem.findMany({
+        where: { listId: { in: lists.map((l) => l.id) }, mediaId },
+        select: { id: true, listId: true },
+      });
+      for (const m of membership) itemIdByList.set(m.listId, m.id);
+    }
     return lists.map((l) => {
       const c = typeCounts.get(l.id) ?? { shows: 0, movies: 0 };
       const cover = l.coverUrl || l.items[0]?.media?.backdropUrl || l.items[0]?.media?.posterUrl || null;
@@ -115,6 +125,9 @@ export class ListsService {
         likeCount: l._count.likes,
         subCount: l._count.subscriptions,
         updatedAt: l.updatedAt.toISOString(),
+        ...(mediaId
+          ? { containsMedia: itemIdByList.has(l.id), itemId: itemIdByList.get(l.id) ?? null }
+          : {}),
       };
     });
   }
@@ -249,7 +262,7 @@ export class ListsService {
     const list = await this.prisma.customList.findUnique({ where: { id } });
     if (!list || list.userId !== userId) throw new NotFoundException('List not found');
 
-    await this.prisma.customListItem.upsert({
+    const item = await this.prisma.customListItem.upsert({
       where: { listId_mediaId: { listId: id, mediaId } },
       create: { listId: id, mediaId },
       update: {},
@@ -279,7 +292,7 @@ export class ListsService {
       }).catch(() => {});
     }
 
-    return { ok: true };
+    return { ok: true, itemId: item.id };
   }
 
   async removeItem(userId: string, id: string, itemId: string) {

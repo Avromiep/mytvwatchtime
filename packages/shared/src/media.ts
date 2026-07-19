@@ -169,6 +169,8 @@ export interface EpisodeDetailDto extends EpisodeDto {
   showId: string;
   showTitle: string;
   showImages: ImageSet;
+  /** Show network(s) — may hold up to MAX_NETWORKS_PER_SHOW joined by NETWORK_SEPARATOR. */
+  network?: string | null;
   providers: WatchProviderDto[];
   cast?: EpisodeCastMemberDto[];
   interactions: EpisodeInteractionsDto;
@@ -177,6 +179,38 @@ export interface EpisodeDetailDto extends EpisodeDto {
 
 export interface MovieDetailDto extends MovieDto {
   similar: MovieDto[];
+}
+
+// ---------------- Networks ----------------
+/**
+ * Multi-network shows are stored in the single `network` string column, joined by this
+ * separator (e.g. "TV Tokyo · AT-X"). Episode details render the full string; compact
+ * surfaces (watch-next/upcoming cards, home-screen widgets) show `firstNetwork(...)` only.
+ */
+export const NETWORK_SEPARATOR = ' · ';
+
+/** Cap on stored networks per show — keeps the joined string short for compact surfaces. */
+export const MAX_NETWORKS_PER_SHOW = 2;
+
+/** Join network names for storage: trims, dedupes, caps at MAX_NETWORKS_PER_SHOW. */
+export function formatNetworks(names: (string | null | undefined)[]): string | null {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of names) {
+    const name = raw?.trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+    if (out.length >= MAX_NETWORKS_PER_SHOW) break;
+  }
+  return out.length ? out.join(NETWORK_SEPARATOR) : null;
+}
+
+/** First network of a stored (possibly joined) network string — for compact surfaces. */
+export function firstNetwork(network?: string | null): string | null {
+  if (!network) return null;
+  const first = network.split(NETWORK_SEPARATOR)[0]?.trim();
+  return first || null;
 }
 
 export type LeaderboardType = 'shows' | 'movies' | 'combined';

@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  firstNetwork,
   UPCOMING_NEAR_TERM_BUCKETS,
   WatchNextBucket,
   type UpcomingGroupDto,
@@ -112,13 +113,16 @@ export async function fetchWatchNextItems(): Promise<WidgetFetchState<WatchNextI
     toState(async () => {
       const res = await api.get<WatchNextResponseDto>('/me/watch-next');
       const seen = new Set<string>();
-      return (res.items ?? []).filter((it) => {
-        if (it.bucket !== WatchNextBucket.WATCH_NEXT) return false;
-        const k = it.episode?.id;
-        if (!k || seen.has(k)) return false;
-        seen.add(k);
-        return true;
-      });
+      return (res.items ?? [])
+        .filter((it) => {
+          if (it.bucket !== WatchNextBucket.WATCH_NEXT) return false;
+          const k = it.episode?.id;
+          if (!k || seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        })
+        // Compact widget rows show only the first of a joined multi-network string.
+        .map((it) => ({ ...it, network: firstNetwork(it.network) }));
     }),
   );
 }
@@ -130,7 +134,13 @@ export async function fetchUpcomingGroups(): Promise<WidgetFetchState<UpcomingGr
     toState(async () => {
       const res = await api.get<{ groups: UpcomingGroupDto[] }>('/me/upcoming');
       const wanted = new Set<string>(UPCOMING_NEAR_TERM_BUCKETS);
-      return (res.groups ?? []).filter((g) => wanted.has(g.key) && g.items?.length);
+      return (res.groups ?? [])
+        .filter((g) => wanted.has(g.key) && g.items?.length)
+        // Compact widget rows show only the first of a joined multi-network string.
+        .map((g) => ({
+          ...g,
+          items: g.items.map((it) => ({ ...it, network: firstNetwork(it.network) })),
+        }));
     }),
   );
 }

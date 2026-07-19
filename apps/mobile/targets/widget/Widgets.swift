@@ -8,6 +8,12 @@ private func episodeURL(_ id: String) -> URL {
   URL(string: "tvwatchtime://episode/\(id)") ?? showsURL
 }
 
+/// Multi-network shows store "A · B" (NETWORK_SEPARATOR in @tvwatch/shared) — compact
+/// widget rows show the first network only, like the app's cards.
+private func firstNetwork(_ network: String) -> String {
+  network.components(separatedBy: " · ").first ?? network
+}
+
 // MARK: - Watch Next (mirrors the app's EpisodeCard)
 
 struct WatchNextRowView: View {
@@ -31,7 +37,7 @@ struct WatchNextRowView: View {
             .lineLimit(1)
           Spacer(minLength: 0)
           if let network = row.item.network {
-            Text(network)
+            Text(firstNetwork(network))
               .font(.system(size: 9))
               .foregroundStyle(WidgetTheme.textMuted)
               .lineLimit(1)
@@ -154,7 +160,7 @@ struct UpcomingRowView: View {
             .lineLimit(1)
           Spacer(minLength: 0)
           if let network = row.item.network {
-            Text(network)
+            Text(firstNetwork(network))
               .font(.system(size: 9, weight: .bold))
               .foregroundStyle(WidgetTheme.primary)
               .lineLimit(1)

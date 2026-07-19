@@ -83,6 +83,34 @@ describe('TmdbProvider.getShow', () => {
 
     expect(show.seasons[1].episodes).toHaveLength(85);
   });
+
+  it('joins up to two TMDB networks into the single network string', async () => {
+    const client = makeClient({
+      '/tv/65942': showPayload({
+        networks: [
+          { id: 98, name: 'TV Tokyo' },
+          { id: 173, name: 'AT-X' },
+          { id: 999, name: 'Third' },
+        ],
+        'season/0': seasonPayload(77),
+        'season/1': seasonPayload(85),
+      }),
+    });
+    const provider = new TmdbProvider(client);
+    const show = await provider.getShow(65942, 'en-US');
+
+    expect(show.network).toBe('TV Tokyo · AT-X');
+  });
+
+  it('keeps network null when the show has none', async () => {
+    const client = makeClient({
+      '/tv/65942': showPayload({ 'season/0': seasonPayload(77), 'season/1': seasonPayload(85) }),
+    });
+    const provider = new TmdbProvider(client);
+    const show = await provider.getShow(65942, 'en-US');
+
+    expect(show.network).toBeNull();
+  });
 });
 
 describe('TmdbProvider.getMovie', () => {

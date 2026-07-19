@@ -8,7 +8,6 @@
   "favoritesEmpty": "Add favorite movies.",
   "watchedButton": "Watched",
   "watchedButtonCount": "Watched ×{{count}}",
-  "markAsWatched": "Mark as watched",
   "inWatchlist": "In Watchlist",
   "addWatchlist": "Watchlist",
   "overview": "Overview",

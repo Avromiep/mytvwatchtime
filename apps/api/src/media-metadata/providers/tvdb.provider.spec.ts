@@ -92,4 +92,41 @@ describe('TvdbProvider — episode + translations', () => {
     const show = await provider.getShow(1, 'en');
     expect(show.genres).toEqual([]);
   });
+
+  it('joins up to two Network-type companies, skipping studios and duplicates', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/series/42/extended': {
+          id: 42,
+          name: 'Anime',
+          status: { name: 'Continuing' },
+          companies: [
+            { id: 433, name: 'AT-X', companyType: { companyTypeId: 1, companyTypeName: 'Network' } },
+            { id: 46193, name: 'WHITE FOX', companyType: { companyTypeId: 2, companyTypeName: 'Studio' } },
+            { id: 280, name: 'TV Tokyo', companyType: { companyTypeId: 1, companyTypeName: 'Network' } },
+            { id: 999, name: 'Third Net', companyType: { companyTypeId: 1, companyTypeName: 'Network' } },
+          ],
+        },
+        '/series/42/episodes': { episodes: [] },
+      }) as any,
+    );
+    const show = await provider.getShow(42, 'en');
+    expect(show.network).toBe('AT-X · TV Tokyo');
+  });
+
+  it('falls back to originalNetwork when the series has no companies', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/series/7/extended': {
+          id: 7,
+          name: 'Show',
+          status: { name: 'Ended' },
+          originalNetwork: { name: 'HBO' },
+        },
+        '/series/7/episodes': { episodes: [] },
+      }) as any,
+    );
+    const show = await provider.getShow(7, 'en');
+    expect(show.network).toBe('HBO');
+  });
 });

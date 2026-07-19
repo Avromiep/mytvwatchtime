@@ -35,6 +35,7 @@ import {
   useToggleFavorite,
   useToggleWatchlist,
 } from '../../api/hooks';
+import { useAddToList } from '../../hooks/useAddToList';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useConfetti } from '../../components/Confetti';
 import { useTranslation } from 'react-i18next';
@@ -48,6 +49,7 @@ export default function ShowDetailScreen() {
   const [tab, setTab] = useState<'about' | 'episodes'>('episodes');
   const watchlist = useToggleWatchlist();
   const favorite = useToggleFavorite();
+  const addToList = useAddToList();
   const [refreshing, setRefreshing] = useState(false);
   const { confettiEl, fire } = useConfetti();
   const prevProgress = useRef<number | null>(null);
@@ -73,7 +75,14 @@ export default function ShowDetailScreen() {
         <ImageBackground source={{ uri: show.images.backdrop ?? show.images.poster ?? undefined }} style={styles.backdrop} imageStyle={{ opacity: 1 }}>
           {/* eslint-disable-next-line local/no-hardcoded-colors -- intentional dark media scrim over backdrop (both themes) */}
           <LinearGradient colors={['rgba(15,17,21,0.65)', 'rgba(15,17,21,0.05)', 'rgba(15,17,21,0.7)']} locations={[0, 0.45, 1]} style={styles.overlay}>
-            <Header showBack right={<Pressable hitSlop={10}><Ionicons name="ellipsis-horizontal" size={24} color={tokens.mediaText} /></Pressable>} />
+            <Header
+              showBack
+              right={
+                <Pressable hitSlop={10} onPress={() => addToList.openMediaMenu({ id: show.id, title: show.title })}>
+                  <Ionicons name="ellipsis-horizontal" size={24} color={tokens.mediaText} />
+                </Pressable>
+              }
+            />
             <View style={{ padding: spacing.lg }}>
               <T variant="title" style={{ fontSize: 26, color: tokens.mediaText }}>{show.title}</T>
             </View>

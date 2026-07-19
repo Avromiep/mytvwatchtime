@@ -1,6 +1,9 @@
 {
   "createList": "Liste Oluştur",
   "createListButton": "Liste oluştur",
+  "addToList": "Listeye ekle",
+  "addedToList": "Listeye eklendi",
+  "removedFromList": "Listeden kaldırıldı",
   "titleField": "Başlık",
   "titlePlaceholder": "Favori dizilerim",
   "descField": "Açıklama (isteğe bağlı)",

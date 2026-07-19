@@ -1,6 +1,9 @@
 {
   "createList": "목록 만들기",
   "createListButton": "목록 만들기",
+  "addToList": "목록에 추가",
+  "addedToList": "목록에 추가했습니다",
+  "removedFromList": "목록에서 삭제했습니다",
   "titleField": "제목",
   "titlePlaceholder": "내가 좋아하는 프로그램",
   "descField": "설명(선택 사항)",

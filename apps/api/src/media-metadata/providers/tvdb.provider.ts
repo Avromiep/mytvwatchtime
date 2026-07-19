@@ -1,6 +1,6 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ExternalProvider, MediaStatus, MediaType } from '@tvwatch/shared';
-import { tvdbCode } from '@tvwatch/shared';
+import { tvdbCode, formatNetworks } from '@tvwatch/shared';
 
 /** Map our app locales → TVDB 3-letter language codes for the episodes path param. */
 const TVDB_3LETTER: Record<string, string> = {
@@ -83,6 +83,15 @@ interface TvdbCharacter {
   peopleType?: string;
 }
 
+interface TvdbCompany {
+  id?: number;
+  name?: string;
+  companyType?: { companyTypeId?: number; companyTypeName?: string };
+}
+
+/** TVDB companyTypeId 1 = "Network" (2 = Studio, 3 = Production Company). */
+const TVDB_NETWORK_COMPANY_TYPE_ID = 1;
+
 interface TvdbSeriesExtended {
   id: number;
   name?: string;
@@ -93,6 +102,7 @@ interface TvdbSeriesExtended {
   nextAired?: string;
   runtime?: number;
   originalNetwork?: { name?: string };
+  companies?: TvdbCompany[];
   imdbId?: string;
   seasons?: TvdbSeason[];
   artworks?: TvdbArtwork[];
@@ -321,7 +331,16 @@ export class TvdbProvider {
       status: tvdbStatusMap(s.status?.name),
       yearStart: s.firstAired ? Number(s.firstAired.slice(0, 4)) : null,
       yearEnd: s.lastAired ? Number(s.lastAired.slice(0, 4)) : null,
-      network: s.originalNetwork?.name ?? null,
+      // Networks come from the companies list (Network-type only, up to 2 joined); fall
+      // back to originalNetwork when the series carries no company data.
+      network:
+        formatNetworks(
+          (s.companies ?? [])
+            .filter((c) => c.companyType?.companyTypeId === TVDB_NETWORK_COMPANY_TYPE_ID)
+            .map((c) => c.name),
+        ) ??
+        s.originalNetwork?.name ??
+        null,
       runtimeMinutes: s.runtime ?? null,
       rating: null,
       popularity: 0,

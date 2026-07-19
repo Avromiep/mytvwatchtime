@@ -1,6 +1,9 @@
 {
   "createList": "सूची बनाएँ",
   "createListButton": "सूची बनाएँ",
+  "addToList": "सूची में जोड़ें",
+  "addedToList": "सूची में जोड़ा गया",
+  "removedFromList": "सूची से हटाया गया",
   "titleField": "शीर्षक",
   "titlePlaceholder": "मेरे पसंदीदा शो",
   "descField": "विवरण (वैकल्पिक)",

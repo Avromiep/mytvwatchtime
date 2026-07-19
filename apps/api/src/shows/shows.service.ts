@@ -242,6 +242,7 @@ export class ShowsService {
         poster: localized(mediaLoc, 'posterUrls', 'posterUrl') ?? media.posterUrl,
         backdrop: localized(mediaLoc, 'backdropUrls', 'backdropUrl') ?? media.backdropUrl,
       },
+      network: episode.season.show.network ?? null,
       providers: media.providers.map((p: any) => ({ id: p.provider.id, name: p.provider.name, logoUrl: p.provider.logoUrl })),
       cast,
       interactions: {

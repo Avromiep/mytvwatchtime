@@ -3,7 +3,11 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import type { TFunction } from 'i18next';
-import { computePercentages, type CharacterVoteSectionDto, type EpisodeCastMemberDto } from '@tvwatch/shared';
+import {
+  computePercentages,
+  type CharacterVoteSectionDto,
+  type EpisodeCastMemberDto,
+} from '@tvwatch/shared';
 import { PosterImage, T } from '../primitives';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
@@ -32,10 +36,13 @@ export function FavoriteCharacterVote({
   // Once revealed, order the cast by community percentage (highest first); before
   // voting keep the original billing order. Tie-break by billing order for stability.
   const valueOpts = section.options.map((o) => ({ value: o.castId, count: o.count }));
-  const percents = new Map(computePercentages(valueOpts, section.total).map((o) => [o.value, o.percent]));
+  const percents = new Map(
+    computePercentages(valueOpts, section.total).map((o) => [o.value, o.percent]),
+  );
   const orderedCast = reveal
     ? [...cast].sort(
-        (a, b) => (percents.get(b.creditId) ?? 0) - (percents.get(a.creditId) ?? 0) || a.order - b.order,
+        (a, b) =>
+          (percents.get(b.creditId) ?? 0) - (percents.get(a.creditId) ?? 0) || a.order - b.order,
       )
     : cast;
 
@@ -47,7 +54,15 @@ export function FavoriteCharacterVote({
   }, [section.userVote]);
 
   return (
-    <ScrollView ref={scrollRef} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: spacing.md }}>
+    <ScrollView
+      ref={scrollRef}
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      // Inside the episode pager (horizontal paging FlatList): let this row consume the
+      // horizontal swipe first; only at its edge does the pager take over (Android).
+      nestedScrollEnabled
+      contentContainerStyle={{ paddingRight: spacing.md }}
+    >
       {orderedCast.map((c) => {
         const selected = section.userVote === c.creditId;
         const pct = percents.get(c.creditId) ?? 0;
@@ -70,7 +85,10 @@ export function FavoriteCharacterVote({
             <View
               style={[
                 styles.avatarWrap,
-                { borderColor: selected ? tokens.primary : 'transparent', backgroundColor: tokens.surfaceElevated },
+                {
+                  borderColor: selected ? tokens.primary : 'transparent',
+                  backgroundColor: tokens.surfaceElevated,
+                },
               ]}
             >
               <PosterImage uri={c.profileUrl} style={styles.avatar} />
@@ -81,12 +99,20 @@ export function FavoriteCharacterVote({
               ) : null}
               {reveal ? (
                 <View style={[styles.pctPill, { backgroundColor: tokens.overlayStrong }]}>
-                  <T variant="micro" style={{ color: tokens.primary, fontWeight: '700' }}>{pct}%</T>
+                  <T variant="micro" style={{ color: tokens.primary, fontWeight: '700' }}>
+                    {pct}%
+                  </T>
                 </View>
               ) : null}
             </View>
-            <T variant="micro" numberOfLines={2} style={{ textAlign: 'center', marginTop: 4 }}>{c.character ?? c.name}</T>
-            {c.character ? <T variant="micro" muted numberOfLines={1} style={{ textAlign: 'center' }}>{c.name}</T> : null}
+            <T variant="micro" numberOfLines={2} style={{ textAlign: 'center', marginTop: 4 }}>
+              {c.character ?? c.name}
+            </T>
+            {c.character ? (
+              <T variant="micro" muted numberOfLines={1} style={{ textAlign: 'center' }}>
+                {c.name}
+              </T>
+            ) : null}
           </Pressable>
         );
       })}
@@ -114,5 +140,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  pctPill: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingVertical: 2, alignItems: 'center' },
+  pctPill: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingVertical: 2,
+    alignItems: 'center',
+  },
 });

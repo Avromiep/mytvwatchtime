@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { ExternalProvider, MediaStatus, MediaType } from '@tvwatch/shared';
+import { ExternalProvider, MediaStatus, MediaType, formatNetworks } from '@tvwatch/shared';
 import { TmdbClient } from './tmdb.client';
 
 export interface NormalizedExternal {
@@ -461,7 +461,8 @@ export class TmdbProvider {
         se.episodes = (detail.episodes || []).map((e) => this.normalizeEpisode(e));
       }
     }
-    const network = s.networks?.[0]?.name ?? null;
+    // Multi-network shows keep up to 2 names joined in the single string (e.g. "TV Tokyo · AT-X").
+    const network = formatNetworks((s.networks ?? []).map((n) => n.name));
     return {
       type: MediaType.SHOW,
       tmdbId: s.id,

@@ -1,6 +1,9 @@
 {
   "createList": "Crear lista",
   "createListButton": "Crear lista",
+  "addToList": "Añadir a la lista",
+  "addedToList": "Añadido a la lista",
+  "removedFromList": "Eliminado de la lista",
   "titleField": "Título",
   "titlePlaceholder": "Mis series favoritas",
   "descField": "Descripción (opcional)",

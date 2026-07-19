@@ -1,6 +1,9 @@
 {
   "createList": "Buat Daftar",
   "createListButton": "Buat daftar",
+  "addToList": "Tambahkan ke daftar",
+  "addedToList": "Ditambahkan ke daftar",
+  "removedFromList": "Dihapus dari daftar",
   "titleField": "Judul",
   "titlePlaceholder": "Acara favorit saya",
   "descField": "Deskripsi (opsional)",

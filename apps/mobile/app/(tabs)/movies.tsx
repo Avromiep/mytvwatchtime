@@ -133,7 +133,7 @@ export default function MoviesScreen() {
 
   return (
     <Screen>
-      <Header title="Movies" />
+      <Header title={t('movies:title')} />
       <FlatList
         data={rows}
         keyExtractor={(item) => item.key}

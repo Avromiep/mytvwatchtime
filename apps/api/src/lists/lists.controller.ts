@@ -13,8 +13,8 @@ export class ListsController {
   constructor(private readonly lists: ListsService) {}
 
   @Get('me/lists')
-  mine(@CurrentUser('id') userId: string) {
-    return this.lists.list(userId);
+  mine(@CurrentUser('id') userId: string, @Query('mediaId') mediaId?: string) {
+    return this.lists.list(userId, mediaId);
   }
 
   @Get('me/followed-lists')
