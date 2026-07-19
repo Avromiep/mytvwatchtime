@@ -74,9 +74,11 @@ export class HydrationQueue implements OnModuleInit {
     return this.queue.add('anime-hydrate', { mediaId }, {
       jobId: HydrationQueue.jobId('anime-hydrate', `media-${mediaId}`),
       // Anime matching hits external services (Kitsu/Jikan): transient failures retry
-      // instead of persisting a degraded classification.
-      attempts: 3,
-      backoff: { type: 'exponential', delay: 30000 },
+      // instead of persisting a degraded classification. The long exponential backoff
+      // spreads retries over ~an hour so a provider-saturation wave (import/backfill
+      // storms) doesn't turn into a retry storm of its own.
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 120000 },
       removeOnComplete: 1000,
       removeOnFail: 2000,
     });
