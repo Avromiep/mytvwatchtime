@@ -8,6 +8,7 @@ import { ClassifierService } from '../classification/classifier.service';
 import { AnimeMatchService } from '../matching/anime-match.service';
 import { TvdbProvider } from '../providers/tvdb.provider';
 import { TmdbProvider } from '../providers/tmdb.provider';
+import { MediaMetadataService } from '../media-metadata.service';
 import {
   METADATA_QUEUE,
   HydrationQueue,
@@ -34,6 +35,7 @@ export class HydrationProcessor implements OnModuleInit {
     private readonly tvdb: TvdbProvider,
     private readonly tmdb: TmdbProvider,
     private readonly queue: HydrationQueue,
+    private readonly meta: MediaMetadataService,
   ) {}
 
   onModuleInit() {
@@ -57,9 +59,23 @@ export class HydrationProcessor implements OnModuleInit {
         return this.animeHydrate((data as IdentityJobData).mediaId!);
       case 'tvdb-search':
         return this.tvdbSearch(data as TvdbSearchJobData);
+      case 'tvdb-rehydrate':
+        return this.tvdbRehydrate(data as { mediaId: string; tvdbId: number });
       default:
         this.logger.debug(`unknown metadata job: ${name}`);
     }
+  }
+
+  /** Background TVDB re-hydration of one show (queued by import character-vote apply).
+   *  Bypasses the 24h staleness gate (queued specifically to rewrite stale data such as
+   *  missing cast character ids); rate-limit errors rethrow so BullMQ retries. */
+  async tvdbRehydrate(data: { mediaId: string; tvdbId: number }): Promise<void> {
+    if (!this.tvdb.enabled) return;
+    await this.prisma.mediaItem
+      .update({ where: { id: data.mediaId }, data: { metadataRefreshedAt: null } })
+      .catch(() => undefined);
+    await this.meta.ensureShowFullTvdb(data.tvdbId);
+    this.logger.debug(`tvdb-rehydrate: ${data.mediaId} hydrated from TVDB ${data.tvdbId}`);
   }
 
   /** Stage 1: candidate detection. For a local row, chains into hydration; for an

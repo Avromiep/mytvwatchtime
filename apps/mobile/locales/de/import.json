@@ -50,6 +50,7 @@
   "filters": {
     "all": "Alle",
     "matched": "Zugeordnet",
+    "pendingMatch": "Zum Abgleich vorgemerkt",
     "needsReview": "Prüfung erforderlich",
     "unmatched": "Nicht zugeordnet",
     "duplicates": "Duplikate"

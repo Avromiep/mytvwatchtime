@@ -50,6 +50,7 @@
   "filters": {
     "all": "전체",
     "matched": "매칭됨",
+    "pendingMatch": "매칭 예약됨",
     "needsReview": "검토 필요",
     "unmatched": "매칭 안 됨",
     "duplicates": "중복"

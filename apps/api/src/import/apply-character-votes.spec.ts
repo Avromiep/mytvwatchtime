@@ -16,12 +16,14 @@ function makeService(castRows: any[], existingVotes: any[]) {
   const prisma: any = {
     mediaCast: model(['findMany']),
     characterVote: model(['findMany']),
+    externalId: model(['findFirst']),
     import: model(['update']),
     importItem: model(['updateMany']),
     $transaction: jest.fn(async (fn: any) => fn(prisma)),
   };
   prisma.mediaCast.findMany.mockResolvedValue(castRows);
   prisma.characterVote.findMany.mockResolvedValue(existingVotes);
+  const hydration = { enqueueTvdbRehydrate: jest.fn().mockResolvedValue(undefined) };
   const chunked: any[] = [];
   prisma.chunkedCapture = chunked;
   const service = new ImportService(
@@ -31,14 +33,15 @@ function makeService(castRows: any[], existingVotes: any[]) {
     {} as any,
     {} as any,
     {} as any,
-    { rehydrateWithTvdb: jest.fn().mockResolvedValue(true) } as any,
+    {} as any, // matcher (unused by applyCharacterVotes)
     {} as any,
+    hydration as any,
   );
   // Spy the chunk writer so we can assert created rows without a real DB.
   (service as any).chunkedCreateMany = jest.fn(async (_tx: any, _model: string, rows: any[]) => {
     chunked.push(...rows);
   });
-  return { service: service as any, prisma, chunked };
+  return { service: service as any, prisma, hydration, chunked };
 }
 
 const item = (over: Record<string, unknown> = {}) => ({
@@ -78,25 +81,30 @@ describe('ImportService.applyCharacterVotes', () => {
     });
   });
 
-  it('re-hydrates a show ONCE when its cast rows predate characterExternalId, then retries', async () => {
-    const { service, chunked, prisma } = makeService([], []);
-    // First loadCastRows → empty; after the single rehydrate → the character is there.
-    prisma.mediaCast.findMany
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: 'cast-1', mediaId: 'media-1', characterExternalId: 64771402 }]);
+  it('enqueues ONE background re-hydration per missing show instead of blocking the import', async () => {
+    const { service, prisma, hydration } = makeService([], []);
+    prisma.externalId.findFirst.mockResolvedValue({ value: '73255' });
     const res = await service.applyCharacterVotes('u1', 'imp1', [item()]);
-    expect(res.created).toBe(1);
-    expect(chunked[0]).toMatchObject({ castId: 'cast-1' });
-    const rehydrate = (service as any).matcher.rehydrateWithTvdb as jest.Mock;
-    expect(rehydrate).toHaveBeenCalledTimes(1);
-    expect(rehydrate).toHaveBeenCalledWith('media-1');
+    // Not resolved locally yet → counted unresolved and marked PENDING_MATCH ("scheduled
+    // for match"), while the show is queued exactly once for background TVDB hydration.
+    expect(res).toEqual({ created: 0, skipped: 0 });
+    expect(hydration.enqueueTvdbRehydrate).toHaveBeenCalledTimes(1);
+    expect(hydration.enqueueTvdbRehydrate).toHaveBeenCalledWith('media-1', 73255);
+    expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['it1'] } },
+      data: { status: 'PENDING_MATCH' },
+    });
   });
 
-  it('leaves the item MATCHED and counts unresolved when the character cannot be resolved', async () => {
+  it('marks unresolvable items PENDING_MATCH (visible as scheduled) and counts unresolved', async () => {
     const { service, prisma } = makeService([], []);
+    prisma.externalId.findFirst.mockResolvedValue(null); // no TVDB id — nothing to enqueue
     const res = await service.applyCharacterVotes('u1', 'imp1', [item()]);
     expect(res).toEqual({ created: 0, skipped: 0 });
-    expect(prisma.importItem.updateMany).not.toHaveBeenCalled(); // not marked APPLIED — retried later
+    expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['it1'] } },
+      data: { status: 'PENDING_MATCH' },
+    });
     expect(prisma.import.update).toHaveBeenCalledWith({
       where: { id: 'imp1' },
       data: expect.objectContaining({ characterVotesSkippedUnresolved: { increment: 1 } }),

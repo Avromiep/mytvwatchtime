@@ -71,26 +71,54 @@ export class HydrationQueue implements OnModuleInit {
   }
 
   enqueueAnimeHydrate(mediaId: string): Promise<unknown> {
-    return this.queue.add('anime-hydrate', { mediaId }, {
-      jobId: HydrationQueue.jobId('anime-hydrate', `media-${mediaId}`),
-      // Anime matching hits external services (Kitsu/Jikan): transient failures retry
-      // instead of persisting a degraded classification. The long exponential backoff
-      // spreads retries over ~an hour so a provider-saturation wave (import/backfill
-      // storms) doesn't turn into a retry storm of its own.
-      attempts: 5,
-      backoff: { type: 'exponential', delay: 120000 },
-      removeOnComplete: 1000,
-      removeOnFail: 2000,
-    });
+    return this.queue.add(
+      'anime-hydrate',
+      { mediaId },
+      {
+        jobId: HydrationQueue.jobId('anime-hydrate', `media-${mediaId}`),
+        // Anime matching hits external services (Kitsu/Jikan): transient failures retry
+        // instead of persisting a degraded classification. The long exponential backoff
+        // spreads retries over ~an hour so a provider-saturation wave (import/backfill
+        // storms) doesn't turn into a retry storm of its own.
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 120000 },
+        removeOnComplete: 1000,
+        removeOnFail: 2000,
+      },
+    );
   }
 
-  enqueueTvdbSearch(query: string, structuralType: 'SHOW' | 'MOVIE', locale: string): Promise<unknown> {
+  enqueueTvdbSearch(
+    query: string,
+    structuralType: 'SHOW' | 'MOVIE',
+    locale: string,
+  ): Promise<unknown> {
     const norm = query.trim().toLowerCase();
     return this.queue.add(
       'tvdb-search',
       { query: norm, structuralType, locale } satisfies TvdbSearchJobData,
       {
         jobId: HydrationQueue.jobId('tvdb-search', `${norm}-${structuralType}-${locale}`),
+        removeOnComplete: 1000,
+        removeOnFail: 2000,
+      },
+    );
+  }
+
+  /**
+   * Background TVDB re-hydration of one show (e.g. to fill cast character ids for import
+   * character-vote resolution). Stable job id dedupes concurrent triggers for the same
+   * show; transient failures (incl. TVDB rate limits) retry with a long exponential
+   * backoff instead of blocking the caller.
+   */
+  enqueueTvdbRehydrate(mediaId: string, tvdbId: number): Promise<unknown> {
+    return this.queue.add(
+      'tvdb-rehydrate',
+      { mediaId, tvdbId },
+      {
+        jobId: HydrationQueue.jobId('tvdb-rehydrate', `media-${mediaId}`),
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 120000 },
         removeOnComplete: 1000,
         removeOnFail: 2000,
       },

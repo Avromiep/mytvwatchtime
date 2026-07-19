@@ -50,6 +50,7 @@
   "filters": {
     "all": "全部",
     "matched": "已匹配",
+    "pendingMatch": "待匹配",
     "needsReview": "需要审核",
     "unmatched": "未匹配",
     "duplicates": "重复项"

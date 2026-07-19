@@ -11,6 +11,7 @@ import { ImportStorage } from './lib/storage';
 import { ImportMatcher } from './lib/matcher';
 import { normTitle, splitTitleYear } from './lib/inference';
 import { ImportProcessor } from './import.processor';
+import { HydrationQueue } from '../media-metadata/hydration/hydration.queue';
 import { InvalidUploadError } from './errors';
 import { randomUUID } from 'crypto';
 
@@ -41,10 +42,15 @@ export class ImportService {
     private readonly settings: SettingService,
     private readonly matcher: ImportMatcher,
     private readonly commentImages: CommentImageProcessor,
+    private readonly hydration: HydrationQueue,
   ) {}
 
   // ---------------- upload ----------------
-  async upload(userId: string, file: { buffer: Buffer; originalname: string; size: number }, locale?: string) {
+  async upload(
+    userId: string,
+    file: { buffer: Buffer; originalname: string; size: number },
+    locale?: string,
+  ) {
     if (!file) throw new InvalidUploadError('No file received');
     if (file.size > IMPORT_LIMITS.MAX_UPLOAD_BYTES) {
       throw new InvalidUploadError(`File exceeds ${IMPORT_LIMITS.MAX_UPLOAD_BYTES} bytes`);
@@ -56,9 +62,10 @@ export class ImportService {
     // Daily limit is admin-controlled (Settings → limits → IMPORT_DAILY_LIMIT); falls back to
     // the env config, then the hardcoded default. Read live so admin changes take effect.
     const dailyLimit = await this.settings.getNumber('IMPORT_DAILY_LIMIT', NaN);
-    const effectiveLimit = Number.isFinite(dailyLimit) && dailyLimit > 0
-      ? dailyLimit
-      : this.config.get<number>('imports.dailyLimit') ?? IMPORT_LIMITS.DAILY_IMPORTS_PER_USER;
+    const effectiveLimit =
+      Number.isFinite(dailyLimit) && dailyLimit > 0
+        ? dailyLimit
+        : (this.config.get<number>('imports.dailyLimit') ?? IMPORT_LIMITS.DAILY_IMPORTS_PER_USER);
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const todayCount = await this.prisma.import.count({
       where: { userId, createdAt: { gte: since } },
@@ -77,7 +84,10 @@ export class ImportService {
       },
     });
     const key = await this.storage.write(imp.id, file.originalname, file.buffer);
-    await this.prisma.import.update({ where: { id: imp.id }, data: { storageKey: key, status: 'QUEUED' } });
+    await this.prisma.import.update({
+      where: { id: imp.id },
+      data: { storageKey: key, status: 'QUEUED' },
+    });
     await this.processor.enqueue(imp.id);
     return { importId: imp.id, status: 'QUEUED' };
   }
@@ -104,7 +114,8 @@ export class ImportService {
     const pageSize = Math.min(opts.pageSize || 50, 200);
     const where: any = { importId };
     if (opts.status) where.status = opts.status.toUpperCase();
-    if (opts.entity && isNaN(Number(opts.entity))) where.sourceEntityType = opts.entity.toUpperCase();
+    if (opts.entity && isNaN(Number(opts.entity)))
+      where.sourceEntityType = opts.entity.toUpperCase();
     const [items, total] = await Promise.all([
       this.prisma.importItem.findMany({
         where,
@@ -117,8 +128,15 @@ export class ImportService {
     return { items, total, page, pageSize };
   }
 
-  async patchItem(userId: string, importId: string, itemId: string, dto: { matchedMediaId?: string; userResolution?: string }) {
-    const item = await this.prisma.importItem.findFirst({ where: { id: itemId, importId, import: { userId } } });
+  async patchItem(
+    userId: string,
+    importId: string,
+    itemId: string,
+    dto: { matchedMediaId?: string; userResolution?: string },
+  ) {
+    const item = await this.prisma.importItem.findFirst({
+      where: { id: itemId, importId, import: { userId } },
+    });
     if (!item) throw new NotFoundException('Import item not found');
     const data: any = {};
     if (dto.matchedMediaId) {
@@ -166,7 +184,13 @@ export class ImportService {
     let resolved = 0;
     let matched = 0;
     let needsReview = 0;
-    const EPISODE_ENTITIES = ['WATCHED_EPISODE', 'EPISODE_RATING', 'EPISODE_EMOTION', 'EPISODE_COMMENT', 'EPISODE_CHARACTER_VOTE'];
+    const EPISODE_ENTITIES = [
+      'WATCHED_EPISODE',
+      'EPISODE_RATING',
+      'EPISODE_EMOTION',
+      'EPISODE_COMMENT',
+      'EPISODE_CHARACTER_VOTE',
+    ];
 
     for (const it of items) {
       const norm: any = it.normalizedData ?? {};
@@ -191,7 +215,12 @@ export class ImportService {
 
       await this.prisma.importItem.update({
         where: { id: it.id },
-        data: { matchedMediaId, matchedEpisodeId: episodeId, status: status as 'MATCHED' | 'NEEDS_REVIEW', confidenceScore: episodeId ? 1 : 0.7 },
+        data: {
+          matchedMediaId,
+          matchedEpisodeId: episodeId,
+          status: status as 'MATCHED' | 'NEEDS_REVIEW',
+          confidenceScore: episodeId ? 1 : 0.7,
+        },
       });
       resolved++;
       if (status === 'MATCHED') matched++;
@@ -232,15 +261,20 @@ export class ImportService {
     if (imp.status !== 'READY_FOR_REVIEW') {
       throw new BadRequestException(`Import is not ready for review (status=${imp.status})`);
     }
-    await this.prisma.import.update({ where: { id: importId }, data: { status: 'IMPORTING', progress: 0 } });
+    await this.prisma.import.update({
+      where: { id: importId },
+      data: { status: 'IMPORTING', progress: 0 },
+    });
 
-    // Load only not-yet-applied matched items. Each section marks its items APPLIED inside its
-    // own transaction, so a retry (BullMQ or manual re-confirm) only reprocesses leftover items
-    // and never duplicates already-applied data.
+    // Load not-yet-applied matched items (incl. PENDING_MATCH: items waiting on queued
+    // background re-matching — a re-confirm after that work completes picks them up).
+    // Each section marks its items APPLIED inside its own transaction, so a retry
+    // (BullMQ or manual re-confirm) only reprocesses leftover items and never
+    // duplicates already-applied data.
     const items = await this.prisma.importItem.findMany({
       where: {
         importId,
-        status: 'MATCHED',
+        status: { in: ['MATCHED', 'PENDING_MATCH'] },
         OR: [{ userResolution: null }, { userResolution: { not: 'skip' } }],
       },
     });
@@ -261,7 +295,12 @@ export class ImportService {
       this.events.emit('import.applied', { userId });
     } catch (e) {
       this.logger.error(`Apply failed for import ${importId}: ${(e as Error).message}`);
-      await this.prisma.import.update({ where: { id: importId }, data: { status: 'FAILED', errorMessage: (e as Error).message?.slice(0, 1000) } }).catch(() => undefined);
+      await this.prisma.import
+        .update({
+          where: { id: importId },
+          data: { status: 'FAILED', errorMessage: (e as Error).message?.slice(0, 1000) },
+        })
+        .catch(() => undefined);
       throw e;
     } finally {
       // Guaranteed temp-file cleanup regardless of success or failure.
@@ -331,7 +370,10 @@ export class ImportService {
     const sectionDone = async () => {
       sectionsDone++;
       await this.prisma.import
-        .update({ where: { id: importId }, data: { progress: Math.round((sectionsDone / SECTIONS_TOTAL) * 100) } })
+        .update({
+          where: { id: importId },
+          data: { progress: Math.round((sectionsDone / SECTIONS_TOTAL) * 100) },
+        })
         .catch(() => undefined);
     };
 
@@ -342,10 +384,14 @@ export class ImportService {
       (it) => it.sourceEntityType === 'WATCHED_MOVIE' && it.matchedMediaId,
     );
     const watchlistItems = items.filter(
-      (it) => (it.sourceEntityType === 'WATCHLIST_SHOW' || it.sourceEntityType === 'WATCHLIST_MOVIE') && it.matchedMediaId,
+      (it) =>
+        (it.sourceEntityType === 'WATCHLIST_SHOW' || it.sourceEntityType === 'WATCHLIST_MOVIE') &&
+        it.matchedMediaId,
     );
     const favoriteItems = items.filter(
-      (it) => (it.sourceEntityType === 'FAVORITE_SHOW' || it.sourceEntityType === 'FAVORITE_MOVIE') && it.matchedMediaId,
+      (it) =>
+        (it.sourceEntityType === 'FAVORITE_SHOW' || it.sourceEntityType === 'FAVORITE_MOVIE') &&
+        it.matchedMediaId,
     );
 
     // --- WATCHED EPISODES ---
@@ -377,7 +423,10 @@ export class ImportService {
       const watchCountByEpisode = new Map<string, number>();
       for (const it of epItems) {
         const c = Math.max(1, Number(it.normalizedData?.watchCount) || 1);
-        watchCountByEpisode.set(it.matchedEpisodeId, Math.max(watchCountByEpisode.get(it.matchedEpisodeId) ?? 1, c));
+        watchCountByEpisode.set(
+          it.matchedEpisodeId,
+          Math.max(watchCountByEpisode.get(it.matchedEpisodeId) ?? 1, c),
+        );
       }
 
       const epStatusRows: any[] = [];
@@ -403,7 +452,14 @@ export class ImportService {
             // Reflect the bump in-memory so a sibling item for the same episode (rewatched
             // vs seen_episode_source) doesn't bump it again within this batch.
             existingByEpisode.set(epId, { id: existing.id, watchCount: importedCount });
-            auditRows.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'user_episode_status', targetRecordId: existing.id, action: 'updated' });
+            auditRows.push({
+              id: randomUUID(),
+              importId,
+              importItemId: it.id,
+              targetTable: 'user_episode_status',
+              targetRecordId: existing.id,
+              action: 'updated',
+            });
             appliedIds.push(it.id);
             sectionBumped++;
           } else {
@@ -423,7 +479,14 @@ export class ImportService {
         const watchedAt = norm.watchedAt ? new Date(norm.watchedAt) : new Date();
         const watchCount = importedCount;
         const statusId = randomUUID();
-        epStatusRows.push({ id: statusId, userId, episodeId: epId, watched: true, watchedAt, watchCount });
+        epStatusRows.push({
+          id: statusId,
+          userId,
+          episodeId: epId,
+          watched: true,
+          watchedAt,
+          watchCount,
+        });
         historyRows.push({
           id: randomUUID(),
           userId,
@@ -435,26 +498,43 @@ export class ImportService {
           runtimeMinutes: epData?.runtimeMinutes ?? null,
           watchedAt,
         });
-        auditRows.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'user_episode_status', targetRecordId: statusId, action: 'created' });
+        auditRows.push({
+          id: randomUUID(),
+          importId,
+          importItemId: it.id,
+          targetTable: 'user_episode_status',
+          targetRecordId: statusId,
+          action: 'created',
+        });
         appliedIds.push(it.id);
         sectionCreated++;
       }
       if (epStatusRows.length || bumpUpdates.length) {
-        await this.prisma.$transaction(async (tx) => {
-          await this.chunkedCreateMany(tx, 'userEpisodeStatus', epStatusRows, true);
-          await this.chunkedCreateMany(tx, 'watchHistory', historyRows);
-          await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
-          // Upgrade watchCount (max only) for already-watched episodes whose imported
-          // tally is now higher than what was previously stored.
-          if (bumpUpdates.length) {
-            await Promise.all(
-              bumpUpdates.map((b) =>
-                tx.userEpisodeStatus.update({ where: { id: b.id }, data: { watchCount: b.watchCount } }),
-              ),
-            );
-          }
-          if (appliedIds.length) await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
-        }, { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT });
+        await this.prisma.$transaction(
+          async (tx) => {
+            await this.chunkedCreateMany(tx, 'userEpisodeStatus', epStatusRows, true);
+            await this.chunkedCreateMany(tx, 'watchHistory', historyRows);
+            await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
+            // Upgrade watchCount (max only) for already-watched episodes whose imported
+            // tally is now higher than what was previously stored.
+            if (bumpUpdates.length) {
+              await Promise.all(
+                bumpUpdates.map((b) =>
+                  tx.userEpisodeStatus.update({
+                    where: { id: b.id },
+                    data: { watchCount: b.watchCount },
+                  }),
+                ),
+              );
+            }
+            if (appliedIds.length)
+              await tx.importItem.updateMany({
+                where: { id: { in: appliedIds } },
+                data: { status: 'APPLIED' },
+              });
+          },
+          { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
+        );
       }
       created += sectionCreated + sectionBumped;
     }
@@ -491,7 +571,14 @@ export class ImportService {
         const watchedAt = norm.watchedAt ? new Date(norm.watchedAt) : new Date();
         const watchCount = Math.max(1, Number(norm.watchCount) || 1);
         const statusId = randomUUID();
-        movieStatusRows.push({ id: statusId, userId, mediaId, watched: true, watchedAt, watchCount });
+        movieStatusRows.push({
+          id: statusId,
+          userId,
+          mediaId,
+          watched: true,
+          watchedAt,
+          watchCount,
+        });
         movieHistoryRows.push({
           id: randomUUID(),
           userId,
@@ -500,17 +587,31 @@ export class ImportService {
           runtimeMinutes: runtimeMap.get(mediaId) ?? null,
           watchedAt,
         });
-        auditRows.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'user_movie_status', targetRecordId: statusId, action: 'created' });
+        auditRows.push({
+          id: randomUUID(),
+          importId,
+          importItemId: it.id,
+          targetTable: 'user_movie_status',
+          targetRecordId: statusId,
+          action: 'created',
+        });
         appliedIds.push(it.id);
         sectionCreated++;
       }
       if (movieStatusRows.length) {
-        await this.prisma.$transaction(async (tx) => {
-          await this.chunkedCreateMany(tx, 'userMovieStatus', movieStatusRows, true);
-          await this.chunkedCreateMany(tx, 'watchHistory', movieHistoryRows);
-          await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
-          if (appliedIds.length) await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
-        }, { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT });
+        await this.prisma.$transaction(
+          async (tx) => {
+            await this.chunkedCreateMany(tx, 'userMovieStatus', movieStatusRows, true);
+            await this.chunkedCreateMany(tx, 'watchHistory', movieHistoryRows);
+            await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
+            if (appliedIds.length)
+              await tx.importItem.updateMany({
+                where: { id: { in: appliedIds } },
+                data: { status: 'APPLIED' },
+              });
+          },
+          { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
+        );
       }
       created += sectionCreated;
     }
@@ -538,16 +639,30 @@ export class ImportService {
         existingSet.add(mediaId);
         const rowId = randomUUID();
         rows.push({ id: rowId, userId, mediaId });
-        auditRows.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'watchlist_items', targetRecordId: rowId, action: 'created' });
+        auditRows.push({
+          id: randomUUID(),
+          importId,
+          importItemId: it.id,
+          targetTable: 'watchlist_items',
+          targetRecordId: rowId,
+          action: 'created',
+        });
         appliedIds.push(it.id);
         sectionCreated++;
       }
       if (rows.length) {
-        await this.prisma.$transaction(async (tx) => {
-          await this.chunkedCreateMany(tx, 'watchlistItem', rows, true);
-          await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
-          if (appliedIds.length) await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
-        }, { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT });
+        await this.prisma.$transaction(
+          async (tx) => {
+            await this.chunkedCreateMany(tx, 'watchlistItem', rows, true);
+            await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
+            if (appliedIds.length)
+              await tx.importItem.updateMany({
+                where: { id: { in: appliedIds } },
+                data: { status: 'APPLIED' },
+              });
+          },
+          { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
+        );
       }
       created += sectionCreated;
     }
@@ -575,16 +690,30 @@ export class ImportService {
         existingSet.add(mediaId);
         const rowId = randomUUID();
         rows.push({ id: rowId, userId, mediaId });
-        auditRows.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'favorites', targetRecordId: rowId, action: 'created' });
+        auditRows.push({
+          id: randomUUID(),
+          importId,
+          importItemId: it.id,
+          targetTable: 'favorites',
+          targetRecordId: rowId,
+          action: 'created',
+        });
         appliedIds.push(it.id);
         sectionCreated++;
       }
       if (rows.length) {
-        await this.prisma.$transaction(async (tx) => {
-          await this.chunkedCreateMany(tx, 'favorite', rows, true);
-          await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
-          if (appliedIds.length) await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
-        }, { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT });
+        await this.prisma.$transaction(
+          async (tx) => {
+            await this.chunkedCreateMany(tx, 'favorite', rows, true);
+            await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
+            if (appliedIds.length)
+              await tx.importItem.updateMany({
+                where: { id: { in: appliedIds } },
+                data: { status: 'APPLIED' },
+              });
+          },
+          { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
+        );
       }
       created += sectionCreated;
     }
@@ -616,8 +745,15 @@ export class ImportService {
   }
 
   /** Create/update imported lists idempotently (identity = userId + source + sourceKey). */
-  private async applyLists(userId: string, importId: string, items: any[], source: ListSource = 'TVTIME'): Promise<number> {
-    const listItems = items.filter((it) => it.sourceEntityType === 'LIST' && it.status === 'MATCHED');
+  private async applyLists(
+    userId: string,
+    importId: string,
+    items: any[],
+    source: ListSource = 'TVTIME',
+  ): Promise<number> {
+    const listItems = items.filter(
+      (it) => it.sourceEntityType === 'LIST' && it.status === 'MATCHED',
+    );
     const listItemItems = items.filter(
       (it) => it.sourceEntityType === 'LIST_ITEM' && it.status === 'MATCHED' && it.matchedMediaId,
     );
@@ -667,9 +803,20 @@ export class ImportService {
                 ...(norm.createdAt ? { createdAt: new Date(norm.createdAt) } : {}),
               },
             });
-            listAudit.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'custom_lists', targetRecordId: listId, action: 'created' });
+            listAudit.push({
+              id: randomUUID(),
+              importId,
+              importItemId: it.id,
+              targetTable: 'custom_lists',
+              targetRecordId: listId,
+              action: 'created',
+            });
           } else {
-            const prev = { title: list.title, description: list.description, visibility: list.visibility };
+            const prev = {
+              title: list.title,
+              description: list.description,
+              visibility: list.visibility,
+            };
             list = await tx.customList.update({
               where: { id: list.id },
               data: {
@@ -678,7 +825,20 @@ export class ImportService {
                 visibility: norm.visibility === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE',
               },
             });
-            listAudit.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'custom_lists', targetRecordId: list.id, action: 'updated', previousData: prev as any, newData: { title: list.title, description: list.description, visibility: list.visibility } as any });
+            listAudit.push({
+              id: randomUUID(),
+              importId,
+              importItemId: it.id,
+              targetTable: 'custom_lists',
+              targetRecordId: list.id,
+              action: 'updated',
+              previousData: prev as any,
+              newData: {
+                title: list.title,
+                description: list.description,
+                visibility: list.visibility,
+              } as any,
+            });
           }
 
           // Add missing items (skipDuplicates respects @@unique([listId, mediaId])).
@@ -694,7 +854,14 @@ export class ImportService {
             if (have.has(mediaId)) continue;
             const rowId = randomUUID();
             newRows.push({ id: rowId, listId: list.id, mediaId, order: srcOrder ?? order });
-            itemAudit.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'custom_list_items', targetRecordId: rowId, action: 'created' });
+            itemAudit.push({
+              id: randomUUID(),
+              importId,
+              importItemId: it.id,
+              targetTable: 'custom_list_items',
+              targetRecordId: rowId,
+              action: 'created',
+            });
             created++;
             order++;
           }
@@ -703,7 +870,10 @@ export class ImportService {
           if (allAudit.length) await this.chunkedCreateMany(tx, 'importAppliedRecord', allAudit);
           // Mark the LIST + its applied LIST_ITEMs as APPLIED (idempotent retry).
           const appliedIds = [it.id, ...childItems.map((c) => c.id)];
-          await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+          await tx.importItem.updateMany({
+            where: { id: { in: appliedIds } },
+            data: { status: 'APPLIED' },
+          });
         },
         { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
       );
@@ -728,11 +898,19 @@ export class ImportService {
     let created = 0;
     let skipped = 0;
 
-    const epIds = [...new Set(ratingItems.map((it: any) => it.matchedEpisodeId).filter(Boolean))] as string[];
-    const mediaIds = [...new Set(ratingItems.map((it: any) => it.matchedMediaId).filter(Boolean))] as string[];
+    const epIds = [
+      ...new Set(ratingItems.map((it: any) => it.matchedEpisodeId).filter(Boolean)),
+    ] as string[];
+    const mediaIds = [
+      ...new Set(ratingItems.map((it: any) => it.matchedMediaId).filter(Boolean)),
+    ] as string[];
     const [existingEp, existingMedia] = await Promise.all([
-      epIds.length ? this.prisma.rating.findMany({ where: { userId, episodeId: { in: epIds } } }) : [],
-      mediaIds.length ? this.prisma.rating.findMany({ where: { userId, mediaId: { in: mediaIds } } }) : [],
+      epIds.length
+        ? this.prisma.rating.findMany({ where: { userId, episodeId: { in: epIds } } })
+        : [],
+      mediaIds.length
+        ? this.prisma.rating.findMany({ where: { userId, mediaId: { in: mediaIds } } })
+        : [],
     ]);
     const epMap = new Map(existingEp.map((r: any) => [r.episodeId, r]));
     const mediaMap = new Map(existingMedia.map((r: any) => [r.mediaId, r]));
@@ -752,8 +930,11 @@ export class ImportService {
         continue;
       }
       const sourceKey =
-        norm.voteKey ?? (it.matchedEpisodeId ? `episode:${it.matchedEpisodeId}` : `media:${it.matchedMediaId}`);
-      const existing: any = it.matchedEpisodeId ? epMap.get(it.matchedEpisodeId) : mediaMap.get(it.matchedMediaId);
+        norm.voteKey ??
+        (it.matchedEpisodeId ? `episode:${it.matchedEpisodeId}` : `media:${it.matchedMediaId}`);
+      const existing: any = it.matchedEpisodeId
+        ? epMap.get(it.matchedEpisodeId)
+        : mediaMap.get(it.matchedMediaId);
       if (!existing) {
         const id = randomUUID();
         // Episode ratings key on episodeId only (mediaId null) so multiple episodes of the
@@ -763,14 +944,21 @@ export class ImportService {
           id,
           userId,
           episodeId: isEpisode ? it.matchedEpisodeId : null,
-          mediaId: isEpisode ? null : it.matchedMediaId ?? null,
+          mediaId: isEpisode ? null : (it.matchedMediaId ?? null),
           rating,
           source,
           sourceKey,
           createdAt: norm.sourceCreatedAt ? new Date(norm.sourceCreatedAt) : new Date(),
           updatedAt: norm.sourceUpdatedAt ? new Date(norm.sourceUpdatedAt) : new Date(),
         });
-        audit.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'ratings', targetRecordId: id, action: 'created' });
+        audit.push({
+          id: randomUUID(),
+          importId,
+          importItemId: it.id,
+          targetTable: 'ratings',
+          targetRecordId: id,
+          action: 'created',
+        });
         appliedIds.push(it.id);
         created++;
       } else if (existing.source === source && existing.sourceKey === sourceKey) {
@@ -800,18 +988,34 @@ export class ImportService {
         async (tx) => {
           if (toCreate.length) await this.chunkedCreateMany(tx, 'rating', toCreate, true);
           for (const u of updates) {
-            await tx.rating.update({ where: { id: u.id }, data: { rating: u.rating, updatedAt: new Date() } });
+            await tx.rating.update({
+              where: { id: u.id },
+              data: { rating: u.rating, updatedAt: new Date() },
+            });
           }
           await this.chunkedCreateMany(tx, 'importAppliedRecord', [...audit, ...updateAudit]);
-          if (appliedIds.length) await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+          if (appliedIds.length)
+            await tx.importItem.updateMany({
+              where: { id: { in: appliedIds } },
+              data: { status: 'APPLIED' },
+            });
         },
         { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
       );
     } else if (appliedIds.length) {
-      await this.prisma.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+      await this.prisma.importItem.updateMany({
+        where: { id: { in: appliedIds } },
+        data: { status: 'APPLIED' },
+      });
     }
 
-    await this.prisma.import.update({ where: { id: importId }, data: { ratingsImported: { increment: created }, ratingsUpdated: { increment: updates.length } } });
+    await this.prisma.import.update({
+      where: { id: importId },
+      data: {
+        ratingsImported: { increment: created },
+        ratingsUpdated: { increment: updates.length },
+      },
+    });
     return { created, skipped };
   }
 
@@ -823,18 +1027,34 @@ export class ImportService {
     source: ListSource = 'TVTIME',
   ): Promise<{ created: number; skipped: number }> {
     const emotionItems = items.filter(
-      (it) => ['EPISODE_EMOTION', 'MOVIE_EMOTION'].includes(it.sourceEntityType) && it.status === 'MATCHED',
+      (it) =>
+        ['EPISODE_EMOTION', 'MOVIE_EMOTION'].includes(it.sourceEntityType) &&
+        it.status === 'MATCHED',
     );
     if (!emotionItems.length) return { created: 0, skipped: 0 };
 
     let created = 0;
     let skipped = 0;
 
-    const epIds = [...new Set(emotionItems.map((it: any) => it.matchedEpisodeId).filter(Boolean))] as string[];
-    const mediaIds = [...new Set(emotionItems.map((it: any) => it.matchedMediaId).filter(Boolean))] as string[];
+    const epIds = [
+      ...new Set(emotionItems.map((it: any) => it.matchedEpisodeId).filter(Boolean)),
+    ] as string[];
+    const mediaIds = [
+      ...new Set(emotionItems.map((it: any) => it.matchedMediaId).filter(Boolean)),
+    ] as string[];
     const [existingEp, existingMedia] = await Promise.all([
-      epIds.length ? this.prisma.reaction.findMany({ where: { userId, episodeId: { in: epIds } }, select: { episodeId: true, reaction: true } }) : [],
-      mediaIds.length ? this.prisma.reaction.findMany({ where: { userId, mediaId: { in: mediaIds } }, select: { mediaId: true, reaction: true } }) : [],
+      epIds.length
+        ? this.prisma.reaction.findMany({
+            where: { userId, episodeId: { in: epIds } },
+            select: { episodeId: true, reaction: true },
+          })
+        : [],
+      mediaIds.length
+        ? this.prisma.reaction.findMany({
+            where: { userId, mediaId: { in: mediaIds } },
+            select: { mediaId: true, reaction: true },
+          })
+        : [],
     ]);
     const haveEp = new Set(existingEp.map((r: any) => `${r.episodeId}|${r.reaction}`));
     const haveMedia = new Set(existingMedia.map((r: any) => `${r.mediaId}|${r.reaction}`));
@@ -873,7 +1093,14 @@ export class ImportService {
         createdAt: norm.sourceCreatedAt ? new Date(norm.sourceCreatedAt) : new Date(),
         updatedAt: norm.sourceUpdatedAt ? new Date(norm.sourceUpdatedAt) : null,
       });
-      audit.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'reactions', targetRecordId: id, action: 'created' });
+      audit.push({
+        id: randomUUID(),
+        importId,
+        importItemId: it.id,
+        targetTable: 'reactions',
+        targetRecordId: id,
+        action: 'created',
+      });
       appliedIds.push(it.id);
       created++;
     }
@@ -883,15 +1110,25 @@ export class ImportService {
         async (tx) => {
           await this.chunkedCreateMany(tx, 'reaction', rows, true);
           await this.chunkedCreateMany(tx, 'importAppliedRecord', audit);
-          if (appliedIds.length) await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+          if (appliedIds.length)
+            await tx.importItem.updateMany({
+              where: { id: { in: appliedIds } },
+              data: { status: 'APPLIED' },
+            });
         },
         { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
       );
     } else if (appliedIds.length) {
-      await this.prisma.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+      await this.prisma.importItem.updateMany({
+        where: { id: { in: appliedIds } },
+        data: { status: 'APPLIED' },
+      });
     }
 
-    await this.prisma.import.update({ where: { id: importId }, data: { emotionsImported: { increment: created } } });
+    await this.prisma.import.update({
+      where: { id: importId },
+      data: { emotionsImported: { increment: created } },
+    });
     return { created, skipped };
   }
 
@@ -899,9 +1136,9 @@ export class ImportService {
    * Apply character votes (favorite character per episode) with fully local resolution:
    *   episode  → staged matchedEpisodeId (resolved at staging via TVDB episode external ids)
    *   character → media_cast.characterExternalId (TVDB character id, persisted by hydration)
-   * When a show's cast rows predate the characterExternalId field, the show is re-hydrated
-   * from TVDB ONCE per apply run (never one call per vote). Items whose character still
-   * can't be resolved stay MATCHED (retry on the next confirm) and are counted unresolved.
+   * Shows whose cast predates the field are queued for ONE background TVDB re-hydration
+   * each (BullMQ, deduped, retried with backoff) — the import never blocks on TVDB.
+   * Their votes stay MATCHED (applied on a later confirm) and are counted unresolved.
    * Conflict policy mirrors ratings: create only when no vote exists; idempotent re-import
    * via (source, sourceKey); manual votes are NEVER overwritten. Historical createdAt kept.
    */
@@ -912,7 +1149,11 @@ export class ImportService {
     source: ListSource = 'TVTIME',
   ): Promise<{ created: number; skipped: number }> {
     const voteItems = items.filter(
-      (it) => it.sourceEntityType === 'EPISODE_CHARACTER_VOTE' && it.status === 'MATCHED' && it.matchedEpisodeId && it.matchedMediaId,
+      (it) =>
+        it.sourceEntityType === 'EPISODE_CHARACTER_VOTE' &&
+        it.status === 'MATCHED' &&
+        it.matchedEpisodeId &&
+        it.matchedMediaId,
     );
     if (!voteItems.length) return { created: 0, skipped: 0 };
 
@@ -941,17 +1182,21 @@ export class ImportService {
     };
     await loadCastRows();
 
-    // Shows whose requested characters are ALL missing and that predate the
-    // characterExternalId field: one TVDB re-hydration each (fills the whole cast), then
-    // a single re-read. Bounded to one call per show per run, zero per vote.
-    const missingMediaIds = mediaIds.filter((m) =>
-      charIds.some((c) => voteItems.some((it) => it.matchedMediaId === m && Number(it.normalizedData?.showCharacterId) === c) && !castMap.has(castKey(m, c))),
-    );
-    if (missingMediaIds.length > 0) {
-      for (const mediaId of missingMediaIds) {
-        await this.matcher.rehydrateWithTvdb(mediaId).catch(() => false);
-      }
-      await loadCastRows();
+    // Shows whose cast lacks the needed character ids: enqueue ONE background TVDB
+    // re-hydration per show (stable job id dedupes) — never block the import on TVDB.
+    // Their votes stay MATCHED below and apply on a later confirm.
+    const missingMediaIds = [
+      ...new Set(
+        voteItems
+          .filter(
+            (it: any) =>
+              !castMap.has(castKey(it.matchedMediaId, Number(it.normalizedData?.showCharacterId))),
+          )
+          .map((it: any) => it.matchedMediaId as string),
+      ),
+    ];
+    for (const mediaId of missingMediaIds) {
+      await this.enqueueShowTvdbHydration(mediaId).catch(() => undefined);
     }
 
     const epIds = [...new Set(voteItems.map((it: any) => it.matchedEpisodeId as string))];
@@ -963,6 +1208,7 @@ export class ImportService {
     const toCreate: any[] = [];
     const audit: any[] = [];
     const appliedIds: string[] = [];
+    const pendingMatchIds: string[] = [];
 
     for (const it of voteItems) {
       const norm: any = it.normalizedData ?? {};
@@ -970,9 +1216,11 @@ export class ImportService {
       const sourceKey: string = norm.voteKey ?? `episode:${norm.externalEpisodeId}:char:${charId}`;
       const castId = castMap.get(castKey(it.matchedMediaId, charId));
       if (!castId) {
-        // Not resolvable now (id not in top-20 cast, or id type mismatch) — leave MATCHED
-        // for a future confirm once cast data is richer; counted as unresolved.
+        // Not resolvable now (character beyond the top-20 cast, or cast rows predating
+        // the field): mark PENDING_MATCH — the queued background rehydration plus a
+        // later confirm applies it. Counted as unresolved.
         unresolved++;
+        pendingMatchIds.push(it.id);
         continue;
       }
       const existing: any = voteMap.get(it.matchedEpisodeId);
@@ -1009,13 +1257,29 @@ export class ImportService {
           await this.chunkedCreateMany(tx, 'characterVote', toCreate, true);
           await this.chunkedCreateMany(tx, 'importAppliedRecord', audit);
           if (appliedIds.length) {
-            await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+            await tx.importItem.updateMany({
+              where: { id: { in: appliedIds } },
+              data: { status: 'APPLIED' },
+            });
           }
         },
         { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
       );
     } else if (appliedIds.length) {
-      await this.prisma.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+      await this.prisma.importItem.updateMany({
+        where: { id: { in: appliedIds } },
+        data: { status: 'APPLIED' },
+      });
+    }
+
+    // Unresolved items are visibly "scheduled for match": the queued background
+    // rehydration resolves them and a later confirm picks them up (confirm loads
+    // MATCHED + PENDING_MATCH).
+    if (pendingMatchIds.length) {
+      await this.prisma.importItem.updateMany({
+        where: { id: { in: pendingMatchIds } },
+        data: { status: 'PENDING_MATCH' },
+      });
     }
 
     await this.prisma.import.update({
@@ -1026,6 +1290,15 @@ export class ImportService {
       },
     });
     return { created, skipped };
+  }
+
+  /** Queue one background TVDB re-hydration for a show (deduped by stable job id). */
+  private async enqueueShowTvdbHydration(mediaId: string): Promise<void> {
+    const ext = await this.prisma.externalId.findFirst({
+      where: { mediaId, provider: 'THE_TVDB' },
+      select: { value: true },
+    });
+    if (ext) await this.hydration.enqueueTvdbRehydrate(mediaId, Number(ext.value));
   }
 
   /**
@@ -1041,16 +1314,23 @@ export class ImportService {
     source: ListSource = 'TVTIME',
   ): Promise<{ created: number; skipped: number }> {
     const commentItems = items.filter(
-      (it) => ['EPISODE_COMMENT', 'MOVIE_COMMENT', 'SHOW_COMMENT'].includes(it.sourceEntityType) && it.status === 'MATCHED',
+      (it) =>
+        ['EPISODE_COMMENT', 'MOVIE_COMMENT', 'SHOW_COMMENT'].includes(it.sourceEntityType) &&
+        it.status === 'MATCHED',
     );
     if (!commentItems.length) return { created: 0, skipped: 0 };
 
     let created = 0;
     let skipped = 0;
 
-    const keys = [...new Set(commentItems.map((it: any) => it.normalizedData?.sourceKey).filter(Boolean))] as string[];
+    const keys = [
+      ...new Set(commentItems.map((it: any) => it.normalizedData?.sourceKey).filter(Boolean)),
+    ] as string[];
     const existing = keys.length
-      ? await this.prisma.comment.findMany({ where: { userId, source, sourceKey: { in: keys } }, select: { sourceKey: true } })
+      ? await this.prisma.comment.findMany({
+          where: { userId, source, sourceKey: { in: keys } },
+          select: { sourceKey: true },
+        })
       : [];
     const have = new Set(existing.map((c: any) => c.sourceKey));
 
@@ -1077,8 +1357,13 @@ export class ImportService {
         continue;
       }
       const threadType =
-        it.sourceEntityType === 'EPISODE_COMMENT' ? 'EPISODE' : it.sourceEntityType === 'MOVIE_COMMENT' ? 'MOVIE' : 'SHOW';
-      const threadId: string | null = threadType === 'EPISODE' ? it.matchedEpisodeId : it.matchedMediaId;
+        it.sourceEntityType === 'EPISODE_COMMENT'
+          ? 'EPISODE'
+          : it.sourceEntityType === 'MOVIE_COMMENT'
+            ? 'MOVIE'
+            : 'SHOW';
+      const threadId: string | null =
+        threadType === 'EPISODE' ? it.matchedEpisodeId : it.matchedMediaId;
       if (!threadId) {
         skipped++;
         appliedIds.push(it.id);
@@ -1105,7 +1390,14 @@ export class ImportService {
       if (image && image.format !== 'gif') {
         imageAttachments.push({ commentId: id, url: image.url, format: image.format || 'png' });
       }
-      audit.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'comments', targetRecordId: id, action: 'created' });
+      audit.push({
+        id: randomUUID(),
+        importId,
+        importItemId: it.id,
+        targetTable: 'comments',
+        targetRecordId: id,
+        action: 'created',
+      });
       appliedIds.push(it.id);
       created++;
     }
@@ -1115,12 +1407,19 @@ export class ImportService {
         async (tx) => {
           await this.chunkedCreateMany(tx, 'comment', rows);
           await this.chunkedCreateMany(tx, 'importAppliedRecord', audit);
-          if (appliedIds.length) await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+          if (appliedIds.length)
+            await tx.importItem.updateMany({
+              where: { id: { in: appliedIds } },
+              data: { status: 'APPLIED' },
+            });
         },
         { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
       );
     } else if (appliedIds.length) {
-      await this.prisma.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+      await this.prisma.importItem.updateMany({
+        where: { id: { in: appliedIds } },
+        data: { status: 'APPLIED' },
+      });
     }
 
     // Attach static images (png/jpg): download + store in MinIO via the comment-image pipeline,
@@ -1131,7 +1430,10 @@ export class ImportService {
       void this.commentImages.importFromUrl(att.commentId, userId, att.url);
     }
 
-    await this.prisma.import.update({ where: { id: importId }, data: { commentsImported: { increment: created } } });
+    await this.prisma.import.update({
+      where: { id: importId },
+      data: { commentsImported: { increment: created } },
+    });
     return { created, skipped };
   }
 
@@ -1139,7 +1441,17 @@ export class ImportService {
   async cancel(userId: string, importId: string) {
     const imp = await this.prisma.import.findFirst({ where: { id: importId, userId } });
     if (!imp) throw new NotFoundException('Import not found');
-    if (!['UPLOADED', 'QUEUED', 'EXTRACTING', 'PARSING', 'NORMALIZING', 'MATCHING', 'READY_FOR_REVIEW'].includes(imp.status)) {
+    if (
+      ![
+        'UPLOADED',
+        'QUEUED',
+        'EXTRACTING',
+        'PARSING',
+        'NORMALIZING',
+        'MATCHING',
+        'READY_FOR_REVIEW',
+      ].includes(imp.status)
+    ) {
       throw new BadRequestException('Import cannot be cancelled at this stage');
     }
     return this.prisma.import.update({
@@ -1164,7 +1476,19 @@ export class ImportService {
       if (!byTable.has(a.targetTable)) byTable.set(a.targetTable, []);
       byTable.get(a.targetTable)!.push(a.targetRecordId);
     }
-    const tableToModel: Record<string, 'watchHistory' | 'userEpisodeStatus' | 'userMovieStatus' | 'watchlistItem' | 'favorite' | 'customList' | 'customListItem' | 'rating' | 'reaction' | 'comment'> = {
+    const tableToModel: Record<
+      string,
+      | 'watchHistory'
+      | 'userEpisodeStatus'
+      | 'userMovieStatus'
+      | 'watchlistItem'
+      | 'favorite'
+      | 'customList'
+      | 'customListItem'
+      | 'rating'
+      | 'reaction'
+      | 'comment'
+    > = {
       watch_history: 'watchHistory',
       user_episode_status: 'userEpisodeStatus',
       user_movie_status: 'userMovieStatus',
@@ -1178,24 +1502,47 @@ export class ImportService {
     };
     // Delete children before parents (cascade-safe ordering); best-effort. Comments are
     // self-referential but imported ones have parentId=null, so their position is safe.
-    const order = ['watch_history', 'comments', 'reactions', 'ratings', 'custom_list_items', 'user_episode_status', 'user_movie_status', 'watchlist_items', 'favorites', 'custom_lists'];
+    const order = [
+      'watch_history',
+      'comments',
+      'reactions',
+      'ratings',
+      'custom_list_items',
+      'user_episode_status',
+      'user_movie_status',
+      'watchlist_items',
+      'favorites',
+      'custom_lists',
+    ];
     for (const table of order) {
       const ids = byTable.get(table);
       const model = tableToModel[table];
       if (model && ids?.length) {
-        await (this.prisma[model] as any).deleteMany({ where: { id: { in: ids } } }).catch(() => undefined);
+        await (this.prisma[model] as any)
+          .deleteMany({ where: { id: { in: ids } } })
+          .catch(() => undefined);
       }
     }
     // Restore pre-existing data for records the import updated (action=updated).
     for (const a of updated) {
       if (a.targetTable === 'custom_lists' && a.previousData) {
         await this.prisma.customList
-          .update({ where: { id: a.targetRecordId }, data: { title: (a.previousData as any).title, description: (a.previousData as any).description, visibility: (a.previousData as any).visibility } })
+          .update({
+            where: { id: a.targetRecordId },
+            data: {
+              title: (a.previousData as any).title,
+              description: (a.previousData as any).description,
+              visibility: (a.previousData as any).visibility,
+            },
+          })
           .catch(() => undefined);
       }
       if (a.targetTable === 'ratings' && a.previousData) {
         await this.prisma.rating
-          .update({ where: { id: a.targetRecordId }, data: { rating: (a.previousData as any).rating } })
+          .update({
+            where: { id: a.targetRecordId },
+            data: { rating: (a.previousData as any).rating },
+          })
           .catch(() => undefined);
       }
     }
@@ -1215,11 +1562,13 @@ export class ImportService {
 
   /** After import, rebuild user_show_status for all affected shows (batched). */
   private async rebuildShowStatuses(userId: string, items: any[]) {
-    const showIds = [...new Set(
-      items
-        .filter((it) => it.sourceEntityType === 'WATCHED_EPISODE' && it.matchedMediaId)
-        .map((it) => it.matchedMediaId),
-    )];
+    const showIds = [
+      ...new Set(
+        items
+          .filter((it) => it.sourceEntityType === 'WATCHED_EPISODE' && it.matchedMediaId)
+          .map((it) => it.matchedMediaId),
+      ),
+    ];
     if (!showIds.length) return;
 
     // Single query: watched count + last watched per show for this user
@@ -1236,9 +1585,7 @@ export class ImportService {
     `;
 
     // Single query: total episode count per show (excluding specials)
-    const totalStats = await this.prisma.$queryRaw<
-      Array<{ mediaId: string; totalCount: number }>
-    >`
+    const totalStats = await this.prisma.$queryRaw<Array<{ mediaId: string; totalCount: number }>>`
       SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS "totalCount"
       FROM episodes e
       JOIN seasons s ON e.season_id = s.id

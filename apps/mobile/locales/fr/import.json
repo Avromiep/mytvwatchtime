@@ -50,6 +50,7 @@
   "filters": {
     "all": "Tout",
     "matched": "Associés",
+    "pendingMatch": "En attente d’association",
     "needsReview": "À vérifier",
     "unmatched": "Non associés",
     "duplicates": "Doublons"

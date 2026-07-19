@@ -79,6 +79,7 @@
   "filters": {
     "all": "All",
     "matched": "Matched",
+    "pendingMatch": "Scheduled for match",
     "needsReview": "Needs review",
     "unmatched": "Unmatched",
     "duplicates": "Duplicates"

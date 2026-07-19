@@ -50,6 +50,7 @@
   "filters": {
     "all": "Tümü",
     "matched": "Eşleşen",
+    "pendingMatch": "Eşleşme için planlandı",
     "needsReview": "İnceleme gerekli",
     "unmatched": "Eşleşmeyen",
     "duplicates": "Yinelenenler"

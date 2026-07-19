@@ -50,6 +50,7 @@
   "filters": {
     "all": "Todos",
     "matched": "Correspondentes",
+    "pendingMatch": "Agendado para correspondência",
     "needsReview": "Precisa de revisão",
     "unmatched": "Sem correspondência",
     "duplicates": "Duplicados"

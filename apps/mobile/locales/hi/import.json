@@ -50,6 +50,7 @@
   "filters": {
     "all": "सभी",
     "matched": "मिलान हुआ",
+    "pendingMatch": "मिलान के लिए निर्धारित",
     "needsReview": "समीक्षा आवश्यक",
     "unmatched": "मिलान नहीं हुआ",
     "duplicates": "डुप्लिकेट"

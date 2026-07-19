@@ -43,6 +43,7 @@ describe('HydrationProcessor.animeHydrate', () => {
       {} as any, // tvdb
       tmdb,
       { enqueueAnimeHydrate: jest.fn() } as any, // queue
+      { ensureShowFullTvdb: jest.fn().mockResolvedValue('m1') } as any, // meta
     );
   });
 

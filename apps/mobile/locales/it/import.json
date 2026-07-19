@@ -50,6 +50,7 @@
   "filters": {
     "all": "Tutto",
     "matched": "Abbinati",
+    "pendingMatch": "In attesa di abbinamento",
     "needsReview": "Da verificare",
     "unmatched": "Non abbinati",
     "duplicates": "Duplicati"

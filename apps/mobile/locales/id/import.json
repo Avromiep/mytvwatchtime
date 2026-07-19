@@ -50,6 +50,7 @@
   "filters": {
     "all": "Semua",
     "matched": "Cocok",
+    "pendingMatch": "Dijadwalkan untuk dicocokkan",
     "needsReview": "Perlu ditinjau",
     "unmatched": "Tidak cocok",
     "duplicates": "Duplikat"

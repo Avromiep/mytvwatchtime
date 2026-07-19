@@ -213,6 +213,9 @@ enum ImportItemStatus {
   NEEDS_REVIEW
   SKIPPED
   APPLIED
+  /// Queued for background re-matching (e.g. TVDB rehydration for character votes) —
+  /// applied by a later confirm once the background work completes.
+  PENDING_MATCH
 }
 
 enum ImportEntityType {

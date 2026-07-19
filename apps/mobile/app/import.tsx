@@ -343,6 +343,7 @@ function ReviewItems({
     { key: undefined, label: t('import:filters.all') },
     { key: 'matched', label: t('import:filters.matched') },
     { key: 'needs_review', label: t('import:filters.needsReview') },
+    { key: 'pending_match', label: t('import:filters.pendingMatch') },
     { key: 'unmatched', label: t('import:filters.unmatched') },
     { key: 'duplicate', label: t('import:filters.duplicates') },
   ];
@@ -405,7 +406,7 @@ function ReviewItems({
                   </T>
                 </View>
                 <T variant="micro" style={{ color: statusColor(item.status, tokens) }}>
-                  {item.status}
+                  {statusLabel(item.status, t)}
                 </T>
               </Card>
             </Pressable>
@@ -429,6 +430,8 @@ function statusColor(s: string, tokens: ReturnType<typeof useAppearance>['tokens
   switch (s) {
     case 'MATCHED':
       return tokens.watched;
+    case 'PENDING_MATCH':
+      return tokens.primary;
     case 'NEEDS_REVIEW':
       return tokens.orange;
     case 'UNMATCHED':
@@ -438,6 +441,12 @@ function statusColor(s: string, tokens: ReturnType<typeof useAppearance>['tokens
     default:
       return tokens.textMuted;
   }
+}
+
+/** Friendly status label for review rows (raw status otherwise). */
+function statusLabel(s: string, t: (k: string, o?: any) => string): string {
+  if (s === 'PENDING_MATCH') return t('import:filters.pendingMatch');
+  return s;
 }
 
 /** Build a human-readable primary label for a staged import item of any entity type. */

@@ -50,6 +50,7 @@
   "filters": {
     "all": "すべて",
     "matched": "一致",
+    "pendingMatch": "マッチング待ち",
     "needsReview": "要確認",
     "unmatched": "不一致",
     "duplicates": "重複"

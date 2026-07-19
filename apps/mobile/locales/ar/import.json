@@ -50,6 +50,7 @@
   "filters": {
     "all": "الكل",
     "matched": "تمت المطابقة",
+    "pendingMatch": "مجدول للمطابقة",
     "needsReview": "يحتاج إلى مراجعة",
     "unmatched": "غير مطابق",
     "duplicates": "مكررات"

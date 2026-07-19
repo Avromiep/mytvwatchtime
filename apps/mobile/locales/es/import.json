@@ -50,6 +50,7 @@
   "filters": {
     "all": "Todo",
     "matched": "Coincidencias",
+    "pendingMatch": "Programado para asociar",
     "needsReview": "Requiere revisión",
     "unmatched": "Sin coincidencia",
     "duplicates": "Duplicados"
