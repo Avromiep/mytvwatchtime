@@ -1,5 +1,5 @@
 import React from 'react';
-import { FlexWidget, TextWidget, ImageWidget } from 'react-native-android-widget';
+import { FlexWidget, TextWidget, ImageWidget, ListWidget } from 'react-native-android-widget';
 import type { Tokens, UpcomingGroupDto, UpcomingItemDto } from '@tvwatch/shared';
 import {
   EPISODE_URI,
@@ -7,6 +7,7 @@ import {
   episodeCode,
   shortAirDate,
   upcomingGroupTitle,
+  widgetImage,
   type WidgetLabels,
   type WidgetFetchState,
 } from '../data';
@@ -17,9 +18,11 @@ const img = (u: string) => u as React.ComponentProps<typeof ImageWidget>['image'
 const ROW_H = 68;
 const ROW_GAP = 6;
 const GROUP_H = 22;
+const SECTION_GAP = 8;
 const HEADER_H = 26;
 const PAD = 12;
-const MAX_PER_GROUP = 3;
+const LIST_TOP_GAP = 6;
+const MAX_PER_GROUP = 5;
 
 interface Props {
   state: WidgetFetchState<UpcomingGroupDto[]>;
@@ -46,7 +49,7 @@ function UpcomingRow({ item, tokens }: { item: UpcomingItemDto; tokens: Tokens }
     >
       {item.posterUrl ? (
         <ImageWidget
-          image={img(item.posterUrl)}
+          image={img(widgetImage(item.posterUrl, 'w185')!)}
           imageWidth={37}
           imageHeight={56}
           radius={6}
@@ -113,19 +116,27 @@ type FlatRow =
   | { type: 'item'; key: string; item: UpcomingItemDto };
 
 export function UpcomingWidget({ state, labels, tokens, height }: Props) {
-  // Fill the available dp height: groups render only when their header + first row fit.
-  let budget = height - PAD * 2 - HEADER_H - 6;
+  // Full near-term content (scrollable); section headers interleave with their rows.
   const rows: FlatRow[] = [];
   if (state.status === 'ok') {
     for (const g of state.data) {
-      if (budget < GROUP_H + ROW_H + ROW_GAP) break;
       rows.push({ type: 'header', key: `h_${g.key}`, title: upcomingGroupTitle(g.key, labels, g.label) });
-      budget -= GROUP_H;
-      for (const it of g.items.slice(0, MAX_PER_GROUP)) {
-        if (budget < ROW_H + ROW_GAP) break;
-        rows.push({ type: 'item', key: `c_${it.id}`, item: it });
-        budget -= ROW_H + ROW_GAP;
-      }
+      for (const it of g.items.slice(0, MAX_PER_GROUP)) rows.push({ type: 'item', key: `c_${it.id}`, item: it });
+    }
+  }
+
+  const listHeight = height - PAD * 2 - HEADER_H - LIST_TOP_GAP;
+  // ListWidget items must not exceed the list height — fall back to a
+  // height-budgeted column when the widget is resized too short.
+  const useList = listHeight >= ROW_H + ROW_GAP;
+  let budget = listHeight;
+  const fallbackRows: FlatRow[] = [];
+  if (!useList) {
+    for (const r of rows) {
+      const cost = r.type === 'header' ? GROUP_H : ROW_H + ROW_GAP;
+      if (budget < cost) break;
+      fallbackRows.push(r);
+      budget -= cost;
     }
   }
 
@@ -150,22 +161,58 @@ export function UpcomingWidget({ state, labels, tokens, height }: Props) {
             style={{ color: hex(tokens.textPrimary), fontSize: 14, fontWeight: '700' }}
           />
         </FlexWidget>
+        <TextWidget
+          text="↻"
+          clickAction="REFRESH"
+          accessibilityLabel="Refresh"
+          style={{ color: hex(tokens.textMuted), fontSize: 16, marginLeft: 8 }}
+        />
       </FlexWidget>
 
       {rows.length > 0 ? (
-        rows.map((r) =>
-          r.type === 'header' ? (
-            <FlexWidget key={r.key} style={{ height: GROUP_H, justifyContent: 'flex-end' }}>
-              <TextWidget
-                text={r.title.toUpperCase()}
-                style={{ color: hex(tokens.textMuted), fontSize: 10, fontWeight: '700', letterSpacing: 1 }}
-              />
-            </FlexWidget>
-          ) : (
-            <FlexWidget key={r.key} style={{ marginTop: ROW_GAP }}>
-              <UpcomingRow item={r.item} tokens={tokens} />
-            </FlexWidget>
-          ),
+        useList ? (
+          <ListWidget style={{ width: 'match_parent', height: listHeight, marginTop: LIST_TOP_GAP }}>
+            {rows.map((r, i) =>
+              r.type === 'header' ? (
+                <FlexWidget
+                  key={r.key}
+                  style={{
+                    height: GROUP_H + (i === 0 ? 0 : SECTION_GAP),
+                    paddingTop: i === 0 ? 0 : SECTION_GAP,
+                    justifyContent: 'flex-end',
+                    width: 'match_parent',
+                  }}
+                >
+                  <TextWidget
+                    text={r.title.toUpperCase()}
+                    style={{ color: hex(tokens.textMuted), fontSize: 10, fontWeight: '700', letterSpacing: 1 }}
+                  />
+                </FlexWidget>
+              ) : (
+                <FlexWidget key={r.key} style={{ height: ROW_H + ROW_GAP, width: 'match_parent' }}>
+                  <UpcomingRow item={r.item} tokens={tokens} />
+                </FlexWidget>
+              ),
+            )}
+          </ListWidget>
+        ) : (
+          fallbackRows.map((r, i) =>
+            r.type === 'header' ? (
+              <FlexWidget
+                key={r.key}
+                style={{ height: GROUP_H + (i === 0 ? 0 : SECTION_GAP), paddingTop: i === 0 ? 0 : SECTION_GAP, justifyContent: 'flex-end', width: 'match_parent' }}
+              >
+                <TextWidget
+                  text={r.title.toUpperCase()}
+                  style={{ color: hex(tokens.textMuted), fontSize: 10, fontWeight: '700', letterSpacing: 1 }}
+                />
+              </FlexWidget>
+            ) : (
+              <FlexWidget key={r.key} style={{ marginTop: ROW_GAP, width: 'match_parent' }}>
+                <UpcomingRow item={r.item} tokens={tokens} />
+              </FlexWidget>
+            ),
+          )
         )
       ) : (
         <FlexWidget

@@ -66,7 +66,7 @@ export default function UserProfileScreen() {
               onPress={toggleFollow}
               loading={followMut.isPending || unfollowMut.isPending}
               icon={profile.isFollowing ? 'checkmark-circle-outline' : 'person-add-outline'}
-              variant={profile.isFollowing ? 'ghost' : 'default'}
+              variant={profile.isFollowing ? 'ghost' : 'primary'}
             />
           ) : null}
         </View>

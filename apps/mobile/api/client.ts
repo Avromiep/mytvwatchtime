@@ -6,6 +6,10 @@ const DEFAULT_BASE_URL =
   (Constants.expoConfig?.extra as any)?.apiBaseUrl ||
   'http://localhost:4000/api';
 
+/** Canonical fallback base URL — reused by the widget credential sync so the
+ *  resolution chain lives in exactly one place. */
+export const API_DEFAULT_BASE_URL = DEFAULT_BASE_URL;
+
 // Cached runtime URL (updated when self-hosted URL changes)
 let runtimeBaseUrl: string | null = null;
 

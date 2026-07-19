@@ -148,6 +148,13 @@ export enum UpcomingBucket {
   LATER = 'LATER',
 }
 
+/** Near-term upcoming groups surfaced by compact UIs (home-screen widgets). */
+export const UPCOMING_NEAR_TERM_BUCKETS: readonly UpcomingBucket[] = [
+  UpcomingBucket.TODAY,
+  UpcomingBucket.TOMORROW,
+  UpcomingBucket.THIS_WEEK,
+];
+
 export enum EpisodeLabel {
   NEW = 'NEW',
   PREMIERE = 'PREMIERE',

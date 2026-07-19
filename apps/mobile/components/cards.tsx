@@ -145,6 +145,9 @@ export function Carousel({ title, action, onAction, data, kind, width = 120 }: {
 }
 
 // ---------------- Episode card (watch list row) ----------------
+/** Horizontal space reserved for the absolute watch button (26px + a small gap). */
+const WATCH_BTN_CLEARANCE = 26 + spacing.xs;
+
 function EpisodeCardImpl({
   item,
   onMarkWatched,
@@ -207,7 +210,12 @@ function EpisodeCardImpl({
               </T>
             ) : null}
           </View>
-          <T variant="h2" numberOfLines={2} style={{ marginTop: 2 }}>
+          {/* paddingRight keeps the title clear of the absolutely-positioned watch
+              button (26px at the card's bottom-right) — without it a two-line title
+              slides underneath the checkbox. Only the title needs it: the S/E row
+              above sits clear of the button zone, so the +N counter keeps hugging
+              the card's right edge. */}
+          <T variant="h2" numberOfLines={2} style={{ marginTop: 2, paddingRight: WATCH_BTN_CLEARANCE }}>
             {item.episode.title}
           </T>
         </View>
@@ -304,7 +312,9 @@ export function NotificationItem({ item, onPress }: { item: any; onPress?: () =>
   return (
     <Pressable onPress={onPress} style={[styles.notif, { backgroundColor: tokens.surface, opacity: item.read ? 0.6 : 1 }]}>
       <View style={[styles.notifIcon, { backgroundColor: item.read ? tokens.surfaceElevated : tokens.primary }]}>
-        <Ionicons name={icon} size={18} color={tokens.primaryForeground} />
+        {/* Read: icon sits on surfaceElevated, so it needs a normal text color —
+            primaryForeground is near-black in both themes and vanishes on dark slate. */}
+        <Ionicons name={icon} size={18} color={item.read ? tokens.textMuted : tokens.primaryForeground} />
       </View>
       <View style={{ flex: 1, marginLeft: spacing.md }}>
         <T variant="body" numberOfLines={2}>

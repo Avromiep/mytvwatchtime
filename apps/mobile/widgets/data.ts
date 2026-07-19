@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  UPCOMING_NEAR_TERM_BUCKETS,
   WatchNextBucket,
   type UpcomingGroupDto,
   type WatchNextItemDto,
@@ -63,8 +64,23 @@ export type WidgetFetchState<T> =
   | { status: 'auth' }
   | { status: 'error' };
 
+// Widget renders happen once per home-screen instance and headless fetches have no
+// natural timeout — bound every request and memoize results briefly so N widget
+// instances rendered in the same update round share ONE network call.
+const WIDGET_FETCH_TIMEOUT_MS = 15000;
+const WIDGET_CACHE_TTL_MS = 30000;
+
+function withTimeout<T>(p: Promise<T>): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error('widget fetch timeout')), WIDGET_FETCH_TIMEOUT_MS),
+    ),
+  ]);
+}
+
 function toState<T>(fn: () => Promise<T>): Promise<WidgetFetchState<T>> {
-  return fn()
+  return withTimeout(fn())
     .then((data): WidgetFetchState<T> => ({ status: 'ok', data }))
     .catch((e: any): WidgetFetchState<T> => {
       if (e?.status === 401) return { status: 'auth' };
@@ -72,31 +88,51 @@ function toState<T>(fn: () => Promise<T>): Promise<WidgetFetchState<T>> {
     });
 }
 
+const resultCache = new Map<string, { at: number; value: WidgetFetchState<any> }>();
+
+function cached<T>(key: string, fn: () => Promise<WidgetFetchState<T>>): Promise<WidgetFetchState<T>> {
+  const hit = resultCache.get(key);
+  if (hit && Date.now() - hit.at < WIDGET_CACHE_TTL_MS) return Promise.resolve(hit.value);
+  return fn().then((value) => {
+    resultCache.set(key, { at: Date.now(), value });
+    return value;
+  });
+}
+
+/** Drop memoized results (login/logout/credential changes must re-render from the network). */
+export function invalidateWidgetDataCache(): void {
+  resultCache.clear();
+}
+
 /** Watch Next widget data: strictly the WATCH_NEXT bucket, deduped by episode id
  *  (mirrors the app's Shows tab dedupe). */
 export async function fetchWatchNextItems(): Promise<WidgetFetchState<WatchNextItemDto[]>> {
   await ensureWidgetLocale();
-  return toState(async () => {
-    const res = await api.get<WatchNextResponseDto>('/me/watch-next');
-    const seen = new Set<string>();
-    return (res.items ?? []).filter((it) => {
-      if (it.bucket !== WatchNextBucket.WATCH_NEXT) return false;
-      const k = it.episode?.id;
-      if (!k || seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-  });
+  return cached('watchNext', () =>
+    toState(async () => {
+      const res = await api.get<WatchNextResponseDto>('/me/watch-next');
+      const seen = new Set<string>();
+      return (res.items ?? []).filter((it) => {
+        if (it.bucket !== WatchNextBucket.WATCH_NEXT) return false;
+        const k = it.episode?.id;
+        if (!k || seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+    }),
+  );
 }
 
 /** Upcoming widget data: only the near-term groups (Today / Tomorrow / This week). */
 export async function fetchUpcomingGroups(): Promise<WidgetFetchState<UpcomingGroupDto[]>> {
   await ensureWidgetLocale();
-  return toState(async () => {
-    const res = await api.get<{ groups: UpcomingGroupDto[] }>('/me/upcoming');
-    const wanted = new Set(['TODAY', 'TOMORROW', 'THIS_WEEK']);
-    return (res.groups ?? []).filter((g) => wanted.has(g.key) && g.items?.length);
-  });
+  return cached('upcoming', () =>
+    toState(async () => {
+      const res = await api.get<{ groups: UpcomingGroupDto[] }>('/me/upcoming');
+      const wanted = new Set<string>(UPCOMING_NEAR_TERM_BUCKETS);
+      return (res.groups ?? []).filter((g) => wanted.has(g.key) && g.items?.length);
+    }),
+  );
 }
 
 export function pad2(n?: number | null): string {
@@ -117,3 +153,10 @@ export function shortAirDate(airDate: string): string {
 
 export const EPISODE_URI = (episodeId: string) => `tvwatchtime://episode/${episodeId}`;
 export const SHOWS_URI = 'tvwatchtime://shows';
+
+/** Rewrite a TMDB image URL to a smaller variant for widget rendering (the widget
+ *  library downloads every remote bitmap uncached). Non-TMDB URLs pass through. */
+export function widgetImage(url: string | null | undefined, size: 'w185' | 'w300'): string | undefined {
+  if (!url) return undefined;
+  return url.replace(/\/t\/p\/(?:w\d+|original)\//, `/t/p/${size}/`);
+}

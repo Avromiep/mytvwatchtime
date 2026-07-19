@@ -1,10 +1,11 @@
 import React from 'react';
-import { FlexWidget, TextWidget, ImageWidget } from 'react-native-android-widget';
+import { FlexWidget, TextWidget, ImageWidget, ListWidget } from 'react-native-android-widget';
 import type { Tokens, WatchNextItemDto } from '@tvwatch/shared';
 import {
   EPISODE_URI,
   SHOWS_URI,
   episodeCode,
+  widgetImage,
   type WidgetLabels,
   type WidgetFetchState,
 } from '../data';
@@ -16,6 +17,8 @@ const ROW_H = 66;
 const ROW_GAP = 8;
 const HEADER_H = 26;
 const PAD = 12;
+const LIST_TOP_GAP = 6;
+const MAX_ITEMS = 12;
 
 interface Props {
   state: WidgetFetchState<WatchNextItemDto[]>;
@@ -25,7 +28,7 @@ interface Props {
 }
 
 function WatchNextRow({ item, tokens }: { item: WatchNextItemDto; tokens: Tokens }) {
-  const still = item.episode.stillUrl ?? item.backdropUrl ?? undefined;
+  const still = widgetImage(item.episode.stillUrl ?? item.backdropUrl, 'w300');
   return (
     <FlexWidget
       clickAction="OPEN_URI"
@@ -92,8 +95,12 @@ function WatchNextRow({ item, tokens }: { item: WatchNextItemDto; tokens: Tokens
 }
 
 export function WatchNextWidget({ state, labels, tokens, height }: Props) {
-  const maxRows = Math.max(1, Math.floor((height - PAD * 2 - HEADER_H + ROW_GAP) / (ROW_H + ROW_GAP)));
-  const items = state.status === 'ok' ? state.data.slice(0, Math.min(maxRows, 6)) : [];
+  const listHeight = height - PAD * 2 - HEADER_H - LIST_TOP_GAP;
+  const items = state.status === 'ok' ? state.data.slice(0, MAX_ITEMS) : [];
+  // ListWidget items must not exceed the list height — fall back to a clipped
+  // column when the widget is resized too short to fit even one full row.
+  const useList = listHeight >= ROW_H + ROW_GAP;
+  const fallbackRows = Math.max(1, Math.floor((listHeight + ROW_GAP) / (ROW_H + ROW_GAP)));
 
   return (
     <FlexWidget
@@ -116,14 +123,30 @@ export function WatchNextWidget({ state, labels, tokens, height }: Props) {
             style={{ color: hex(tokens.textPrimary), fontSize: 14, fontWeight: '700' }}
           />
         </FlexWidget>
+        <TextWidget
+          text="↻"
+          clickAction="REFRESH"
+          accessibilityLabel="Refresh"
+          style={{ color: hex(tokens.textMuted), fontSize: 16, marginLeft: 8 }}
+        />
       </FlexWidget>
 
       {items.length > 0 ? (
-        items.map((it) => (
-          <FlexWidget key={it.episode.id} style={{ marginTop: ROW_GAP }}>
-            <WatchNextRow item={it} tokens={tokens} />
-          </FlexWidget>
-        ))
+        useList ? (
+          <ListWidget style={{ width: 'match_parent', height: listHeight, marginTop: LIST_TOP_GAP }}>
+            {items.map((it) => (
+              <FlexWidget key={it.episode.id} style={{ height: ROW_H + ROW_GAP, width: 'match_parent' }}>
+                <WatchNextRow item={it} tokens={tokens} />
+              </FlexWidget>
+            ))}
+          </ListWidget>
+        ) : (
+          items.slice(0, fallbackRows).map((it) => (
+            <FlexWidget key={it.episode.id} style={{ marginTop: ROW_GAP, width: 'match_parent' }}>
+              <WatchNextRow item={it} tokens={tokens} />
+            </FlexWidget>
+          ))
+        )
       ) : (
         <FlexWidget
           clickAction={state.status === 'auth' ? 'OPEN_APP' : 'OPEN_URI'}

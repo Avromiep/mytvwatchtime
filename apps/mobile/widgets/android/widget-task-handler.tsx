@@ -1,5 +1,5 @@
 import type { WidgetTaskHandlerProps } from 'react-native-android-widget';
-import { WIDGET_KINDS } from '../data';
+import { WIDGET_KINDS, invalidateWidgetDataCache } from '../data';
 import { renderUpcomingWidget, renderWatchNextWidget } from './render';
 
 /** Headless entry: the OS invokes this for widget lifecycle + refresh clicks.
@@ -18,7 +18,9 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<
       props.renderWidget(await render(props.widgetInfo));
       break;
     case 'WIDGET_CLICK':
+      // Manual refresh (header ↻): bypass the 30s memoized data cache.
       if (props.clickAction === 'REFRESH') {
+        invalidateWidgetDataCache();
         props.renderWidget(await render(props.widgetInfo));
       }
       break;

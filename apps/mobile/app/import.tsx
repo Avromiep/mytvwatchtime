@@ -1,12 +1,32 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'expo-router';
-import { FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import {
+  FlatList,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  View,
+} from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { MediaType } from '@tvwatch/shared';
 import { Header } from '../components/Header';
-import { Button, Card, Chip, EmptyState, PosterImage, ProgressBar, Screen, Spinner, T } from '../components/primitives';
+import {
+  Button,
+  Card,
+  Chip,
+  EmptyState,
+  PosterImage,
+  ProgressBar,
+  Screen,
+  Spinner,
+  T,
+} from '../components/primitives';
 import {
   useCancelImport,
   useConfirmImport,
@@ -50,7 +70,9 @@ export default function ImportScreen() {
   };
 
   const status = importQ.data?.status;
-  const isProcessing = status && !['READY_FOR_REVIEW', 'COMPLETED', 'FAILED', 'CANCELLED', 'ROLLED_BACK'].includes(status);
+  const isProcessing =
+    status &&
+    !['READY_FOR_REVIEW', 'COMPLETED', 'FAILED', 'CANCELLED', 'ROLLED_BACK'].includes(status);
 
   const pickFile = async () => {
     try {
@@ -68,7 +90,10 @@ export default function ImportScreen() {
             setImportId(r.importId);
             importQ.refetch();
           } catch (e: any) {
-            showError({ title: t('import:uploadFailed'), description: e?.message ?? t('import:couldNotUpload') });
+            showError({
+              title: t('import:uploadFailed'),
+              description: e?.message ?? t('import:couldNotUpload'),
+            });
           }
         };
         input.click();
@@ -82,12 +107,19 @@ export default function ImportScreen() {
       if (res.canceled || !res.assets?.[0]) return;
       const file = res.assets[0];
       const fd = new FormData();
-      fd.append('file', { uri: file.uri, name: file.name, type: file.mimeType || 'application/octet-stream' } as any);
+      fd.append('file', {
+        uri: file.uri,
+        name: file.name,
+        type: file.mimeType || 'application/octet-stream',
+      } as any);
       const r = await upload.mutateAsync(fd);
       setImportId(r.importId);
       importQ.refetch();
     } catch (e: any) {
-      showError({ title: t('import:uploadFailed'), description: e?.message ?? t('import:couldNotUpload') });
+      showError({
+        title: t('import:uploadFailed'),
+        description: e?.message ?? t('import:couldNotUpload'),
+      });
     }
   };
 
@@ -112,10 +144,18 @@ export default function ImportScreen() {
               <T variant="h2">{t('import:importFromTvTimeOrTrakt')}</T>
               <T variant="caption" muted style={{ marginTop: spacing.sm }}>
                 {t('import:uploadPrefix')}
-                <T variant="caption" style={{ fontWeight: '700', color: tokens.primary }}>{t('import:zipFile')}</T>
+                <T variant="caption" style={{ fontWeight: '700', color: tokens.primary }}>
+                  {t('import:zipFile')}
+                </T>
                 {t('import:uploadSuffix')} {t('import:howItWorks')}
               </T>
-              <Button title={t('import:selectZip')} icon="document-outline" onPress={pickFile} loading={upload.isPending} style={{ marginTop: spacing.md }} />
+              <Button
+                title={t('import:selectZip')}
+                icon="document-outline"
+                onPress={pickFile}
+                loading={upload.isPending}
+                style={{ marginTop: spacing.md }}
+              />
             </Card>
             <T variant="micro" muted>
               {t('import:limits')}
@@ -123,7 +163,11 @@ export default function ImportScreen() {
           </View>
         ) : (
           <View style={{ padding: spacing.xl }}>
-            <EmptyState title={t('import:disabledTitle')} subtitle={t('import:disabledDesc')} icon="cloud-offline-outline" />
+            <EmptyState
+              title={t('import:disabledTitle')}
+              subtitle={t('import:disabledDesc')}
+              icon="cloud-offline-outline"
+            />
           </View>
         )}
       </Screen>
@@ -135,9 +179,13 @@ export default function ImportScreen() {
     return (
       <Screen>
         <Header title={t('import:title')} showBack />
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl }}>
+        <View
+          style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl }}
+        >
           <Spinner />
-          <T variant="h2" style={{ marginTop: spacing.lg }}>{STATUS_LABEL[status] ?? t('import:processing')}</T>
+          <T variant="h2" style={{ marginTop: spacing.lg }}>
+            {STATUS_LABEL[status] ?? t('import:processing')}
+          </T>
           <View style={{ alignSelf: 'stretch', marginTop: spacing.lg }}>
             <ProgressBar value={pct / 100} />
             <T variant="caption" muted style={{ marginTop: spacing.xs, textAlign: 'center' }}>
@@ -147,7 +195,12 @@ export default function ImportScreen() {
           <T variant="caption" muted style={{ marginTop: spacing.sm, textAlign: 'center' }}>
             {t('import:matchingDesc')}
           </T>
-          <Button title={t('import:cancel')} variant="ghost" onPress={doCancel} style={{ marginTop: spacing.lg }} />
+          <Button
+            title={t('import:cancel')}
+            variant="ghost"
+            onPress={doCancel}
+            style={{ marginTop: spacing.lg }}
+          />
         </View>
       </Screen>
     );
@@ -157,7 +210,13 @@ export default function ImportScreen() {
     return (
       <Screen>
         <Header title={t('import:title')} showBack />
-        <EmptyState title={t('import:importFailed')} subtitle={importQ.data?.errorMessage ?? t('import:tryAgain')} icon="alert-circle-outline" cta={t('common:startOver')} onCta={() => setImportId(null)} />
+        <EmptyState
+          title={t('import:importFailed')}
+          subtitle={importQ.data?.errorMessage ?? t('import:tryAgain')}
+          icon="alert-circle-outline"
+          cta={t('common:startOver')}
+          onCta={() => setImportId(null)}
+        />
       </Screen>
     );
   }
@@ -169,12 +228,20 @@ export default function ImportScreen() {
         <View style={{ padding: spacing.lg, gap: spacing.lg }}>
           <Card>
             <T variant="h2">{t('import:importComplete')}</T>
-            <T variant="body" style={{ marginTop: spacing.sm }}>{t('import:created', { count: confirm.data?.created ?? 0 })}</T>
-            <T variant="body" muted>{t('import:skipped', { count: confirm.data?.skipped ?? 0 })}</T>
-            <Button title={t('import:done')} onPress={() => {
-              qc.invalidateQueries();
-              setImportId(null);
-            }} style={{ marginTop: spacing.md }} />
+            <T variant="body" style={{ marginTop: spacing.sm }}>
+              {t('import:created', { count: confirm.data?.created ?? 0 })}
+            </T>
+            <T variant="body" muted>
+              {t('import:skipped', { count: confirm.data?.skipped ?? 0 })}
+            </T>
+            <Button
+              title={t('import:done')}
+              onPress={() => {
+                qc.invalidateQueries();
+                setImportId(null);
+              }}
+              style={{ marginTop: spacing.md }}
+            />
           </Card>
         </View>
       </Screen>
@@ -201,14 +268,28 @@ export default function ImportScreen() {
           loading={confirm.isPending}
           onPress={() =>
             confirm.mutate(importId, {
-              onError: (e: any) => showError({ title: t('import:importFailed'), description: e?.message ?? t('common:tryAgain') }),
+              onError: (e: any) =>
+                showError({
+                  title: t('import:importFailed'),
+                  description: e?.message ?? t('common:tryAgain'),
+                }),
             })
           }
           style={{ flex: 1 }}
         />
-        <Button title={t('import:cancel')} variant="ghost" onPress={doCancel} style={{ marginLeft: spacing.sm }} />
+        <Button
+          title={t('import:cancel')}
+          variant="ghost"
+          onPress={doCancel}
+          style={{ marginLeft: spacing.sm }}
+        />
       </View>
-      <ResolutionModal item={activeItem} importId={importId} tokens={tokens} onClose={() => setActiveItem(null)} />
+      <ResolutionModal
+        item={activeItem}
+        importId={importId}
+        tokens={tokens}
+        onClose={() => setActiveItem(null)}
+      />
     </Screen>
   );
 }
@@ -216,13 +297,25 @@ export default function ImportScreen() {
 function Stat({ label, value, color }: { label: string; value?: number; color: string }) {
   return (
     <View style={styles.stat}>
-      <T variant="title" style={{ color }}>{value ?? 0}</T>
-      <T variant="micro" muted>{label}</T>
+      <T variant="title" style={{ color }}>
+        {value ?? 0}
+      </T>
+      <T variant="micro" muted>
+        {label}
+      </T>
     </View>
   );
 }
 
-function ReviewItems({ importId, tokens, onResolve }: { importId: string; tokens: ReturnType<typeof useAppearance>['tokens']; onResolve: (item: any) => void }) {
+function ReviewItems({
+  importId,
+  tokens,
+  onResolve,
+}: {
+  importId: string;
+  tokens: ReturnType<typeof useAppearance>['tokens'];
+  onResolve: (item: any) => void;
+}) {
   const { t } = useTranslation(['import', 'common']);
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const [entityFilter, setEntityFilter] = useState<string | undefined>(undefined);
@@ -256,16 +349,34 @@ function ReviewItems({ importId, tokens, onResolve }: { importId: string; tokens
   return (
     <View style={{ flex: 1, minHeight: 0 }}>
       <View style={{ height: 40, justifyContent: 'center' }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: spacing.lg }}
+        >
           {ENTITY_FILTERS.map((f) => (
-            <Chip key={f.label} label={f.label} active={entityFilter === f.key} onPress={() => setEntityFilter(f.key)} />
+            <Chip
+              key={f.label}
+              label={f.label}
+              active={entityFilter === f.key}
+              onPress={() => setEntityFilter(f.key)}
+            />
           ))}
         </ScrollView>
       </View>
       <View style={{ height: 40, justifyContent: 'center', marginTop: 4 }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: spacing.lg }}
+        >
           {FILTERS.map((f) => (
-            <Chip key={f.label} label={f.label} active={statusFilter === f.key} onPress={() => setStatusFilter(f.key)} />
+            <Chip
+              key={f.label}
+              label={f.label}
+              active={statusFilter === f.key}
+              onPress={() => setStatusFilter(f.key)}
+            />
           ))}
         </ScrollView>
       </View>
@@ -284,19 +395,29 @@ function ReviewItems({ importId, tokens, onResolve }: { importId: string; tokens
             <Pressable onPress={() => onResolve(item)}>
               <Card style={styles.row}>
                 <View style={{ flex: 1 }}>
-                  <T variant="body" numberOfLines={1}>{describeItem(entityType, norm, t)}</T>
+                  <T variant="body" numberOfLines={1}>
+                    {describeItem(entityType, norm, t)}
+                  </T>
                   <T variant="micro" muted>
                     {entityType.replace(/_/g, ' ').toLowerCase()}
                     {season != null ? ` · S${season}E${episode ?? ''}` : ''}
                   </T>
                 </View>
-                <T variant="micro" style={{ color: statusColor(item.status, tokens) }}>{item.status}</T>
+                <T variant="micro" style={{ color: statusColor(item.status, tokens) }}>
+                  {item.status}
+                </T>
               </Card>
             </Pressable>
           );
         }}
         ListEmptyComponent={
-          q.isLoading ? <Spinner /> : <T variant="caption" muted style={{ padding: spacing.xl, textAlign: 'center' }}>{t('import:noItems')}</T>
+          q.isLoading ? (
+            <Spinner />
+          ) : (
+            <T variant="caption" muted style={{ padding: spacing.xl, textAlign: 'center' }}>
+              {t('import:noItems')}
+            </T>
+          )
         }
       />
     </View>
@@ -305,11 +426,16 @@ function ReviewItems({ importId, tokens, onResolve }: { importId: string; tokens
 
 function statusColor(s: string, tokens: ReturnType<typeof useAppearance>['tokens']): string {
   switch (s) {
-    case 'MATCHED': return tokens.watched;
-    case 'NEEDS_REVIEW': return tokens.orange;
-    case 'UNMATCHED': return tokens.danger;
-    case 'DUPLICATE': return tokens.textMuted;
-    default: return tokens.textMuted;
+    case 'MATCHED':
+      return tokens.watched;
+    case 'NEEDS_REVIEW':
+      return tokens.orange;
+    case 'UNMATCHED':
+      return tokens.danger;
+    case 'DUPLICATE':
+      return tokens.textMuted;
+    default:
+      return tokens.textMuted;
   }
 }
 
@@ -324,8 +450,7 @@ function describeItem(
   const isComment = entityType.endsWith('_COMMENT');
 
   // Target title: episode/show use showTitle, movie uses movieTitle, legacy items use title.
-  const title =
-    norm.showTitle ?? norm.movieTitle ?? norm.title ?? t('import:noTitle');
+  const title = norm.showTitle ?? norm.movieTitle ?? norm.title ?? t('import:noTitle');
 
   if (isComment) {
     // Short excerpt of the user's OWN comment (their data, their screen).
@@ -404,7 +529,8 @@ function ResolutionModal({
   const showSourceTitle = norm.showTitle ?? norm.title;
 
   // useSearch is an infinite query — results live in data.pages[].items.
-  const rawResults = trimmed.length > 1 ? (search.data?.pages ?? []).flatMap((p) => p.items ?? []) : [];
+  const rawResults =
+    trimmed.length > 1 ? (search.data?.pages ?? []).flatMap((p) => p.items ?? []) : [];
 
   // Smart sort: exact title first, then closest season count, then popularity.
   const targetSeasons = season != null ? season : undefined;
@@ -442,8 +568,12 @@ function ResolutionModal({
     try {
       // Checkboxes only apply to TV items (not movies). whole-show wins over season.
       if (!isMovie && showSourceTitle && (applyToSeason || applyToWholeShow)) {
-        const resolveSeason = applyToWholeShow ? null : season ?? null;
-        await resolveAll.mutateAsync({ matchedMediaId, sourceTitle: showSourceTitle, season: resolveSeason });
+        const resolveSeason = applyToWholeShow ? null : (season ?? null);
+        await resolveAll.mutateAsync({
+          matchedMediaId,
+          sourceTitle: showSourceTitle,
+          season: resolveSeason,
+        });
       } else {
         await patch.mutateAsync({ itemId: item.id, matchedMediaId });
       }
@@ -463,127 +593,166 @@ function ResolutionModal({
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={resolveStyles.backdrop} onPress={onClose}>
-        <Pressable
-          style={[resolveStyles.sheet, { backgroundColor: tokens.surface }]}
-          onPress={(e) => e.stopPropagation()}
-        >
-          <View style={resolveStyles.header}>
-            <T variant="h2" numberOfLines={1}>{t('import:resolve')}</T>
-            <Pressable onPress={onClose} hitSlop={8}>
-              <Ionicons name="close" size={24} color={tokens.textPrimary} />
-            </Pressable>
-          </View>
-
-          <T variant="caption" style={{ marginTop: spacing.xs }}>
-            {t('import:sourceTitle')}:{' '}
-            <T variant="caption" style={{ fontWeight: '700', color: tokens.textPrimary }}>
-              {sourceTitle}
-            </T>
-          </T>
-          <T variant="micro" muted style={{ marginTop: 2 }}>
-            {entityType.replace(/_/g, ' ').toLowerCase()}{episodeTag ? ` · ${episodeTag}` : ''}
-          </T>
-
-          {!isMovie && showSourceTitle ? (
-            <View style={{ marginTop: spacing.sm }}>
-              <Pressable
-                style={{ flexDirection: 'row', alignItems: 'center' }}
-                onPress={() =>
-                  setApplyToSeason((prev) => {
-                    const next = !prev;
-                    if (next) setApplyToWholeShow(false);
-                    return next;
-                  })
-                }
-                hitSlop={6}
-              >
-                <Ionicons
-                  name={applyToSeason ? 'checkbox' : 'square-outline'}
-                  size={22}
-                  color={applyToSeason ? tokens.primary : tokens.textMuted}
-                />
-                <T variant="caption" style={{ marginLeft: spacing.xs, flex: 1 }}>
-                  {season != null ? t('import:applyToAllSeason', { season }) : t('import:applyToAllEpisodes')}
-                </T>
-              </Pressable>
-              <Pressable
-                style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}
-                onPress={() =>
-                  setApplyToWholeShow((prev) => {
-                    const next = !prev;
-                    if (next) setApplyToSeason(false);
-                    return next;
-                  })
-                }
-                hitSlop={6}
-              >
-                <Ionicons
-                  name={applyToWholeShow ? 'checkbox' : 'square-outline'}
-                  size={22}
-                  color={applyToWholeShow ? tokens.primary : tokens.textMuted}
-                />
-                <T variant="caption" style={{ marginLeft: spacing.xs, flex: 1 }}>
-                  {t('import:applyToWholeShow')}
-                </T>
+      {/* Keep the bottom sheet above the on-screen keyboard (RN Modal does not do this
+          by itself, especially on Android). */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <Pressable style={resolveStyles.backdrop} onPress={onClose}>
+          <Pressable
+            style={[resolveStyles.sheet, { backgroundColor: tokens.surface }]}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={resolveStyles.header}>
+              <T variant="h2" numberOfLines={1}>
+                {t('import:resolve')}
+              </T>
+              <Pressable onPress={onClose} hitSlop={8}>
+                <Ionicons name="close" size={24} color={tokens.textPrimary} />
               </Pressable>
             </View>
-          ) : null}
 
-          <Button
-            title={t('import:skipItem')}
-            variant="ghost"
-            icon="close-circle-outline"
-            onPress={skip}
-            loading={patch.isPending}
-            style={{ marginTop: spacing.md }}
-          />
-
-          <T variant="caption" muted style={{ marginTop: spacing.md, marginBottom: spacing.xs }}>
-            {t('import:searchToMatch')}
-          </T>
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder={t('import:searchPlaceholder')}
-            placeholderTextColor={tokens.textMuted}
-            style={[resolveStyles.input, { color: tokens.textPrimary, borderColor: tokens.divider }]}
-            autoFocus
-          />
-
-          {search.isFetching && query.trim().length > 1 ? (
-            <Spinner />
-          ) : results.length === 0 ? (
-            query.trim().length > 1 ? (
-              <T variant="micro" muted style={{ padding: spacing.md, textAlign: 'center' }}>
-                {t('import:noResults')}
+            <T variant="caption" style={{ marginTop: spacing.xs }}>
+              {t('import:sourceTitle')}:{' '}
+              <T variant="caption" style={{ fontWeight: '700', color: tokens.textPrimary }}>
+                {sourceTitle}
               </T>
-            ) : null
-          ) : (
-            <ScrollView style={{ maxHeight: 500 }} keyboardShouldPersistTaps="handled">
-              {results.map((r: any) => {
-                const isExact = (r.title ?? '').toLowerCase() === trimmed.toLowerCase();
-                const seasonMatch = targetSeasons != null && (r.seasonsCount ?? 0) >= targetSeasons;
-                return (
-                  <Pressable key={r.id} onPress={() => resolve(r.id)} style={[
-                    resolveStyles.resultRow,
-                    isExact && { backgroundColor: tokens.primary + '15', borderColor: tokens.primary, borderWidth: 1 },
-                  ]}>
-                    <PosterImage uri={r.images?.poster ?? r.posterUrl} style={resolveStyles.poster} />
-                    <View style={{ flex: 1 }}>
-                      <T variant="body" numberOfLines={1}>{r.title}</T>
-                      <T variant="micro" muted>{resultMeta(r, t)}</T>
-                      {isExact && <T variant="micro" style={{ color: tokens.primary }}>✓ Exact match</T>}
-                      {seasonMatch && !isExact && <T variant="micro" style={{ color: tokens.primary }}>✓ {targetSeasons}+ seasons</T>}
-                    </View>
-                    <Ionicons name="checkmark-circle-outline" size={22} color={tokens.primary} />
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          )}
+            </T>
+            <T variant="micro" muted style={{ marginTop: 2 }}>
+              {entityType.replace(/_/g, ' ').toLowerCase()}
+              {episodeTag ? ` · ${episodeTag}` : ''}
+            </T>
+
+            {!isMovie && showSourceTitle ? (
+              <View style={{ marginTop: spacing.sm }}>
+                <Pressable
+                  style={{ flexDirection: 'row', alignItems: 'center' }}
+                  onPress={() =>
+                    setApplyToSeason((prev) => {
+                      const next = !prev;
+                      if (next) setApplyToWholeShow(false);
+                      return next;
+                    })
+                  }
+                  hitSlop={6}
+                >
+                  <Ionicons
+                    name={applyToSeason ? 'checkbox' : 'square-outline'}
+                    size={22}
+                    color={applyToSeason ? tokens.primary : tokens.textMuted}
+                  />
+                  <T variant="caption" style={{ marginLeft: spacing.xs, flex: 1 }}>
+                    {season != null
+                      ? t('import:applyToAllSeason', { season })
+                      : t('import:applyToAllEpisodes')}
+                  </T>
+                </Pressable>
+                <Pressable
+                  style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}
+                  onPress={() =>
+                    setApplyToWholeShow((prev) => {
+                      const next = !prev;
+                      if (next) setApplyToSeason(false);
+                      return next;
+                    })
+                  }
+                  hitSlop={6}
+                >
+                  <Ionicons
+                    name={applyToWholeShow ? 'checkbox' : 'square-outline'}
+                    size={22}
+                    color={applyToWholeShow ? tokens.primary : tokens.textMuted}
+                  />
+                  <T variant="caption" style={{ marginLeft: spacing.xs, flex: 1 }}>
+                    {t('import:applyToWholeShow')}
+                  </T>
+                </Pressable>
+              </View>
+            ) : null}
+
+            <Button
+              title={t('import:skipItem')}
+              variant="ghost"
+              icon="close-circle-outline"
+              onPress={skip}
+              loading={patch.isPending}
+              style={{ marginTop: spacing.md }}
+            />
+
+            <T variant="caption" muted style={{ marginTop: spacing.md, marginBottom: spacing.xs }}>
+              {t('import:searchToMatch')}
+            </T>
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder={t('import:searchPlaceholder')}
+              placeholderTextColor={tokens.textMuted}
+              style={[
+                resolveStyles.input,
+                { color: tokens.textPrimary, borderColor: tokens.divider },
+              ]}
+              autoFocus
+            />
+
+            {search.isFetching && query.trim().length > 1 ? (
+              <Spinner />
+            ) : results.length === 0 ? (
+              query.trim().length > 1 ? (
+                <T variant="micro" muted style={{ padding: spacing.md, textAlign: 'center' }}>
+                  {t('import:noResults')}
+                </T>
+              ) : null
+            ) : (
+              <ScrollView style={{ maxHeight: 500 }} keyboardShouldPersistTaps="handled">
+                {results.map((r: any) => {
+                  const isExact = (r.title ?? '').toLowerCase() === trimmed.toLowerCase();
+                  const seasonMatch =
+                    targetSeasons != null && (r.seasonsCount ?? 0) >= targetSeasons;
+                  return (
+                    <Pressable
+                      key={r.id}
+                      onPress={() => resolve(r.id)}
+                      style={[
+                        resolveStyles.resultRow,
+                        isExact && {
+                          backgroundColor: tokens.primary + '15',
+                          borderColor: tokens.primary,
+                          borderWidth: 1,
+                        },
+                      ]}
+                    >
+                      <PosterImage
+                        uri={r.images?.poster ?? r.posterUrl}
+                        style={resolveStyles.poster}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <T variant="body" numberOfLines={1}>
+                          {r.title}
+                        </T>
+                        <T variant="micro" muted>
+                          {resultMeta(r, t)}
+                        </T>
+                        {isExact && (
+                          <T variant="micro" style={{ color: tokens.primary }}>
+                            ✓ Exact match
+                          </T>
+                        )}
+                        {seasonMatch && !isExact && (
+                          <T variant="micro" style={{ color: tokens.primary }}>
+                            ✓ {targetSeasons}+ seasons
+                          </T>
+                        )}
+                      </View>
+                      <Ionicons name="checkmark-circle-outline" size={22} color={tokens.primary} />
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
+          </Pressable>
         </Pressable>
-      </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -591,9 +760,20 @@ function ResolutionModal({
 function buildResolveStyles(tokens: ReturnType<typeof useAppearance>['tokens']) {
   return StyleSheet.create({
     backdrop: { flex: 1, backgroundColor: tokens.overlayStrong, justifyContent: 'flex-end' },
-    sheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: spacing.lg, paddingBottom: 32 },
+    sheet: {
+      borderTopLeftRadius: 20,
+      borderTopRightRadius: 20,
+      padding: spacing.lg,
+      paddingBottom: 32,
+    },
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    input: { borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: 16 },
+    input: {
+      borderWidth: 1,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      fontSize: 16,
+    },
     resultRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -601,13 +781,24 @@ function buildResolveStyles(tokens: ReturnType<typeof useAppearance>['tokens']) 
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: tokens.divider,
     },
-    poster: { width: 38, height: 57, marginRight: spacing.sm, borderRadius: radius.sm, backgroundColor: tokens.surfaceElevated },
+    poster: {
+      width: 38,
+      height: 57,
+      marginRight: spacing.sm,
+      borderRadius: radius.sm,
+      backgroundColor: tokens.surfaceElevated,
+    },
   });
 }
 
 const styles = StyleSheet.create({
   summary: { flexDirection: 'row', justifyContent: 'space-around', padding: spacing.md },
   stat: { alignItems: 'center' },
-  actions: { flexDirection: 'row', paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderTopWidth: 1 },
+  actions: {
+    flexDirection: 'row',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderTopWidth: 1,
+  },
   row: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm },
 });

@@ -108,9 +108,11 @@ func episodeCode(_ season: Int?, _ number: Int?, separator: String = " ") -> Str
   String(format: "S%02d\(separator)E%02d", season ?? 0, number ?? 0)
 }
 
-/// "Tue, Jul 21" in the device locale. Accepts ISO datetimes and bare yyyy-MM-dd dates.
+/// "Tue, Jul 21" in the device locale. Accepts ISO datetimes (the API serializes
+/// airDate via toISOString(), always with fractional seconds) and bare yyyy-MM-dd dates.
 func shortAirDate(_ airDate: String) -> String {
   let iso = ISO8601DateFormatter()
+  iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
   var date = iso.date(from: airDate)
   if date == nil {
     let f = DateFormatter()

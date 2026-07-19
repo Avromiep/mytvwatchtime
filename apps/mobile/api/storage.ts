@@ -12,14 +12,21 @@ const KEY_IMPORT_POPUP = 'tvwatch.importPopupShown';
 const KEY_DISCORD_NEVER = 'tvwatch.discordNever';
 const KEY_DISCORD_LAST = 'tvwatch.discordLastShown';
 
-async function getItem(key: string): Promise<string | null> {
+// Auth tokens must be readable by the iOS home-screen widgets (background timelines run
+// while the device is locked) and are shared with them via the keychain access group
+// (first keychain-access-groups entitlement entry on both targets). AFTER_FIRST_UNLOCK
+// allows locked-device reads; the items stay in the Keychain, never UserDefaults.
+const TOKEN_OPTIONS: SecureStore.SecureStoreOptions =
+  Platform.OS === 'ios' ? { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK } : {};
+
+async function getItem(key: string, options: SecureStore.SecureStoreOptions = {}): Promise<string | null> {
   if (isWeb) return localStorage.getItem(key);
-  return SecureStore.getItemAsync(key);
+  return SecureStore.getItemAsync(key, options);
 }
 
-async function setItem(key: string, value: string): Promise<void> {
+async function setItem(key: string, value: string, options: SecureStore.SecureStoreOptions = {}): Promise<void> {
   if (isWeb) { localStorage.setItem(key, value); return; }
-  await SecureStore.setItemAsync(key, value);
+  await SecureStore.setItemAsync(key, value, options);
 }
 
 async function deleteItem(key: string): Promise<void> {
@@ -28,9 +35,9 @@ async function deleteItem(key: string): Promise<void> {
 }
 
 export const tokenStorage = {
-  async getAccess() { return getItem(KEY_ACCESS); },
-  async getRefresh() { return getItem(KEY_REFRESH); },
-  async set(access: string, refresh: string) { await setItem(KEY_ACCESS, access); await setItem(KEY_REFRESH, refresh); },
+  async getAccess() { return getItem(KEY_ACCESS, TOKEN_OPTIONS); },
+  async getRefresh() { return getItem(KEY_REFRESH, TOKEN_OPTIONS); },
+  async set(access: string, refresh: string) { await setItem(KEY_ACCESS, access, TOKEN_OPTIONS); await setItem(KEY_REFRESH, refresh, TOKEN_OPTIONS); },
   async clear() { await deleteItem(KEY_ACCESS); await deleteItem(KEY_REFRESH); await deleteItem(KEY_USER); },
   async setUser(user: unknown) { await setItem(KEY_USER, JSON.stringify(user)); },
   async getUser<T>(): Promise<T | null> { const raw = await getItem(KEY_USER); return raw ? (JSON.parse(raw) as T) : null; },

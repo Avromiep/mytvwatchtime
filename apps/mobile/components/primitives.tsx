@@ -59,7 +59,14 @@ export function Button({ title, onPress, variant = 'primary', icon, loading, sty
       onPress={onPress}
       disabled={disabled || loading}
       activeOpacity={0.85}
-      style={[styles.btn, { backgroundColor: bg, opacity: disabled ? 0.5 : 1 }, style]}
+      style={[
+        styles.btn,
+        { backgroundColor: bg, opacity: disabled ? 0.5 : 1 },
+        // Ghost buttons are surfaceElevated — white-on-white in the light theme,
+        // so they need a hairline border to read as buttons.
+        variant === 'ghost' ? { borderWidth: 1, borderColor: tokens.border } : null,
+        style,
+      ]}
     >
       {loading ? (
         <ActivityIndicator color={fg} />

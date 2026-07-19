@@ -197,6 +197,11 @@ export class AuthService {
   }
 
   async refresh(refreshToken: string): Promise<AuthSessionDto> {
+    // INVARIANT: refresh tokens are stateless and NEVER revoked server-side. The mobile
+    // app and its iOS home-screen widgets share one keychain item and refresh
+    // independently; if single-use rotation/revocation is ever introduced, the two
+    // sides will invalidate each other and the widget token reconciliation in
+    // apps/mobile (storage.ts + targets/widget/WidgetAPI.swift) must be reworked first.
     let payload: JwtPayload;
     try {
       payload = this.jwt.verify<JwtPayload>(refreshToken, {

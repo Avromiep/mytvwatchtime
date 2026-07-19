@@ -36,7 +36,10 @@ function variantBg(v: Variant, tokens: Tokens): string {
 }
 
 function variantFg(v: Variant, tokens: Tokens): string {
-  return v === 'ghost' ? tokens.textPrimary : tokens.primaryForeground;
+  // 'secondary'/'ghost' sit on surfaceElevated/transparent, so they need the theme's
+  // normal text color — primaryForeground is near-black in BOTH themes (it's meant
+  // for text on the gold primary) and is unreadable on dark surfaces.
+  return v === 'ghost' || v === 'secondary' ? tokens.textPrimary : tokens.primaryForeground;
 }
 
 export function AppDialog({ entry }: { entry: DialogEntry }) {
@@ -100,7 +103,9 @@ export function AppDialog({ entry }: { entry: DialogEntry }) {
             {buttons.map((b, i) => {
               const bg = variantBg(b.variant as Variant, tokens);
               const fg = variantFg(b.variant as Variant, tokens);
-              const isGhost = b.variant === 'ghost';
+              // Ghost + secondary blend into the dialog surface in the light theme
+              // (white on white) — a hairline border keeps the button shape visible.
+              const bordered = b.variant === 'ghost' || b.variant === 'secondary';
               const inner = b.loading ? (
                 <ActivityIndicator color={fg} />
               ) : (
@@ -117,7 +122,7 @@ export function AppDialog({ entry }: { entry: DialogEntry }) {
                     styles.btn,
                     { backgroundColor: bg, opacity: b.disabled || b.loading ? 0.5 : 1 },
                     stackButtons ? styles.btnFull : null,
-                    isGhost ? [styles.btnGhost, { borderColor: tokens.border }] : null,
+                    bordered ? [styles.btnBordered, { borderColor: tokens.border }] : null,
                   ]}
                 >
                   {inner}
@@ -189,8 +194,7 @@ const styles = StyleSheet.create({
   btnFull: {
     width: '100%',
   },
-  btnGhost: {
-    backgroundColor: 'transparent',
+  btnBordered: {
     borderWidth: 1,
   },
 });
