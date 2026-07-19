@@ -465,17 +465,26 @@ export class MediaMetadataService {
 
   async ensureShowFull(tmdbId: number, userId?: string): Promise<string> {
     const lang = currentLanguage();
-    const data = await this.tmdb.getShow(tmdbId); // request locale (L)
     const tmdbVal = String(tmdbId);
     const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal, ProviderEntityKind.SERIES);
     let mediaId: string;
+    let externals: { provider: ExternalProvider; value: string }[] = [];
     if (this.isStale(existing)) {
-      // Full refresh: English base + all relations + the request-locale overrides.
-      const enData = lang !== 'en' ? await this.tmdb.getShow(tmdbId, 'en-US') : undefined;
-      mediaId = await this.persistShow(data, existing?.id, lang, enData, ExternalProvider.TMDB);
+      // ONE English call (appended seasons/keywords/translations): base + episodes stay
+      // English; show-level locales come from the translations payload — no second fetch.
+      const enData = await this.tmdb.getShow(tmdbId, 'en-US');
+      externals = enData.externals;
+      mediaId = await this.persistShow(enData, existing?.id, 'en', undefined, ExternalProvider.TMDB);
+      if (lang !== 'en') {
+        // Request-locale overrides (top-level + season/episode text) — same flow as before.
+        const data = await this.tmdb.getShow(tmdbId, lang);
+        await this.applyLocaleOverrides(mediaId, MediaType.SHOW, data, lang);
+      }
     } else if (lang !== 'en' && existing) {
       // Fresh trusted base: store ONLY the request-locale override — no base change,
       // no English re-fetch — so different users' languages never contaminate each other.
+      const data = await this.tmdb.getShow(tmdbId, lang);
+      externals = data.externals;
       mediaId = existing.id;
       await this.applyLocaleOverrides(mediaId, MediaType.SHOW, data, lang);
     } else {
@@ -485,7 +494,7 @@ export class MediaMetadataService {
       await this.ensureUserShowTotals(userId, mediaId);
     }
     // Fill precise air times/dates from TVmaze (best-effort, outside the tx).
-    await this.enrichAirtimes(mediaId, data.externals).catch((e) =>
+    await this.enrichAirtimes(mediaId, externals).catch((e) =>
       this.logger.debug(`TVmaze enrich skipped: ${(e as Error).message}`),
     );
     // Genres are now persisted → run anime candidate detection (idempotent, deduped).
@@ -668,14 +677,19 @@ export class MediaMetadataService {
 
   async ensureMovieFull(tmdbId: number): Promise<string> {
     const lang = currentLanguage();
-    const data = await this.tmdb.getMovie(tmdbId); // request locale (L)
     const tmdbVal = String(tmdbId);
     const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal, ProviderEntityKind.MOVIE);
     let mediaId: string;
     if (this.isStale(existing)) {
-      const enData = lang !== 'en' ? await this.tmdb.getMovie(tmdbId, 'en-US') : undefined;
-      mediaId = await this.persistMovie(data, existing?.id, lang, enData);
+      // ONE English call — base + all show-level locales via the translations payload.
+      const data = await this.tmdb.getMovie(tmdbId, 'en-US');
+      mediaId = await this.persistMovie(data, existing?.id, 'en', undefined);
+      if (lang !== 'en') {
+        const locData = await this.tmdb.getMovie(tmdbId, lang);
+        await this.applyLocaleOverrides(mediaId, MediaType.MOVIE, locData, lang);
+      }
     } else if (lang !== 'en' && existing) {
+      const data = await this.tmdb.getMovie(tmdbId, lang);
       mediaId = existing.id;
       await this.applyLocaleOverrides(mediaId, MediaType.MOVIE, data, lang);
     } else {
@@ -714,6 +728,16 @@ export class MediaMetadataService {
       const providers = await this.upsertProviders(tx, data.providers);
       const castMembers = await this.upsertCast(tx, data.cast);
 
+      let titles = mergeLocalized(prev?.titles as any, lang, data.title, enData?.title);
+      let overviews = mergeLocalized(prev?.overviews as any, lang, data.overview, enData?.overview);
+      // Bulk-store every locale from the appended translations payload as overrides, so a
+      // later view in another language never forces a full re-hydration.
+      if (data.translations) {
+        for (const [loc, tr] of Object.entries(data.translations)) {
+          titles = mergeLocalized(titles as any, loc, tr.title ?? undefined, undefined);
+          overviews = mergeLocalized(overviews as any, loc, tr.overview ?? undefined, undefined);
+        }
+      }
       const mediaData = {
         title: base.title,
         overview: base.overview,
@@ -725,8 +749,8 @@ export class MediaMetadataService {
         trailerUrl: data.trailerUrl,
         metadataRefreshedAt: new Date(),
         titleLocale: enData ? 'en' : (prev?.titleLocale ?? lang),
-        titles: mergeLocalized(prev?.titles as any, lang, data.title, enData?.title),
-        overviews: mergeLocalized(prev?.overviews as any, lang, data.overview, enData?.overview),
+        titles,
+        overviews,
         posterUrls: mergeLocalized(prev?.posterUrls as any, lang, data.posterUrl, enData?.posterUrl),
         backdropUrls: mergeLocalized(prev?.backdropUrls as any, lang, data.backdropUrl, enData?.backdropUrl),
       };
@@ -770,6 +794,7 @@ export class MediaMetadataService {
           originalLanguage: data.originalLanguage ?? null,
           originalTitle: data.originalTitle ?? null,
           originCountries: data.originCountries ?? [],
+          keywords: (data.keywords as any) ?? undefined,
         },
         update: {
           yearStart: data.yearStart,
@@ -784,6 +809,8 @@ export class MediaMetadataService {
           ...(data.originalLanguage !== undefined ? { originalLanguage: data.originalLanguage } : {}),
           ...(data.originalTitle !== undefined ? { originalTitle: data.originalTitle } : {}),
           ...(data.originCountries !== undefined ? { originCountries: data.originCountries } : {}),
+          // TVDB supplies no keywords — never clobber TMDB-persisted ones.
+          ...(data.keywords ? { keywords: data.keywords as any } : {}),
         },
       });
 
@@ -878,6 +905,7 @@ export class MediaMetadataService {
           runtimeMinutes: data.runtimeMinutes,
           country: data.country,
           language: data.language,
+          ...(data.keywords ? { keywords: data.keywords as any } : {}),
         },
         update: {
           releaseDate: data.releaseDate ? new Date(data.releaseDate) : null,
@@ -885,6 +913,7 @@ export class MediaMetadataService {
           runtimeMinutes: data.runtimeMinutes,
           country: data.country,
           language: data.language,
+          ...(data.keywords ? { keywords: data.keywords as any } : {}),
         },
       });
 

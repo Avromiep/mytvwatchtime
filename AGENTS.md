@@ -35,6 +35,7 @@
 ## Conventions
 - Always import shared types from `@tvwatch/shared` — do not duplicate DTOs across apps.
 - The Prisma schema (`apps/api/prisma/schema.prisma`) is the source of truth for the data model. Regenerate after edits: `pnpm db:generate`.
+- TMDB hydration is ONE call per entity: `TmdbProvider.getShow/getMovie` use `append_to_response` (external_ids, credits, watch/providers, videos, **keywords, translations**, + up to 14 `season/N` appends; longer shows fall back to per-season calls for the tail). `ensureShowFull/ensureMovieFull` hydrate the English base from that single call (no second en fetch) and bulk-store all translation locales as overrides; non-en requests additionally run `applyLocaleOverrides` for episode-level text. Show/Movie `keywords` (JSON) are persisted and the TMDB `anime` keyword (id 210024) is decisive: it short-circuits Kitsu/Jikan matching (no provider calls) → ANIME/confirmed at 0.9.
 - Mobile NEVER calls third-party media APIs directly. All media data flows through the backend, which normalizes + caches external IDs.
 - Use snake_case only in DB column names via Prisma `@map`. In code/TS use camelCase.
 - Prettier config is at repo root (`.prettierrc.json`). Single quotes, trailing comma all, 100 width.

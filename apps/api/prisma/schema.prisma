@@ -510,6 +510,8 @@ model Show {
   originalTitle  String?     @map("original_title")
   originCountries  String[]  @map("origin_countries")
   totalRuntimeMinutes Int?   @map("total_runtime_minutes")
+  // TMDB keyword names (e.g. ["anime","isekai"]) — feeds the anime classifier.
+  keywords    Json?
 
   media    MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
   seasons  Season[]
@@ -526,6 +528,8 @@ model Movie {
   country         String?
   language        String?
   budget          BigInt?
+  // TMDB keyword names (e.g. ["anime"]) — feeds the anime classifier.
+  keywords        Json?
 
   media   MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
 

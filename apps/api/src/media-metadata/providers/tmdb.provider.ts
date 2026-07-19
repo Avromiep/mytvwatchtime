@@ -74,6 +74,10 @@ export interface NormalizedShow {
   originalTitle?: string | null;
   /** ISO 3166-1 origin countries (TMDB shows only) — anime classification evidence ('JP'). */
   originCountries?: string[];
+  /** TMDB keyword names (e.g. ["anime","isekai"]) — anime classification signal. */
+  keywords?: string[];
+  /** All locale translations from the appended TMDB translations payload. Key = ISO 639-1. */
+  translations?: Record<string, { title?: string; overview?: string }>;
 }
 export interface NormalizedMovie {
   type: MediaType.MOVIE;
@@ -94,6 +98,8 @@ export interface NormalizedMovie {
   externals: NormalizedExternal[];
   cast: NormalizedCast[];
   providers: NormalizedProvider[];
+  /** TMDB keyword names (e.g. ["anime"]) — anime classification signal. */
+  keywords?: string[];
   /** All locale translations from the provider (bulk-cached). Key = app locale code. */
   translations?: Record<string, { title?: string; overview?: string }>;
 }
@@ -138,6 +144,12 @@ interface TmdbShow {
   next_episode_to_air?: { air_date?: string } | null;
   original_language?: string;
   origin_country?: string[];
+  keywords?: { results?: { name?: string }[] };
+  translations?: { translations?: TmdbTranslation[] };
+}
+interface TmdbTranslation {
+  iso_639_1?: string;
+  data?: { name?: string; title?: string; overview?: string };
 }
 interface TmdbMovie {
   id: number;
@@ -157,6 +169,8 @@ interface TmdbMovie {
   videos?: { results?: { site: string; type: string; key: string }[] };
   production_countries?: { iso_3166_1: string }[];
   original_language?: string;
+  keywords?: { keywords?: { name?: string }[] };
+  translations?: { translations?: TmdbTranslation[] };
 }
 interface TmdbCast {
   id: number;
@@ -246,8 +260,12 @@ export class TmdbProvider {
     };
   }
 
-  private trailer(videos?: { results?: { site: string; type: string; key: string }[] }): string | null {
-    const t = (videos?.results || []).find((v) => v.site === 'YouTube' && /trailer|teaser/i.test(v.type));
+  private trailer(videos?: {
+    results?: { site: string; type: string; key: string }[];
+  }): string | null {
+    const t = (videos?.results || []).find(
+      (v) => v.site === 'YouTube' && /trailer|teaser/i.test(v.type),
+    );
     return t ? `https://www.youtube.com/watch?v=${t.key}` : null;
   }
 
@@ -263,7 +281,10 @@ export class TmdbProvider {
 
   private providersOf(watch?: { results?: Record<string, any> }): NormalizedProvider[] {
     const us = watch?.results?.US;
-    const list = (us?.flatrate || us?.rent || us?.buy || []) as { provider_name: string; logo_path?: string }[];
+    const list = (us?.flatrate || us?.rent || us?.buy || []) as {
+      provider_name: string;
+      logo_path?: string;
+    }[];
     const seen = new Set<string>();
     return list
       .filter((p) => p.provider_name && !seen.has(p.provider_name) && seen.add(p.provider_name))
@@ -274,11 +295,15 @@ export class TmdbProvider {
       }));
   }
 
-  async searchShows(query: string, page = 1): Promise<{ items: NormalizedSearchItem[]; total: number }> {
-    const res = await this.tmdb.get<{ results: TmdbShow[]; total_results: number }>(
-      '/search/tv',
-      { query, page, include_adult: false },
-    );
+  async searchShows(
+    query: string,
+    page = 1,
+  ): Promise<{ items: NormalizedSearchItem[]; total: number }> {
+    const res = await this.tmdb.get<{ results: TmdbShow[]; total_results: number }>('/search/tv', {
+      query,
+      page,
+      include_adult: false,
+    });
     return {
       total: res.total_results || 0,
       items: (res.results || []).map((s) => ({
@@ -295,7 +320,10 @@ export class TmdbProvider {
     };
   }
 
-  async searchMovies(query: string, page = 1): Promise<{ items: NormalizedSearchItem[]; total: number }> {
+  async searchMovies(
+    query: string,
+    page = 1,
+  ): Promise<{ items: NormalizedSearchItem[]; total: number }> {
     const res = await this.tmdb.get<{ results: TmdbMovie[]; total_results: number }>(
       '/search/movie',
       { query, page, include_adult: false },
@@ -353,17 +381,29 @@ export class TmdbProvider {
       const res = await this.tmdb.get<{
         movie_results?: { id?: number; genre_ids?: number[] }[];
         tv_results?: { id?: number; genre_ids?: number[]; origin_country?: string[] }[];
-        tv_episode_results?: { id?: number; show_id?: number; season_number?: number; episode_number?: number }[];
+        tv_episode_results?: {
+          id?: number;
+          show_id?: number;
+          season_number?: number;
+          episode_number?: number;
+        }[];
       }>(`/find/${externalId}`, { external_source: source });
       const m = res.movie_results?.[0];
       const s = res.tv_results?.[0];
       const e = res.tv_episode_results?.[0];
       return {
         movie: m?.id ? { tmdbId: m.id, genreIds: m.genre_ids ?? [] } : null,
-        show: s?.id ? { tmdbId: s.id, genreIds: s.genre_ids ?? [], originCountries: s.origin_country ?? [] } : null,
+        show: s?.id
+          ? { tmdbId: s.id, genreIds: s.genre_ids ?? [], originCountries: s.origin_country ?? [] }
+          : null,
         episode:
           e?.id && e.show_id && e.season_number != null && e.episode_number != null
-            ? { tmdbEpisodeId: e.id, showId: e.show_id, season: e.season_number, episode: e.episode_number }
+            ? {
+                tmdbEpisodeId: e.id,
+                showId: e.show_id,
+                season: e.season_number,
+                episode: e.episode_number,
+              }
             : null,
       };
     } catch {
@@ -372,9 +412,16 @@ export class TmdbProvider {
   }
 
   async getShow(id: number, language?: string): Promise<NormalizedShow> {
-    const s = await this.tmdb.get<TmdbShow>(
+    // ONE call: base + externals + credits + providers + videos + keywords + translations
+    // + up to 14 seasons appended (TMDB append_to_response allows 20 sub-requests in the
+    // same namespace). Seasons beyond the window (or an unappendable season) fall back to
+    // the individual season endpoint below — same behavior as before, just fewer calls.
+    const seasonAppends = Array.from({ length: 14 }, (_, i) => `season/${i}`).join(',');
+    const s = await this.tmdb.get<TmdbShow & Record<string, any>>(
       `/tv/${id}`,
-      { append_to_response: 'external_ids,credits,watch/providers,videos' },
+      {
+        append_to_response: `external_ids,credits,watch/providers,videos,keywords,translations,${seasonAppends}`,
+      },
       language,
     );
     const seasons = (s.seasons || [])
@@ -382,7 +429,13 @@ export class TmdbProvider {
       .map((se) => this.normalizeSeason(se));
     for (const se of seasons) {
       if (se.episodes.length === 0) {
-        const detail = await this.tmdb.get<TmdbSeason>(`/tv/${id}/season/${se.number}`, {}, language);
+        // Prefer the appended season payload (`season/{n}` key in the same response);
+        // fall back to the individual endpoint for seasons outside the appended window.
+        const appended = s[`season/${se.number}`] as TmdbSeason | undefined;
+        const detail =
+          appended && Array.isArray(appended.episodes) && appended.episodes.length > 0
+            ? appended
+            : await this.tmdb.get<TmdbSeason>(`/tv/${id}/season/${se.number}`, {}, language);
         se.episodes = (detail.episodes || []).map((e) => this.normalizeEpisode(e));
       }
     }
@@ -408,8 +461,12 @@ export class TmdbProvider {
       genres: (s.genres || []).map((g) => ({ tmdbId: g.id, name: g.name })),
       externals: [
         { provider: ExternalProvider.TMDB, value: String(s.id) },
-        ...(s.external_ids?.imdb_id ? [{ provider: ExternalProvider.IMDB, value: s.external_ids.imdb_id }] : []),
-        ...(s.external_ids?.tvdb_id ? [{ provider: ExternalProvider.THE_TVDB, value: String(s.external_ids.tvdb_id) }] : []),
+        ...(s.external_ids?.imdb_id
+          ? [{ provider: ExternalProvider.IMDB, value: s.external_ids.imdb_id }]
+          : []),
+        ...(s.external_ids?.tvdb_id
+          ? [{ provider: ExternalProvider.THE_TVDB, value: String(s.external_ids.tvdb_id) }]
+          : []),
       ],
       cast: this.castOf(s.credits),
       providers: this.providersOf(s['watch/providers']),
@@ -418,13 +475,15 @@ export class TmdbProvider {
       originalLanguage: s.original_language ?? null,
       originalTitle: s.original_name ?? null,
       originCountries: s.origin_country ?? [],
+      keywords: (s.keywords?.results ?? []).map((k) => k.name).filter((n): n is string => !!n),
+      translations: this.translationsOf(s.translations),
     };
   }
 
   async getMovie(id: number, language?: string): Promise<NormalizedMovie> {
     const m = await this.tmdb.get<TmdbMovie>(
       `/movie/${id}`,
-      { append_to_response: 'external_ids,credits,watch/providers,videos' },
+      { append_to_response: 'external_ids,credits,watch/providers,videos,keywords,translations' },
       language,
     );
     return {
@@ -445,11 +504,32 @@ export class TmdbProvider {
       genres: (m.genres || []).map((g) => ({ tmdbId: g.id, name: g.name })),
       externals: [
         { provider: ExternalProvider.TMDB, value: String(m.id) },
-        ...(m.external_ids?.imdb_id ? [{ provider: ExternalProvider.IMDB, value: m.external_ids.imdb_id }] : []),
+        ...(m.external_ids?.imdb_id
+          ? [{ provider: ExternalProvider.IMDB, value: m.external_ids.imdb_id }]
+          : []),
       ],
       cast: this.castOf(m.credits),
       providers: this.providersOf(m['watch/providers']),
+      // Movie keywords use a different payload shape than TV keywords (`keywords` vs `results`).
+      keywords: (m.keywords?.keywords ?? []).map((k) => k.name).filter((n): n is string => !!n),
+      translations: this.translationsOf(m.translations),
     };
+  }
+
+  /** Appended TMDB translations payload → per-locale {title, overview} map (ISO 639-1 keys). */
+  private translationsOf(t?: {
+    translations?: TmdbTranslation[];
+  }): Record<string, { title?: string; overview?: string }> | undefined {
+    const list = t?.translations ?? [];
+    const out: Record<string, { title?: string; overview?: string }> = {};
+    for (const tr of list) {
+      const loc = tr.iso_639_1;
+      if (!loc) continue;
+      const title = tr.data?.name || tr.data?.title || undefined;
+      const overview = tr.data?.overview || undefined;
+      if (title || overview) out[loc] = { title, overview };
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
   }
 
   async trendingShows(window: 'day' | 'week' = 'week', page = 1): Promise<NormalizedSearchItem[]> {
@@ -467,7 +547,9 @@ export class TmdbProvider {
   }
 
   async trendingMovies(window: 'day' | 'week' = 'week', page = 1): Promise<NormalizedSearchItem[]> {
-    const res = await this.tmdb.get<{ results: TmdbMovie[] }>(`/trending/movie/${window}`, { page });
+    const res = await this.tmdb.get<{ results: TmdbMovie[] }>(`/trending/movie/${window}`, {
+      page,
+    });
     return (res.results || []).map((m) => ({
       tmdbId: m.id,
       type: MediaType.MOVIE,
@@ -558,10 +640,15 @@ export class TmdbProvider {
   async topRatedMovies(page = 1): Promise<NormalizedSearchItem[]> {
     const res = await this.tmdb.get<{ results: TmdbMovie[] }>('/movie/top_rated', { page });
     return (res.results || []).map((m) => ({
-      tmdbId: m.id, type: MediaType.MOVIE, title: m.title || 'Untitled',
-      posterUrl: this.tmdb.img(m.poster_path, 'w342'), backdropUrl: this.tmdb.img(m.backdrop_path, 'w780'),
-      overview: m.overview || null, year: m.release_date ? Number(m.release_date.slice(0, 4)) : null,
-      rating: m.vote_average ?? null, popularity: m.popularity ?? null,
+      tmdbId: m.id,
+      type: MediaType.MOVIE,
+      title: m.title || 'Untitled',
+      posterUrl: this.tmdb.img(m.poster_path, 'w342'),
+      backdropUrl: this.tmdb.img(m.backdrop_path, 'w780'),
+      overview: m.overview || null,
+      year: m.release_date ? Number(m.release_date.slice(0, 4)) : null,
+      rating: m.vote_average ?? null,
+      popularity: m.popularity ?? null,
     }));
   }
 
@@ -569,10 +656,15 @@ export class TmdbProvider {
   async nowPlayingMovies(page = 1): Promise<NormalizedSearchItem[]> {
     const res = await this.tmdb.get<{ results: TmdbMovie[] }>('/movie/now_playing', { page });
     return (res.results || []).map((m) => ({
-      tmdbId: m.id, type: MediaType.MOVIE, title: m.title || 'Untitled',
-      posterUrl: this.tmdb.img(m.poster_path, 'w342'), backdropUrl: this.tmdb.img(m.backdrop_path, 'w780'),
-      overview: m.overview || null, year: m.release_date ? Number(m.release_date.slice(0, 4)) : null,
-      rating: m.vote_average ?? null, popularity: m.popularity ?? null,
+      tmdbId: m.id,
+      type: MediaType.MOVIE,
+      title: m.title || 'Untitled',
+      posterUrl: this.tmdb.img(m.poster_path, 'w342'),
+      backdropUrl: this.tmdb.img(m.backdrop_path, 'w780'),
+      overview: m.overview || null,
+      year: m.release_date ? Number(m.release_date.slice(0, 4)) : null,
+      rating: m.vote_average ?? null,
+      popularity: m.popularity ?? null,
     }));
   }
 
@@ -580,10 +672,15 @@ export class TmdbProvider {
   async upcomingMovies(page = 1): Promise<NormalizedSearchItem[]> {
     const res = await this.tmdb.get<{ results: TmdbMovie[] }>('/movie/upcoming', { page });
     return (res.results || []).map((m) => ({
-      tmdbId: m.id, type: MediaType.MOVIE, title: m.title || 'Untitled',
-      posterUrl: this.tmdb.img(m.poster_path, 'w342'), backdropUrl: this.tmdb.img(m.backdrop_path, 'w780'),
-      overview: m.overview || null, year: m.release_date ? Number(m.release_date.slice(0, 4)) : null,
-      rating: m.vote_average ?? null, popularity: m.popularity ?? null,
+      tmdbId: m.id,
+      type: MediaType.MOVIE,
+      title: m.title || 'Untitled',
+      posterUrl: this.tmdb.img(m.poster_path, 'w342'),
+      backdropUrl: this.tmdb.img(m.backdrop_path, 'w780'),
+      overview: m.overview || null,
+      year: m.release_date ? Number(m.release_date.slice(0, 4)) : null,
+      rating: m.vote_average ?? null,
+      popularity: m.popularity ?? null,
     }));
   }
 
@@ -591,10 +688,15 @@ export class TmdbProvider {
   async popularMovies(page = 1): Promise<NormalizedSearchItem[]> {
     const res = await this.tmdb.get<{ results: TmdbMovie[] }>('/movie/popular', { page });
     return (res.results || []).map((m) => ({
-      tmdbId: m.id, type: MediaType.MOVIE, title: m.title || 'Untitled',
-      posterUrl: this.tmdb.img(m.poster_path, 'w342'), backdropUrl: this.tmdb.img(m.backdrop_path, 'w780'),
-      overview: m.overview || null, year: m.release_date ? Number(m.release_date.slice(0, 4)) : null,
-      rating: m.vote_average ?? null, popularity: m.popularity ?? null,
+      tmdbId: m.id,
+      type: MediaType.MOVIE,
+      title: m.title || 'Untitled',
+      posterUrl: this.tmdb.img(m.poster_path, 'w342'),
+      backdropUrl: this.tmdb.img(m.backdrop_path, 'w780'),
+      overview: m.overview || null,
+      year: m.release_date ? Number(m.release_date.slice(0, 4)) : null,
+      rating: m.vote_average ?? null,
+      popularity: m.popularity ?? null,
     }));
   }
 
@@ -602,9 +704,14 @@ export class TmdbProvider {
   async popularShows(page = 1): Promise<NormalizedSearchItem[]> {
     const res = await this.tmdb.get<{ results: TmdbShow[] }>('/tv/popular', { page });
     return (res.results || []).map((s) => ({
-      tmdbId: s.id, type: MediaType.SHOW, title: s.name || 'Untitled',
-      posterUrl: this.tmdb.img(s.poster_path, 'w342'), backdropUrl: this.tmdb.img(s.backdrop_path, 'w780'),
-      overview: s.overview || null, rating: s.vote_average ?? null, popularity: s.popularity ?? null,
+      tmdbId: s.id,
+      type: MediaType.SHOW,
+      title: s.name || 'Untitled',
+      posterUrl: this.tmdb.img(s.poster_path, 'w342'),
+      backdropUrl: this.tmdb.img(s.backdrop_path, 'w780'),
+      overview: s.overview || null,
+      rating: s.vote_average ?? null,
+      popularity: s.popularity ?? null,
     }));
   }
 
@@ -612,9 +719,14 @@ export class TmdbProvider {
   async topRatedShows(page = 1): Promise<NormalizedSearchItem[]> {
     const res = await this.tmdb.get<{ results: TmdbShow[] }>('/tv/top_rated', { page });
     return (res.results || []).map((s) => ({
-      tmdbId: s.id, type: MediaType.SHOW, title: s.name || 'Untitled',
-      posterUrl: this.tmdb.img(s.poster_path, 'w342'), backdropUrl: this.tmdb.img(s.backdrop_path, 'w780'),
-      overview: s.overview || null, rating: s.vote_average ?? null, popularity: s.popularity ?? null,
+      tmdbId: s.id,
+      type: MediaType.SHOW,
+      title: s.name || 'Untitled',
+      posterUrl: this.tmdb.img(s.poster_path, 'w342'),
+      backdropUrl: this.tmdb.img(s.backdrop_path, 'w780'),
+      overview: s.overview || null,
+      rating: s.vote_average ?? null,
+      popularity: s.popularity ?? null,
     }));
   }
 
@@ -622,9 +734,14 @@ export class TmdbProvider {
   async airingToday(page = 1): Promise<NormalizedSearchItem[]> {
     const res = await this.tmdb.get<{ results: TmdbShow[] }>('/tv/airing_today', { page });
     return (res.results || []).map((s) => ({
-      tmdbId: s.id, type: MediaType.SHOW, title: s.name || 'Untitled',
-      posterUrl: this.tmdb.img(s.poster_path, 'w342'), backdropUrl: this.tmdb.img(s.backdrop_path, 'w780'),
-      overview: s.overview || null, rating: s.vote_average ?? null, popularity: s.popularity ?? null,
+      tmdbId: s.id,
+      type: MediaType.SHOW,
+      title: s.name || 'Untitled',
+      posterUrl: this.tmdb.img(s.poster_path, 'w342'),
+      backdropUrl: this.tmdb.img(s.backdrop_path, 'w780'),
+      overview: s.overview || null,
+      rating: s.vote_average ?? null,
+      popularity: s.popularity ?? null,
     }));
   }
 
@@ -632,14 +749,21 @@ export class TmdbProvider {
   async onTheAir(page = 1): Promise<NormalizedSearchItem[]> {
     const res = await this.tmdb.get<{ results: TmdbShow[] }>('/tv/on_the_air', { page });
     return (res.results || []).map((s) => ({
-      tmdbId: s.id, type: MediaType.SHOW, title: s.name || 'Untitled',
-      posterUrl: this.tmdb.img(s.poster_path, 'w342'), backdropUrl: this.tmdb.img(s.backdrop_path, 'w780'),
-      overview: s.overview || null, rating: s.vote_average ?? null, popularity: s.popularity ?? null,
+      tmdbId: s.id,
+      type: MediaType.SHOW,
+      title: s.name || 'Untitled',
+      posterUrl: this.tmdb.img(s.poster_path, 'w342'),
+      backdropUrl: this.tmdb.img(s.backdrop_path, 'w780'),
+      overview: s.overview || null,
+      rating: s.vote_average ?? null,
+      popularity: s.popularity ?? null,
     }));
   }
 
   async genres(type: 'tv' | 'movie'): Promise<{ id: number; name: string }[]> {
-    const res = await this.tmdb.get<{ genres: { id: number; name: string }[] }>(`/genre/${type}/list`);
+    const res = await this.tmdb.get<{ genres: { id: number; name: string }[] }>(
+      `/genre/${type}/list`,
+    );
     return res.genres || [];
   }
 
@@ -650,7 +774,7 @@ export class TmdbProvider {
       title: se.name || `Season ${se.season_number}`,
       overview: se.overview || null,
       posterUrl: this.tmdb.img(se.poster_path, 'w342'),
-      episodeCount: se.episode_count ?? (se.episodes?.length ?? 0),
+      episodeCount: se.episode_count ?? se.episodes?.length ?? 0,
       isSpecial: se.season_number === 0,
       episodes: (se.episodes || []).map((e) => this.normalizeEpisode(e)),
     };

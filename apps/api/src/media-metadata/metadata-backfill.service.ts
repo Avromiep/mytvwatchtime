@@ -5,6 +5,7 @@ import { RedisService } from '../common/redis/redis.service';
 import { MediaMetadataService } from './media-metadata.service';
 import { HydrationQueue } from './hydration/hydration.queue';
 import { TmdbClient } from './providers/tmdb.client';
+import { TmdbProvider } from './providers/tmdb.provider';
 import { TvdbProvider } from './providers/tvdb.provider';
 import { isProviderError } from './providers/shared/provider-errors';
 import { ProviderThrottled } from './providers/shared/provider-http';
@@ -43,6 +44,7 @@ export class MetadataBackfillService {
     private readonly redis: RedisService,
     private readonly tmdb: TmdbClient,
     private readonly tvdb: TvdbProvider,
+    private readonly tmdbProvider: TmdbProvider,
     private readonly structureRemap: StructureRemapService,
   ) {}
 
@@ -449,13 +451,13 @@ export class MetadataBackfillService {
     // TMDB cross-id lookup: TMDB knows the equivalent TVDB series id for most shows.
     const tmdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
     if (tmdbExt) {
-      const ext = await this.tmdb.get<{ tvdb_id?: number | null }>(`/tv/${tmdbExt.value}/external_ids`, {});
-      if (ext?.tvdb_id) {
+      const tvdbId = await this.tmdbProvider.getTvdbIdForShow(Number(tmdbExt.value));
+      if (tvdbId) {
         // TMDB's own cross-id is authoritative: when it is already claimed by another
         // media row this show is a duplicate — never title-search past it (a wrong
         // search hit would merge structures).
-        const claimed = await this.claimTvdbId(media.id, ext.tvdb_id);
-        return claimed ? ext.tvdb_id : null;
+        const claimed = await this.claimTvdbId(media.id, tvdbId);
+        return claimed ? tvdbId : null;
       }
     }
 

@@ -7,7 +7,12 @@ import { CandidateDetectorService } from '../classification/candidate-detector.s
 import { ClassifierService } from '../classification/classifier.service';
 import { AnimeMatchService } from '../matching/anime-match.service';
 import { TvdbProvider } from '../providers/tvdb.provider';
-import { METADATA_QUEUE, HydrationQueue, type IdentityJobData, type TvdbSearchJobData } from './hydration.queue';
+import {
+  METADATA_QUEUE,
+  HydrationQueue,
+  type IdentityJobData,
+  type TvdbSearchJobData,
+} from './hydration.queue';
 
 /**
  * Background metadata enrichment worker (queue `metadata`). Stages are chained via stable
@@ -31,12 +36,13 @@ export class HydrationProcessor implements OnModuleInit {
 
   onModuleInit() {
     const connection = this.redis.client as any;
-    this.worker = new Worker(
-      METADATA_QUEUE,
-      async (job) => this.dispatch(job.name, job.data),
-      { connection, concurrency: 4 },
+    this.worker = new Worker(METADATA_QUEUE, async (job) => this.dispatch(job.name, job.data), {
+      connection,
+      concurrency: 4,
+    });
+    this.worker.on('failed', (job, err) =>
+      this.logger.warn(`metadata job ${job?.name}#${job?.id} failed: ${err.message}`),
     );
-    this.worker.on('failed', (job, err) => this.logger.warn(`metadata job ${job?.name}#${job?.id} failed: ${err.message}`));
   }
 
   private async dispatch(name: string, data: any): Promise<void> {
@@ -64,7 +70,14 @@ export class HydrationProcessor implements OnModuleInit {
       if (candidate.isCandidate) {
         await this.queue.enqueueAnimeHydrate(data.mediaId);
       } else if (!media.manualClassification) {
-        await this.persist(data.mediaId, 'GENERAL' as ContentClassification, 'confirmed', 0, { reason: 'not_a_candidate' }, media.manualClassification);
+        await this.persist(
+          data.mediaId,
+          'GENERAL' as ContentClassification,
+          'confirmed',
+          0,
+          { reason: 'not_a_candidate' },
+          media.manualClassification,
+        );
       }
       return;
     }
@@ -72,7 +85,11 @@ export class HydrationProcessor implements OnModuleInit {
     const snap = await this.redis.get<any>(this.provKey(data));
     if (!snap) return;
     const candidate = this.detector.detect(this.inputFromSnapshot(snap));
-    await this.redis.set(`cand:${data.provider}:${data.providerEntityKind}:${data.value}`, { candidate, at: Date.now() }, 600);
+    await this.redis.set(
+      `cand:${data.provider}:${data.providerEntityKind}:${data.value}`,
+      { candidate, at: Date.now() },
+      600,
+    );
     if (candidate.isCandidate) await this.queue.enqueueAnimeMatch(data);
   }
 
@@ -90,7 +107,11 @@ export class HydrationProcessor implements OnModuleInit {
         structuralType: snap.structuralType ?? 'SHOW',
         episodeCount: snap.episodeCount ?? null,
       });
-      await this.redis.set(`match:${data.provider}:${data.providerEntityKind}:${data.value}`, { candidate, match, at: Date.now() }, 600);
+      await this.redis.set(
+        `match:${data.provider}:${data.providerEntityKind}:${data.value}`,
+        { candidate, match, at: Date.now() },
+        600,
+      );
     } catch (e) {
       this.logger.debug(`identity anime-match failed: ${(e as Error).message}`);
     }
@@ -99,17 +120,19 @@ export class HydrationProcessor implements OnModuleInit {
   /** Stage 3 (terminal, mediaId): detect → match → classify → persist. Reuses cached
    *  provider search so it is cheap + idempotent.
    *
-   *  A FAILED anime match (Kitsu/Jikan outage, rate limit) must NOT persist a degraded
-   *  classification — the check stays pending and the job is retried (attempts/backoff),
-   *  then re-triggered wholesale by the next hydration-versioned classify. A SUCCESSFUL
-   *  match with a negative result is a real answer: it persists (GENERAL) and is not
-   *  re-checked until new hydration data arrives. */
+   *  The TMDB `anime` keyword short-circuits provider matching entirely (no Kitsu/Jikan
+   *  calls). A FAILED anime match (Kitsu/Jikan outage, rate limit) must NOT persist a
+   *  degraded classification — the check stays pending and the job is retried
+   *  (attempts/backoff), then re-triggered wholesale by the next hydration-versioned
+   *  classify. A SUCCESSFUL match with a negative result is a real answer: it persists
+   *  (GENERAL) and is not re-checked until new hydration data arrives. */
   async animeHydrate(mediaId: string): Promise<void> {
     const media = await this.loadMedia(mediaId);
     if (!media || media.manualClassification) return;
     const candidate = this.detector.detect(this.inputFromMedia(media));
     let match = null;
-    if (candidate.isCandidate) {
+    // TMDB `anime` keyword is decisive — skip the Kitsu/Jikan calls entirely.
+    if (candidate.isCandidate && !candidate.signals.includes('anime_keyword')) {
       // Let the error propagate (BullMQ retry) instead of classifying on missing evidence.
       match = await this.animeMatch.matchAnime({
         title: media.title,
@@ -118,7 +141,14 @@ export class HydrationProcessor implements OnModuleInit {
       });
     }
     const result = this.classifier.classify(candidate, match);
-    await this.persist(mediaId, result.classification as ContentClassification, result.tier, result.confidence, result.evidence, media.manualClassification);
+    await this.persist(
+      mediaId,
+      result.classification as ContentClassification,
+      result.tier,
+      result.confidence,
+      result.evidence,
+      media.manualClassification,
+    );
   }
 
   /** Background TVDB search: store TVDB-only results as provisional candidates (Redis TTL),
@@ -127,7 +157,9 @@ export class HydrationProcessor implements OnModuleInit {
     if (!this.tvdb.enabled) return;
     try {
       const res =
-        data.structuralType === 'SHOW' ? await this.tvdb.searchShows(data.query, 1) : await this.tvdb.searchMovies(data.query, 1);
+        data.structuralType === 'SHOW'
+          ? await this.tvdb.searchShows(data.query, 1)
+          : await this.tvdb.searchMovies(data.query, 1);
       const kind = data.structuralType === 'SHOW' ? 'SERIES' : 'MOVIE';
       for (const item of res.items.slice(0, 10)) {
         if (!item.tvdbId) continue;
@@ -180,6 +212,8 @@ export class HydrationProcessor implements OnModuleInit {
       // (persisted on Show by TMDB hydration; null/[] for TVDB-hydrated shows).
       originalLanguage: m.show?.originalLanguage ?? null,
       originCountries: m.show?.originCountries ?? [],
+      // TMDB keyword signal (persisted by TMDB hydration; the `anime` keyword is strong).
+      keywords: (m.show?.keywords ?? m.movie?.keywords ?? []) as string[],
       externalIds: (m.externalIds ?? []).map((e: any) => ({
         provider: e.provider,
         providerEntityKind: e.providerEntityKind,
@@ -193,7 +227,9 @@ export class HydrationProcessor implements OnModuleInit {
   private inputFromSnapshot(s: any) {
     return {
       genres: s.genres ?? [],
-      externalIds: s.externalIds ?? [{ provider: s.provider, providerEntityKind: s.providerEntityKind, value: s.value }],
+      externalIds: s.externalIds ?? [
+        { provider: s.provider, providerEntityKind: s.providerEntityKind, value: s.value },
+      ],
       structuralType: s.structuralType,
     };
   }

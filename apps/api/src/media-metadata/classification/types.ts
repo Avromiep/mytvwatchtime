@@ -18,6 +18,8 @@ export interface CandidateInput {
   manualCandidate?: boolean;
   /** TVDB type/genre hints, e.g. an anime-type designation. */
   tvdbType?: string | null;
+  /** TMDB keyword names persisted on the show/movie — an `anime` keyword is a strong signal. */
+  keywords?: string[];
   /** Structural media type (only used to record evidence, never as proof). */
   structuralType?: 'SHOW' | 'MOVIE' | string;
 }

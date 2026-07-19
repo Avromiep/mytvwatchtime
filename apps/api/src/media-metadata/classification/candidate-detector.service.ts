@@ -26,11 +26,15 @@ const ANIME_STUDIOS = [
   'tms entertainment',
 ];
 
-function hasVerifiedAnimeId(ids: { provider: ExternalProvider; providerEntityKind: ProviderEntityKind }[] = []): boolean {
+function hasVerifiedAnimeId(
+  ids: { provider: ExternalProvider; providerEntityKind: ProviderEntityKind }[] = [],
+): boolean {
   return ids.some(
     (i) =>
-      (i.provider === ExternalProvider.KITSU && i.providerEntityKind === ProviderEntityKind.ANIME) ||
-      (i.provider === ExternalProvider.MYANIME_LIST && i.providerEntityKind === ProviderEntityKind.ANIME),
+      (i.provider === ExternalProvider.KITSU &&
+        i.providerEntityKind === ProviderEntityKind.ANIME) ||
+      (i.provider === ExternalProvider.MYANIME_LIST &&
+        i.providerEntityKind === ProviderEntityKind.ANIME),
   );
 }
 
@@ -57,9 +61,11 @@ export class CandidateDetectorService {
     const verifiedAnime = hasVerifiedAnimeId(input.externalIds);
     if (verifiedAnime) signals.push('verified_anime_id');
     if (hasAnimation) signals.push('animation_genre');
-    const tvdbAnime =
-      !!input.tvdbType && /anime/i.test(input.tvdbType);
+    const tvdbAnime = !!input.tvdbType && /anime/i.test(input.tvdbType);
     if (tvdbAnime) signals.push('tvdb_anime_signal');
+    // TMDB keyword id 210024 ("anime") — community-maintained and quite reliable.
+    const keywordAnime = (input.keywords ?? []).some((k) => /^anime$/i.test(k.trim()));
+    if (keywordAnime) signals.push('anime_keyword');
 
     // Supporting evidence (not triggers)
     const jaLang = !!input.originalLanguage && input.originalLanguage.toLowerCase() === 'ja';
@@ -72,6 +78,7 @@ export class CandidateDetectorService {
     if (jpStudio) evidence.animeStudio = true;
     if (hasAnimation) evidence.hasAnimation = true;
     if (tvdbAnime) evidence.tvdbAnimeSignal = true;
+    if (keywordAnime) evidence.animeKeyword = true;
 
     return {
       isCandidate: signals.length > 0,

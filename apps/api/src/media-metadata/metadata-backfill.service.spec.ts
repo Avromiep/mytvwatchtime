@@ -59,6 +59,7 @@ describe('MetadataBackfillService', () => {
   let redis: any;
   let tmdb: any;
   let tvdb: any;
+  let tmdbProvider: any;
   let structureRemap: any;
   let service: MetadataBackfillService;
 
@@ -72,6 +73,7 @@ describe('MetadataBackfillService', () => {
     };
     tmdb = { enabled: true, get: jest.fn().mockResolvedValue(undefined) };
     tvdb = { enabled: true, searchShows: jest.fn() };
+    tmdbProvider = { getTvdbIdForShow: jest.fn().mockResolvedValue(null) };
     structureRemap = {
       remapShow: jest.fn().mockResolvedValue({ stale: 0, mapped: 0, unmapped: 0 }),
     };
@@ -82,6 +84,7 @@ describe('MetadataBackfillService', () => {
       redis,
       tmdb,
       tvdb,
+      tmdbProvider,
       structureRemap,
     );
   });
@@ -178,10 +181,10 @@ describe('MetadataBackfillService', () => {
       mockCandidates([
         animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '65942' }] }),
       ]);
-      tmdb.get.mockResolvedValue({ id: 65942, tvdb_id: 305089 });
+      tmdbProvider.getTvdbIdForShow.mockResolvedValue(305089);
       prisma.externalId.findFirst.mockResolvedValue(null);
       const res = await service.rehydrateAnimeFromTvdb();
-      expect(tmdb.get).toHaveBeenCalledWith('/tv/65942/external_ids', {});
+      expect(tmdbProvider.getTvdbIdForShow).toHaveBeenCalledWith(65942);
       expect(tvdb.searchShows).not.toHaveBeenCalled();
       expect(prisma.externalId.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
@@ -198,7 +201,7 @@ describe('MetadataBackfillService', () => {
       mockCandidates([
         animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
       ]);
-      tmdb.get.mockResolvedValue({ id: 11, tvdb_id: null });
+      tmdbProvider.getTvdbIdForShow.mockResolvedValue(null);
       tvdb.searchShows.mockResolvedValue({
         items: [{ tvdbId: 555, title: 'Naruto', year: 2002 }],
         total: 1,
@@ -214,7 +217,7 @@ describe('MetadataBackfillService', () => {
       mockCandidates([
         animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
       ]);
-      tmdb.get.mockResolvedValue({ id: 11, tvdb_id: 305089 });
+      tmdbProvider.getTvdbIdForShow.mockResolvedValue(305089);
       prisma.externalId.findFirst.mockResolvedValue({ mediaId: 'the-real-rezero' });
       const res = await service.rehydrateAnimeFromTvdb();
       // Never title-search past TMDB's authoritative id — would merge structures.
@@ -235,7 +238,7 @@ describe('MetadataBackfillService', () => {
       mockCandidates([animeShow()]);
       prisma.episode.count.mockResolvedValue(0); // already fully TVDB-structured
       const res = await service.rehydrateAnimeFromTvdb();
-      expect(tmdb.get).not.toHaveBeenCalled();
+      expect(tmdbProvider.getTvdbIdForShow).not.toHaveBeenCalled();
       expect(tvdb.searchShows).not.toHaveBeenCalled();
       expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
       expect(res.succeeded).toBe(0);

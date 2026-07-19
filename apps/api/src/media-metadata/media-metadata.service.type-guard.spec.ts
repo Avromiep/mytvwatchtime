@@ -31,6 +31,7 @@ function makeShow(genres: { tmdbId?: number; name: string }[]) {
     inProduction: false,
     genres,
     externals: [{ provider: ExternalProvider.THE_TVDB, value: '280103' }],
+    keywords: ['anime'],
     cast: [],
     providers: [],
     nextAirDate: null,
@@ -66,6 +67,7 @@ function fakeTx(over: Record<string, any> = {}) {
     mediaItemCreate: [] as any[],
     genreUpsert: [] as any[],
     externalIdUpsert: [] as any[],
+    showUpsert: [] as any[],
   };
   const tx: any = {
     mediaItem: {
@@ -85,7 +87,13 @@ function fakeTx(over: Record<string, any> = {}) {
         return {};
       },
     },
-    show: { upsert: async () => ({}), findUnique: async () => ({ id: 'show-1' }) },
+    show: {
+      upsert: async (a: any) => {
+        calls.showUpsert.push(a);
+        return {};
+      },
+      findUnique: async () => ({ id: 'show-1' }),
+    },
     genre: {
       findUnique: async () => null,
       upsert: async (a: any) => {
@@ -203,5 +211,56 @@ describe('MediaMetadataService — cross-type protections', () => {
       expect(u.where.provider_providerEntityKind_value.providerEntityKind).toBe('SERIES');
       expect(u.update).toEqual({});
     }
+  });
+});
+
+describe('MediaMetadataService — single-call TMDB hydration', () => {
+  function makeTmdbService(tx: any, getShow: jest.Mock) {
+    const prisma = {
+      $transaction: async (fn: any) => fn(tx),
+      mediaItem: { findUnique: async () => ({ metadataRefreshedAt: new Date() }) },
+      externalId: { findFirst: async () => null },
+    };
+    return new MediaMetadataService(
+      prisma as any,
+      { enabled: true, getShow } as any, // tmdb provider
+      {} as any, // tvdb
+      {} as any, // tvmaze
+      {} as any, // config
+      { enqueueClassifyCandidate: async () => undefined } as any,
+      { get: async () => null, set: async () => undefined, del: async () => undefined } as any,
+    );
+  }
+
+  it('en request: ONE English call, no second fetch', async () => {
+    const { tx, calls } = fakeTx();
+    const getShow = jest.fn(async () => makeShow([{ name: 'Animation' }]));
+    const svc = makeTmdbService(tx, getShow);
+    await runInLanguage('en', () => svc.ensureShowFull(65942));
+    expect(getShow).toHaveBeenCalledTimes(1);
+    expect(getShow).toHaveBeenCalledWith(65942, 'en-US');
+    expect(calls.mediaItemCreate).toHaveLength(1);
+  });
+
+  it('non-en request: English base once + request-locale overrides once (never two en fetches)', async () => {
+    const { tx, calls } = fakeTx();
+    const getShow = jest.fn(async (_id: number, lang?: string) =>
+      lang === 'it'
+        ? { ...makeShow([{ name: 'Animation' }]), title: 'Sonic Boom IT', seasons: [] }
+        : {
+            ...makeShow([{ name: 'Animation' }]),
+            translations: { it: { title: 'Sonic Boom IT', overview: 'panoramica' } },
+          },
+    );
+    const svc = makeTmdbService(tx, getShow);
+    await runInLanguage('it', () => svc.ensureShowFull(65942));
+
+    const langs = getShow.mock.calls.map((c) => c[1]);
+    expect(langs).toEqual(['en-US', 'it']); // base in English, then one locale pass
+    // Translations from the English payload are prestored as per-locale overrides.
+    expect(calls.mediaItemCreate[0].data.titles).toMatchObject({ it: 'Sonic Boom IT' });
+    expect(calls.mediaItemCreate[0].data.overviews).toMatchObject({ it: 'panoramica' });
+    // Show-level keywords persisted for the classifier.
+    expect(calls.showUpsert[0].create.keywords).toEqual(['anime']);
   });
 });

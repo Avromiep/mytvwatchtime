@@ -75,4 +75,26 @@ describe('HydrationProcessor.animeHydrate', () => {
       data: expect.objectContaining({ contentClassification: 'GENERAL' as ContentClassification }),
     });
   });
+
+  it('short-circuits Kitsu/Jikan entirely when the TMDB `anime` keyword is present', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue({
+      ...media,
+      show: {
+        yearStart: 2016,
+        originalLanguage: 'ja',
+        originCountries: ['JP'],
+        keywords: ['anime', 'isekai'],
+      },
+    });
+    await processor.animeHydrate('m1');
+    expect(animeMatch.matchAnime).not.toHaveBeenCalled();
+    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'm1' },
+      data: expect.objectContaining({
+        contentClassification: 'ANIME' as ContentClassification,
+        classificationTier: 'confirmed',
+        classificationConfidence: 0.9,
+      }),
+    });
+  });
 });
