@@ -3,6 +3,7 @@ import type { AuthSessionDto, CurrentUserDto, EmailLoginDto, EmailRegisterDto } 
 import { api, HttpError } from '../api/client';
 import { tokenStorage } from '../api/storage';
 import { setBaseUrl, resetBaseUrl } from '../api/client';
+import { clearWidgetCredentials, syncWidgetCredentials } from '../widgets/sync';
 
 interface AuthContextValue {
   user: CurrentUserDto | null;
@@ -46,6 +47,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // network errors etc. — keep stored user, will retry on next request
         }
       }
+      // Push current tokens/base URL to the home-screen widgets (iOS App Group;
+      // re-render on Android) after any silent refresh above settled.
+      void syncWidgetCredentials();
       setLoading(false);
     })();
   }, []);
@@ -58,6 +62,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } else if (!val) {
       await resetBaseUrl();
     }
+    // Widgets fetch the API directly — they need the new backend URL.
+    void syncWidgetCredentials();
   }, []);
 
   const getApiUrl = useCallback(async () => {
@@ -68,6 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await tokenStorage.set(s.accessToken, s.refreshToken);
     await tokenStorage.setUser(s.user);
     setUser(s.user);
+    void syncWidgetCredentials();
   }, []);
 
   const loginEmail = useCallback(
@@ -101,6 +108,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     await tokenStorage.clear();
     setUser(null);
+    void clearWidgetCredentials();
   }, []);
 
   const refreshUser = useCallback(async () => {

@@ -41,6 +41,7 @@ import type {
 import { applyVoteChange, MediaType } from '@tvwatch/shared';
 import { api } from './client';
 import { applyWatchStateToItems } from './watch-next-optimistic';
+import { refreshWidgets } from '../widgets/sync';
 
 const qk = {
   me: ['me'] as const,
@@ -580,6 +581,7 @@ export const useMarkEpisodeWatched = () => {
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['show'] });
       invalidateLeaderboardSoon(qc);
+      void refreshWidgets();
     },
   });
 };
@@ -596,6 +598,7 @@ export const useMarkSeasonWatched = () => {
       qc.invalidateQueries({ queryKey: ['watchNext'] });
       qc.invalidateQueries({ queryKey: ['upcoming'] });
       invalidateLeaderboardSoon(qc);
+      void refreshWidgets();
     },
   });
 };
@@ -927,6 +930,7 @@ export const useToggleWatchlist = () => {
       // evict it from both.
       qc.invalidateQueries({ queryKey: ['watchNext'] });
       qc.invalidateQueries({ queryKey: ['upcoming'] });
+      void refreshWidgets();
     },
   });
 };

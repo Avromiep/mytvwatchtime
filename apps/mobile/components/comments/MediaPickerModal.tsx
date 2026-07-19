@@ -75,7 +75,8 @@ export function MediaPickerModal({ visible, onClose, onSelect, onSelectList }: M
 
   // Server order is kept as-is: /search ranks by text match + popularity.
   const search = useSearch(debounced, undefined);
-  const results = debounced.length > 1 ? search.data?.items ?? [] : [];
+  // useSearch is an infinite query — results live in data.pages[].items.
+  const results = debounced.length > 1 ? (search.data?.pages ?? []).flatMap((p) => p.items ?? []) : [];
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>

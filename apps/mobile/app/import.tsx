@@ -391,7 +391,7 @@ function ResolutionModal({
   const isMovie = /MOVIE/.test(entityType);
   const searchType = isMovie ? MediaType.MOVIE : MediaType.SHOW;
   const trimmed = item ? query.trim() : '';
-  const search = useSearch(trimmed, searchType, 50);
+  const search = useSearch(trimmed, searchType);
   const resolveStyles = buildResolveStyles(tokens);
 
   if (!item) return null;
@@ -403,7 +403,8 @@ function ResolutionModal({
   const sourceTitle = norm.showTitle ?? norm.movieTitle ?? norm.title ?? t('import:noTitle');
   const showSourceTitle = norm.showTitle ?? norm.title;
 
-  const rawResults = trimmed.length > 1 ? search.data?.items ?? [] : [];
+  // useSearch is an infinite query — results live in data.pages[].items.
+  const rawResults = trimmed.length > 1 ? (search.data?.pages ?? []).flatMap((p) => p.items ?? []) : [];
 
   // Smart sort: exact title first, then closest season count, then popularity.
   const targetSeasons = season != null ? season : undefined;

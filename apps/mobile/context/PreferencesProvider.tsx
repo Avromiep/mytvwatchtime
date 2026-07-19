@@ -15,6 +15,7 @@ import {
 import { api, setApiLocale } from '../api/client';
 import { useAuth } from './AuthContext';
 import i18n, { detectResolvedLocale, loadLocale } from '../i18n';
+import { syncWidgetLabels } from '../widgets/sync';
 
 const THEME_KEY = 'pref:theme';
 const LANG_KEY = 'pref:lang';
@@ -92,6 +93,8 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     // pending/empty state, and inactive queries refetch on next mount.
     if (prevLocaleRef.current != null && prevLocaleRef.current !== locale) {
       queryClient.invalidateQueries();
+      // Widgets render their own UI — push the new localized headers/labels.
+      void syncWidgetLabels();
     }
     prevLocaleRef.current = locale;
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
