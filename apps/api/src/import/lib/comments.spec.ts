@@ -675,18 +675,107 @@ describe('tvtime comment dedup', () => {
     expect(unique).toHaveLength(2);
   });
 
-  it('keeps two identical comments created at different times distinct (fingerprint includes time)', () => {
+  it('merges the SAME comment exported in two files with different id spaces (fingerprint)', () => {
+    const text = 'As soon as I heard a few episodes ago Pablo wanted to propose';
+    const legacy = normalizeComments(
+      'episode_comment.csv',
+      [
+        {
+          tv_show_name: 'Some Show',
+          user_id: OWNER,
+          episode_id: '111',
+          created_at: '2022-08-17 20:51:33',
+          depth: '0',
+          comment_type: 'comment',
+          id: '30854292',
+          episode_season_number: '1',
+          episode_number: '7',
+          comment: text,
+        },
+      ],
+      OWNER,
+    ).candidates;
+    const v2 = normalizeComments(
+      'comments-prod-comments.csv',
+      [
+        {
+          type: 'comment',
+          user_id: OWNER,
+          comment_uuid: '913041bd-bd46-4031-bff9-453cefd03002',
+          entity_type: 'episode',
+          series_name: 'Some Show',
+          season_number: '1',
+          episode_number: '7',
+          episode_id: '111',
+          created_at: '2022-08-17 20:51:33',
+          text,
+        },
+      ],
+      OWNER,
+    ).candidates;
+    expect(legacy[0].sourceCommentId).not.toBe(v2[0].sourceCommentId); // different id spaces
+    const { unique, duplicates } = dedupeComments([...legacy, ...v2]);
+    expect(unique).toHaveLength(1);
+    expect(duplicates).toBe(1);
+  });
+
+  it('merges via the canonical comment_id even when the fingerprint parts differ', () => {
+    const text = 'As soon as I heard a few episodes ago Pablo wanted to propose';
+    const legacy = normalizeComments(
+      'episode_comment.csv',
+      [
+        {
+          tv_show_name: 'Alone',
+          user_id: OWNER,
+          episode_id: '9170371',
+          created_at: '2022-08-17 20:51:32',
+          depth: '0',
+          comment_type: 'comment',
+          id: '30854292',
+          episode_season_number: '9',
+          episode_number: '11',
+          comment: text,
+        },
+      ],
+      OWNER,
+    ).candidates;
+    const v2 = normalizeComments(
+      'comments-prod-comments.csv',
+      [
+        {
+          type: 'comment',
+          user_id: OWNER,
+          comment_uuid: '913041bd-bd46-4031-bff9-453cefd03002',
+          comment_id: '30854292',
+          entity_type: 'episode',
+          series_name: '',
+          created_at: '2022-08-17 20:51:33',
+          text,
+        },
+      ],
+      OWNER,
+    ).candidates;
+    // Different identity keys, different target context, 1s apart — but comment_id matches.
+    const { unique, duplicates } = dedupeComments([...legacy, ...v2]);
+    expect(unique).toHaveLength(1);
+    expect(duplicates).toBe(1);
+  });
+
+  it('merges the same comment whose created time differs by one second across files', () => {
+    const text = 'same content, one second apart';
     const c1 = normalizeComments(
       'comments-prod-comments.csv',
-      [mk('', 'same text', { created: '2019-01-01 00:00:00' })],
+      [mk('uuid-a', text, { created: '2022-08-17 20:51:32' })],
       OWNER,
-    ).candidates[0];
+    ).candidates;
     const c2 = normalizeComments(
       'comments-prod-comments.csv',
-      [mk('', 'same text', { created: '2020-01-01 00:00:00' })],
+      [mk('uuid-b', text, { created: '2022-08-17 20:51:33' })],
       OWNER,
-    ).candidates[0];
-    expect(commentIdentity(c1)).not.toBe(commentIdentity(c2));
+    ).candidates;
+    const { unique, duplicates } = dedupeComments([...c1, ...c2]);
+    expect(unique).toHaveLength(1);
+    expect(duplicates).toBe(1);
   });
 });
 

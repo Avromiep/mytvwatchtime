@@ -19,6 +19,9 @@ export interface NormalizedImportedComment {
   sourceFile: string;
   sourceRow: number;
   sourceCommentId: string | null;
+  /** TV Time's canonical numeric comment id (v2 `comment_id` column — present only on
+   *  legacy-era rows, but then it's the exact cross-file merge key vs legacy `id`). */
+  legacyCommentId: string | null;
   sourceAuthorId: string | null;
   /** True when the author is the archive owner (vs a shadow-imported third party). */
   authorIsOwner: boolean;
@@ -373,6 +376,7 @@ export function normalizeComments(
 
     const language = field(row, ['lang', 'language']) ?? null;
     const sourceCommentId = field(row, ['comment_uuid', 'uuid', 'id']) ?? null;
+    const legacyCommentId = field(row, ['comment_id']) ?? null;
 
     result.topLevelDetected++;
     result.candidates.push({
@@ -380,6 +384,7 @@ export function normalizeComments(
       sourceFile: filename,
       sourceRow,
       sourceCommentId,
+      legacyCommentId,
       sourceAuthorId: authorId,
       authorIsOwner,
       isReply: isReplyByType || hasParent,
@@ -440,20 +445,51 @@ export interface CommentDedupeResult {
   duplicates: number;
 }
 
+/** Content fingerprint: same target + exact text + created MINUTE (exports from
+ *  different files can disagree on the second). Catches the SAME comment exported twice
+ *  with DIFFERENT id spaces (legacy episode_comment.csv `id` vs v2 `comment_uuid`). */
+function commentFingerprint(c: NormalizedImportedComment): string {
+  const target =
+    c.targetType === 'movie'
+      ? `movie|${(c.movieTitle ?? '').toLowerCase().trim()}`
+      : c.targetType === 'show'
+        ? `show|${(c.showTitle ?? '').toLowerCase().trim()}`
+        : `episode|${(c.showTitle ?? '').toLowerCase().trim()}|${c.seasonNumber ?? ''}|${c.episodeNumber ?? ''}|${c.externalEpisodeId ?? ''}`;
+  const created = c.sourceCreatedAt ? Math.floor(c.sourceCreatedAt.getTime() / 60000) : 0;
+  return `${target}|${hashText(c.text)}|${created}`;
+}
+
 export function dedupeComments(all: NormalizedImportedComment[]): CommentDedupeResult {
+  // A candidate merges with an earlier one if ANY of its keys collide: source identity
+  // (uuid / legacy id), the canonical cross-file comment_id (when present), or the
+  // content fingerprint. Backward compatible: uuid-keyed re-imports keep their sourceKeys.
   const byKey = new Map<string, NormalizedImportedComment>();
+  const seen = new Set<string>();
   let duplicates = 0;
   for (const c of all) {
-    const key = commentIdentity(c);
-    const prev = byKey.get(key);
-    if (!prev) {
-      byKey.set(key, c);
-    } else {
-      duplicates++;
-      const aTime = c.sourceUpdatedAt?.getTime() ?? c.sourceCreatedAt?.getTime() ?? 0;
-      const bTime = prev.sourceUpdatedAt?.getTime() ?? prev.sourceCreatedAt?.getTime() ?? 0;
-      if (aTime >= bTime) byKey.set(key, c);
+    // The canonical numeric comment id: the v2 `comment_id` column when present, else a
+    // bare-numeric legacy `id` (uuids are never numeric — a numeric source id IS the cid).
+    const cid =
+      c.legacyCommentId ?? (/^\d+$/.test(c.sourceCommentId ?? '') ? c.sourceCommentId : null);
+    const keys = [
+      commentIdentity(c),
+      cid ? `tvtime|cid:${cid}` : null,
+      commentFingerprint(c),
+    ].filter(Boolean) as string[];
+    const prev = byKey.get(keys[0]);
+    const collides = prev != null || keys.some((k) => seen.has(k));
+    if (!collides) {
+      byKey.set(keys[0], c);
+      for (const k of keys) seen.add(k);
+      continue;
     }
+    duplicates++;
+    // Same comment: keep the fresher copy (and the one carrying more identity).
+    const aTime = c.sourceUpdatedAt?.getTime() ?? c.sourceCreatedAt?.getTime() ?? 0;
+    const bTime = prev
+      ? (prev.sourceUpdatedAt?.getTime() ?? prev.sourceCreatedAt?.getTime() ?? 0)
+      : -1;
+    if (prev && aTime >= bTime) byKey.set(keys[0], c);
   }
   return { unique: [...byKey.values()], duplicates };
 }

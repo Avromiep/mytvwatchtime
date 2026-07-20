@@ -82,6 +82,7 @@ export function normalizeTraktComments(
         sourceFile: file.filename,
         sourceRow: idx + 1,
         sourceCommentId: String(r.id),
+        legacyCommentId: null,
         sourceAuthorId: null,
         authorIsOwner: true,
         isReply: false,

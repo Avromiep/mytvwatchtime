@@ -1827,7 +1827,12 @@ export class ImportProcessor implements OnModuleInit {
         showMediaByNorm,
         archiveLang,
       );
-      if (status === 'UNMATCHED') counts.ratingsSkippedUnresolved++;
+      if (status === 'UNMATCHED') {
+        counts.ratingsSkippedUnresolved++;
+        // No title AND unresolvable identity: the user can't even search for it —
+        // never surface it in the review list.
+        if (!c.showTitle && !c.movieTitle) continue;
+      }
       ratingItems.push(this.buildExtraItem(importId, c, mediaId, episodeId, confidence, status));
     }
     await this.flushItems(importId, ratingItems);
@@ -1849,7 +1854,11 @@ export class ImportProcessor implements OnModuleInit {
         showMediaByNorm,
         archiveLang,
       );
-      if (status === 'UNMATCHED') counts.emotionsSkippedUnresolved++;
+      if (status === 'UNMATCHED') {
+        counts.emotionsSkippedUnresolved++;
+        // No title AND unresolvable identity: unsearchable even manually — skip silently.
+        if (!c.showTitle && !c.movieTitle) continue;
+      }
       emotionItems.push(this.buildExtraItem(importId, c, mediaId, episodeId, confidence, status));
     }
     await this.flushItems(importId, emotionItems);
@@ -1875,7 +1884,11 @@ export class ImportProcessor implements OnModuleInit {
         showMediaByNorm,
         archiveLang,
       );
-      if (status === 'UNMATCHED') counts.commentsSkippedUnresolved++;
+      if (status === 'UNMATCHED') {
+        counts.commentsSkippedUnresolved++;
+        // No title AND unresolvable identity: unsearchable even manually — skip silently.
+        if (!c.showTitle && !c.movieTitle) continue;
+      }
       commentItems.push(this.buildCommentItem(importId, c, mediaId, episodeId, confidence, status));
     }
     await this.flushItems(importId, commentItems);
@@ -1903,7 +1916,11 @@ export class ImportProcessor implements OnModuleInit {
         archiveLang,
         c.externalEpisodeId,
       );
-      if (status !== 'MATCHED') counts.characterVotesSkippedUnresolved++;
+      if (status !== 'MATCHED') {
+        counts.characterVotesSkippedUnresolved++;
+        // No title AND unresolvable identity: unsearchable even manually — skip silently.
+        if (status === 'UNMATCHED' && !c.showTitle) continue;
+      }
       charVoteItems.push(
         this.buildCharacterVoteItem(importId, c, mediaId, episodeId, confidence, status),
       );
