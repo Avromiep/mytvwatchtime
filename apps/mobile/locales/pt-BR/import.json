@@ -61,5 +61,12 @@
     "duplicates": "Duplicados"
   },
   "progressPercent": "{{pct}}%",
-  "succeededIn": "Concluído em {{duration}}"
+  "succeededIn": "Concluído em {{duration}}",
+  "leaveTitle": "Sair da revisão da importação?",
+  "leaveDesc": "Sua importação fica salva no servidor. Você pode reimportar o mesmo arquivo a qualquer momento — nada será duplicado.",
+  "leaveConfirm": "Sair",
+  "resumeTitle": "Importação em andamento",
+  "resumeDesc": "Você tem uma importação inacabada com {{count}} itens aguardando revisão. Continue de onde parou ou comece uma nova — recomeçar descarta a importação antiga (reimportar nunca duplica).",
+  "resumeContinue": "Continuar importação",
+  "resumeStartNew": "Nova"
 }

@@ -61,5 +61,12 @@
     "duplicates": "Yinelenenler"
   },
   "progressPercent": "%{{pct}}",
-  "succeededIn": "{{duration}} içinde tamamlandı"
+  "succeededIn": "{{duration}} içinde tamamlandı",
+  "leaveTitle": "İçe aktarma incelemesinden çıkılsın mı?",
+  "leaveDesc": "İçe aktarmanız sunucuda kayıtlı kalır. Aynı dosyayı istediğiniz zaman yeniden içe aktarabilirsiniz — hiçbir şey asla kopyalanmaz.",
+  "leaveConfirm": "Çık",
+  "resumeTitle": "Devam eden içe aktarma",
+  "resumeDesc": "İnceleme bekleyen {{count}} öğesi olan yarım bir içe aktarmanız var. Kaldığınız yerden devam edin ya da yenisini başlatın — yeniden başlatmak eskisini iptal eder (tekrar içe aktarma asla kopyalamaz).",
+  "resumeContinue": "İçe aktarmaya devam",
+  "resumeStartNew": "Yeni başlat"
 }

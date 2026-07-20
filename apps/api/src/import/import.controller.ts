@@ -51,6 +51,16 @@ export class ImportController {
     );
   }
 
+  @Get('resumable')
+  resumable(@CurrentUser('id') userId: string) {
+    return this.imports.getResumable(userId);
+  }
+
+  @Post('dismiss-pending')
+  dismissPending(@CurrentUser('id') userId: string) {
+    return this.imports.dismissPending(userId);
+  }
+
   @Get(':id')
   status(@CurrentUser('id') userId: string, @Param('id') id: string) {
     return this.imports.getStatus(userId, id);

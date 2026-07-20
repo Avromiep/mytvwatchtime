@@ -8,15 +8,18 @@ describe('ImportService.getStatus — importTotals', () => {
         findFirst: jest.fn(async () => ({ id: 'imp1', userId: 'u1', createdAt: new Date() })),
       },
       importItem: {
-        groupBy: jest.fn(async () => [
-          { sourceEntityType: 'EPISODE_COMMENT', _count: { _all: 3 } },
-          { sourceEntityType: 'MOVIE_COMMENT', _count: { _all: 2 } },
-          { sourceEntityType: 'EPISODE_EMOTION', _count: { _all: 4 } },
-          { sourceEntityType: 'EPISODE_RATING', _count: { _all: 5 } },
-          { sourceEntityType: 'SHOW_RATING', _count: { _all: 1 } },
-          { sourceEntityType: 'EPISODE_CHARACTER_VOTE', _count: { _all: 6 } },
-          { sourceEntityType: 'LIST', _count: { _all: 2 } },
-        ]),
+        groupBy: jest.fn(async (args: any) => {
+          expect(args.where.status).toEqual({ not: 'SKIPPED' });
+          return [
+            { sourceEntityType: 'EPISODE_COMMENT', _count: { _all: 3 } },
+            { sourceEntityType: 'MOVIE_COMMENT', _count: { _all: 2 } },
+            { sourceEntityType: 'EPISODE_EMOTION', _count: { _all: 4 } },
+            { sourceEntityType: 'EPISODE_RATING', _count: { _all: 5 } },
+            { sourceEntityType: 'SHOW_RATING', _count: { _all: 1 } },
+            { sourceEntityType: 'EPISODE_CHARACTER_VOTE', _count: { _all: 6 } },
+            { sourceEntityType: 'LIST', _count: { _all: 2 } },
+          ];
+        }),
       },
       $queryRaw: jest.fn(async () => [{ shows: 12, movies: 3 }]),
     };

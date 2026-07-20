@@ -189,7 +189,7 @@ export class ImportProcessor implements OnModuleInit {
       const fileInputs = files.map((f) => ({ filename: f.filename, rows: f.rows }));
       const archiveLang = resolveArchiveLanguage(fileInputs);
 
-      await this.setStatus(importId, 'NORMALIZING', { totalRows, progress: 25 });
+      await this.setStatus(importId, 'NORMALIZING', { totalRows, progress: 15 });
       // Dedupe by entity|normTitle|season|episode (keep one). The same episode can
       // appear in seen_episode_source (single watch) AND rewatched_episode (total
       // count via cpt); keep the authoritative higher watchCount and the latest
@@ -215,7 +215,7 @@ export class ImportProcessor implements OnModuleInit {
         dedup.push({ ...it, watchCount: it.watchCount ?? 1 });
       }
 
-      await this.setStatus(importId, 'MATCHING', { progress: 30 });
+      await this.setStatus(importId, 'MATCHING', { progress: 25 });
       // Season/episode footprint per show in the import — used to disambiguate duplicate titles
       // (e.g. two shows named "Silo"): the candidate must have enough seasons AND enough episodes
       // in each referenced season (import watched S1 up to E10 → S1 must have ≥10 episodes).
@@ -257,7 +257,7 @@ export class ImportProcessor implements OnModuleInit {
       const structureGuarded = new Set<string>();
       let hydrateIdx = 0;
       for (const it of dedup) {
-        await this.reportProgress(importId, 30 + (20 * hydrateIdx++) / Math.max(1, dedup.length));
+        await this.reportProgress(importId, 25 + (5 * hydrateIdx++) / Math.max(1, dedup.length));
         if (it.entityType !== 'WATCHED_EPISODE') continue;
         if (showMediaByNorm.has(it.normTitle)) continue;
         const seMap = seasonEpisodesByNorm.get(it.normTitle);
@@ -316,7 +316,7 @@ export class ImportProcessor implements OnModuleInit {
 
       let matchIdx = 0;
       for (const it of dedup) {
-        await this.reportProgress(importId, 50 + (35 * matchIdx++) / Math.max(1, dedup.length));
+        await this.reportProgress(importId, 30 + (55 * matchIdx++) / Math.max(1, dedup.length));
         if (!it.title) {
           invalid++;
           continue;
@@ -720,7 +720,7 @@ export class ImportProcessor implements OnModuleInit {
       }
 
       // ---- NORMALIZING ----
-      await this.setStatus(importId, 'NORMALIZING', { totalRows, progress: 25 });
+      await this.setStatus(importId, 'NORMALIZING', { totalRows, progress: 15 });
       const ok = parsed.filter((f) => !f.failed);
       const dataOf = (kind: TraktFileKind) => ok.filter((f) => f.kind === kind).map((f) => f.data);
       const archiveLang = resolveTraktArchiveLanguage(
@@ -766,7 +766,7 @@ export class ImportProcessor implements OnModuleInit {
       }
 
       // ---- MATCHING ----
-      await this.setStatus(importId, 'MATCHING', { progress: 30 });
+      await this.setStatus(importId, 'MATCHING', { progress: 25 });
       // Distinct shows keyed by strongest external id — one provider lookup per unique show.
       const showKey = (ids: TraktIds, title: string) =>
         ids.tmdb ? `tmdb:${ids.tmdb}` : ids.tvdb ? `tvdb:${ids.tvdb}` : `norm:${normTitle(title)}`;
@@ -827,7 +827,7 @@ export class ImportProcessor implements OnModuleInit {
       for (const c of watched.episodes) {
         await this.reportProgress(
           importId,
-          30 + (25 * epIdx++) / Math.max(1, watched.episodes.length),
+          25 + (20 * epIdx++) / Math.max(1, watched.episodes.length),
         );
         const { mediaId } = await matchShowIds(c.showIds, c.showTitle, c.year, true);
         let episodeId: string | null = null;
@@ -947,7 +947,7 @@ export class ImportProcessor implements OnModuleInit {
       );
       let mediaStageIdx = 0;
       for (const c of watched.movies) {
-        await this.reportProgress(importId, 55 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await this.reportProgress(importId, 45 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem(
           'WATCHED_MOVIE',
           c.movieIds,
@@ -958,7 +958,7 @@ export class ImportProcessor implements OnModuleInit {
         );
       }
       for (const c of watchlist) {
-        await this.reportProgress(importId, 55 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await this.reportProgress(importId, 45 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem(
           c.type === 'movie' ? 'WATCHLIST_MOVIE' : 'WATCHLIST_SHOW',
           c.ids,
@@ -969,7 +969,7 @@ export class ImportProcessor implements OnModuleInit {
         );
       }
       for (const c of favorites) {
-        await this.reportProgress(importId, 55 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await this.reportProgress(importId, 45 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem(
           c.type === 'movie' ? 'FAVORITE_MOVIE' : 'FAVORITE_SHOW',
           c.ids,
@@ -993,7 +993,7 @@ export class ImportProcessor implements OnModuleInit {
         let unresolved = 0;
         const itemRows: any[] = [];
         for (const it of list.items) {
-          await this.reportProgress(importId, 70 + (10 * listItemIdx++) / listItemTotal);
+          await this.reportProgress(importId, 60 + (10 * listItemIdx++) / listItemTotal);
           const m = await this.matcher.matchByExternalIds(
             it.ids,
             it.mediaType === 'movie' ? 'MOVIE' : 'SHOW',
@@ -1126,7 +1126,7 @@ export class ImportProcessor implements OnModuleInit {
       for (const c of ratingsRes.candidates) {
         await this.reportProgress(
           importId,
-          80 + (10 * ratingIdx++) / Math.max(1, ratingsRes.candidates.length),
+          70 + (20 * ratingIdx++) / Math.max(1, ratingsRes.candidates.length),
         );
         const r = await resolveTarget(
           {
@@ -1334,7 +1334,7 @@ export class ImportProcessor implements OnModuleInit {
       }
 
       // ---- NORMALIZING ----
-      await this.setStatus(importId, 'NORMALIZING', { totalRows, progress: 25 });
+      await this.setStatus(importId, 'NORMALIZING', { totalRows, progress: 15 });
       const ok = parsed.filter((f) => !f.failed);
       const dataOf = (kind: TvTimeJsonFileKind) =>
         ok.filter((f) => f.kind === kind).map((f) => f.data);
@@ -1378,7 +1378,7 @@ export class ImportProcessor implements OnModuleInit {
       }
 
       // ---- MATCHING ----
-      await this.setStatus(importId, 'MATCHING', { progress: 30 });
+      await this.setStatus(importId, 'MATCHING', { progress: 25 });
       // Distinct shows keyed by strongest external id — one provider lookup per unique show.
       const showMediaByKey = new Map<string, string>();
       const hydrated = new Set<string>();
@@ -1450,7 +1450,7 @@ export class ImportProcessor implements OnModuleInit {
       for (const c of showsRes.episodes) {
         await this.reportProgress(
           importId,
-          30 + (25 * epIdx++) / Math.max(1, showsRes.episodes.length),
+          25 + (20 * epIdx++) / Math.max(1, showsRes.episodes.length),
         );
         const { mediaId } = await matchShowIds(c.showIds, c.showTitle, c.year, true);
         let episodeId: string | null = null;
@@ -1576,19 +1576,19 @@ export class ImportProcessor implements OnModuleInit {
       );
       let mediaStageIdx = 0;
       for (const c of moviesRes.watched) {
-        await this.reportProgress(importId, 55 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await this.reportProgress(importId, 45 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem('WATCHED_MOVIE', c.movieIds, c.movieTitle, c.year, c.watchedAt, 1);
       }
       for (const c of moviesRes.watchlist) {
-        await this.reportProgress(importId, 55 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await this.reportProgress(importId, 45 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem('WATCHLIST_MOVIE', c.ids, c.title, c.year, c.listedAt, 1);
       }
       for (const c of watchlistShows) {
-        await this.reportProgress(importId, 55 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await this.reportProgress(importId, 45 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem('WATCHLIST_SHOW', c.ids, c.title, c.year, c.listedAt, 1);
       }
       for (const c of favorites) {
-        await this.reportProgress(importId, 55 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await this.reportProgress(importId, 45 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem(
           c.type === 'movie' ? 'FAVORITE_MOVIE' : 'FAVORITE_SHOW',
           c.ids,
@@ -1612,7 +1612,7 @@ export class ImportProcessor implements OnModuleInit {
         let unresolved = 0;
         const itemRows: any[] = [];
         for (const it of list.items) {
-          await this.reportProgress(importId, 70 + (10 * listItemIdx++) / listItemTotal);
+          await this.reportProgress(importId, 60 + (10 * listItemIdx++) / listItemTotal);
           const m = await this.matcher.matchByExternalIds(
             it.ids,
             it.mediaType === 'movie' ? 'MOVIE' : 'SHOW',
@@ -1937,7 +1937,34 @@ export class ImportProcessor implements OnModuleInit {
     confidence: number;
     status: string;
   }> {
-    if (!showTitle) return { mediaId: null, episodeId: null, confidence: 0, status: 'UNMATCHED' };
+    if (!showTitle) {
+      // Title-less rows (some vote files omit series_name): identify the show through the
+      // TVDB EPISODE id — local external ids → TMDB /find → TVDB episode→series.
+      if (externalEpisodeId != null) {
+        const r = await this.matcher.recoverShowByEpisodeId('', null, externalEpisodeId);
+        if (r.mediaId) {
+          await this.matcher.ensureShowHydrated(r.mediaId);
+          const episodeId =
+            (await this.matcher.resolveEpisodeByExternalIds(r.mediaId, {
+              tvdb: Number(externalEpisodeId) || null,
+            })) ??
+            (season != null && episode != null
+              ? await this.matcher.resolveEpisode(r.mediaId, season, episode)
+              : null) ??
+            (await this.matcher.recoverEpisodeByTvdbId(r.mediaId, externalEpisodeId));
+          if (episodeId) {
+            return { mediaId: r.mediaId, episodeId, confidence: 0.9, status: 'MATCHED' };
+          }
+          // Episode not found inside the recovered show: show-level match (ratings/emotions)
+          // or flag for review — never silently drop the item.
+          if (fallbackToMedia) {
+            return { mediaId: r.mediaId, episodeId: null, confidence: 0.75, status: 'MATCHED' };
+          }
+          return { mediaId: r.mediaId, episodeId: null, confidence: 0.6, status: 'NEEDS_REVIEW' };
+        }
+      }
+      return { mediaId: null, episodeId: null, confidence: 0, status: 'UNMATCHED' };
+    }
     const nt = normTitle(showTitle);
     let mediaId = showMediaByNorm.get(nt) ?? null;
     if (!mediaId) {

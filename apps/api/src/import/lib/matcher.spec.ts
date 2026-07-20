@@ -674,6 +674,51 @@ describe('ImportMatcher — recoverShowByEpisodeId (show-level /find via episode
     expect((await matcher.recoverShowByEpisodeId('X', null, null)).mediaId).toBeNull();
     expect(meta.lightUpsertShow).not.toHaveBeenCalled();
   });
+
+  it('uses the local episode external-id mapping first (no provider calls)', async () => {
+    const { prisma } = fakePrismaFind();
+    (prisma.episodeExternalId.findFirst as any) = jest.fn(async () => ({
+      episode: { season: { show: { media: { id: 'm-local', title: 'Local Show' } } } },
+    }));
+    const meta = { lightUpsertShow: jest.fn(), lightUpsertMovie: jest.fn() };
+    const tmdb = { enabled: true, findByExternalId: jest.fn(async () => null) };
+    const matcher = new ImportMatcher(prisma as any, meta as any, tmdb as any, {} as any);
+
+    const res = await matcher.recoverShowByEpisodeId('X', null, '7052975');
+
+    expect(res).toEqual({ mediaId: 'm-local', confidence: 0.95, matchedTitle: 'Local Show' });
+    expect(tmdb.findByExternalId).not.toHaveBeenCalled();
+    expect(meta.lightUpsertShow).not.toHaveBeenCalled();
+  });
+
+  it('falls back to TVDB: episode → parent series id → authority gate (TVDB-only shows)', async () => {
+    const { prisma } = fakePrismaFind();
+    const meta = {
+      lightUpsertShow: jest.fn(async () => 'm-tvdb-show'),
+      lightUpsertShowTvdb: jest.fn(async () => 'm-tvdb-show'),
+      lightUpsertMovie: jest.fn(),
+    };
+    const tmdb = { enabled: true, findByExternalId: jest.fn(async () => null) };
+    const tvdb = {
+      enabled: true,
+      getEpisode: jest.fn(async () => ({ seriesId: 359983 })),
+      getShow: jest.fn(async () => ({
+        title: 'White Dragon',
+        overview: 'O',
+        posterUrl: null,
+        backdropUrl: null,
+        popularity: 0,
+        yearStart: 2018,
+      })),
+    };
+    const matcher = new ImportMatcher(prisma as any, meta as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.recoverShowByEpisodeId('White Dragon', 2018, '7052975');
+
+    expect(tvdb.getEpisode).toHaveBeenCalledWith(7052975);
+    expect(tvdb.getShow).toHaveBeenCalledWith(359983);
+    expect(res).toEqual({ mediaId: 'm-tvdb-show', confidence: 0.85, matchedTitle: 'White Dragon' });
+  });
 });
 
 describe('needsTvdbRehydration (structural guard)', () => {

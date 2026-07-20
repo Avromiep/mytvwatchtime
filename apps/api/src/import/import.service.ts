@@ -30,6 +30,23 @@ const BATCH_CHUNK = 5000;
 const TX_TIMEOUT = Number(process.env.IMPORT_TX_TIMEOUT_MS) || 60_000;
 const TX_MAXWAIT = Number(process.env.IMPORT_TX_MAXWAIT_MS) || 10_000;
 
+/**
+ * Manual episode/show → movie retype: when the user explicitly matches an episode- or
+ * show-scoped item to a MOVIE, the item is rewritten to its movie equivalent so the
+ * apply lands as movie data. EPISODE_CHARACTER_VOTE is intentionally absent — a movie
+ * has no episode to vote a character on.
+ */
+const EPISODE_TO_MOVIE_RETYPE: Record<string, string> = {
+  WATCHED_EPISODE: 'WATCHED_MOVIE',
+  EPISODE_RATING: 'MOVIE_RATING',
+  SHOW_RATING: 'MOVIE_RATING',
+  EPISODE_EMOTION: 'MOVIE_EMOTION',
+  EPISODE_COMMENT: 'MOVIE_COMMENT',
+  SHOW_COMMENT: 'MOVIE_COMMENT',
+  WATCHLIST_SHOW: 'WATCHLIST_MOVIE',
+  FAVORITE_SHOW: 'FAVORITE_MOVIE',
+};
+
 @Injectable()
 export class ImportService {
   private readonly logger = new Logger(ImportService.name);
@@ -93,24 +110,80 @@ export class ImportService {
     return { importId: imp.id, status: 'QUEUED' };
   }
 
+  /** Non-terminal statuses — the imports a user can still resume. */
+  private static readonly PENDING_STATUSES = [
+    'UPLOADED',
+    'QUEUED',
+    'EXTRACTING',
+    'PARSING',
+    'NORMALIZING',
+    'MATCHING',
+    'READY_FOR_REVIEW',
+    'IMPORTING',
+  ] as const;
+
+  /** The user's latest unfinished import (drives the "continue import?" prompt). */
+  async getResumable(userId: string) {
+    const imp = await this.prisma.import.findFirst({
+      where: { userId, status: { in: [...ImportService.PENDING_STATUSES] } as any },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        status: true,
+        progress: true,
+        originalFilename: true,
+        createdAt: true,
+        matchedCount: true,
+        needsReviewCount: true,
+        unmatchedCount: true,
+      },
+    });
+    return { import: imp };
+  }
+
+  /** Cancel every unfinished import (used when the user chooses "start new" — the old
+   *  imports never trigger the resume prompt again; re-uploading stays idempotent). */
+  async dismissPending(userId: string) {
+    const res = await this.prisma.import.updateMany({
+      where: { userId, status: { in: [...ImportService.PENDING_STATUSES] } as any },
+      data: { status: 'CANCELLED', cancelledAt: new Date() },
+    });
+    return { dismissed: res.count };
+  }
+
   // ---------------- status / files / items ----------------
   async getStatus(userId: string, importId: string) {
     const imp = await this.prisma.import.findFirst({ where: { id: importId, userId } });
     if (!imp) return null;
-    // Import-wide totals for the review banner: distinct matched shows/movies (any item
-    // family) + per-family item counts (lists, comments, reactions, ratings, votes).
+    // Import-wide totals for the review banner. Shows/movies count DISTINCT identities:
+    // the matched media row when matched (classified by the MEDIA'S real type — a v1
+    // movie-row that resolved cross-type to a SHOW counts as a show, never as a movie),
+    // else the item's title identity (classified by the item's family) so unmatched
+    // shows/movies still count, mirroring the source app's library counts. SKIPPED out.
     const [mediaCounts, typeGroups] = await Promise.all([
       this.prisma.$queryRaw<[{ shows: bigint | number; movies: bigint | number }]>`
         SELECT
-          COUNT(DISTINCT ii.matched_media_id) FILTER (WHERE m.type = 'SHOW') AS shows,
-          COUNT(DISTINCT ii.matched_media_id) FILTER (WHERE m.type = 'MOVIE') AS movies
+          COUNT(DISTINCT COALESCE(ii.matched_media_id, 'title:' || COALESCE(ii.normalized_data->>'normTitle', ii.normalized_data->>'title', ''))) FILTER (
+            WHERE m.type = 'SHOW'
+              OR (ii.matched_media_id IS NULL AND (
+                ii.source_entity_type IN ('WATCHLIST_SHOW','FAVORITE_SHOW','WATCHED_EPISODE','EPISODE_RATING','EPISODE_EMOTION','EPISODE_COMMENT','EPISODE_CHARACTER_VOTE','SHOW_COMMENT','SHOW_RATING')
+                OR (ii.source_entity_type = 'LIST_ITEM' AND ii.normalized_data->>'mediaType' = 'series')
+              ))
+          ) AS shows,
+          COUNT(DISTINCT COALESCE(ii.matched_media_id, 'title:' || COALESCE(ii.normalized_data->>'normTitle', ii.normalized_data->>'title', ''))) FILTER (
+            WHERE m.type = 'MOVIE'
+              OR (ii.matched_media_id IS NULL AND (
+                ii.source_entity_type IN ('WATCHED_MOVIE','WATCHLIST_MOVIE','FAVORITE_MOVIE','MOVIE_RATING','MOVIE_EMOTION','MOVIE_COMMENT')
+                OR (ii.source_entity_type = 'LIST_ITEM' AND ii.normalized_data->>'mediaType' = 'movie')
+              ))
+          ) AS movies
         FROM import_items ii
-        JOIN media_items m ON m.id = ii.matched_media_id
-        WHERE ii.import_id = ${importId}
+        LEFT JOIN media_items m ON m.id = ii.matched_media_id
+        WHERE ii.import_id = ${importId} AND ii.status != 'SKIPPED'
       `,
       this.prisma.importItem.groupBy({
         by: ['sourceEntityType'],
-        where: { importId },
+        where: { importId, status: { not: 'SKIPPED' } },
         _count: { _all: true },
       }),
     ]);
@@ -195,6 +268,20 @@ export class ImportService {
       data.matchedMediaId = dto.matchedMediaId;
       data.confidenceScore = 1;
       data.status = 'MATCHED';
+      // Manual match to a MOVIE for an episode/show-scoped item: the user's intent wins —
+      // retype it to the movie equivalent so the apply lands as movie data (watched /
+      // rated / reacted / commented / watchlisted / favorited). Character votes have no
+      // movie equivalent and are left untouched.
+      const media = await this.prisma.mediaItem.findUnique({
+        where: { id: dto.matchedMediaId },
+        select: { type: true },
+      });
+      const retyped =
+        media?.type === 'MOVIE' ? EPISODE_TO_MOVIE_RETYPE[item.sourceEntityType] : undefined;
+      if (retyped) {
+        data.sourceEntityType = retyped;
+        data.matchedEpisodeId = null;
+      }
     }
     if (dto.userResolution) data.userResolution = dto.userResolution;
     if (dto.userResolution === 'skip') data.status = 'SKIPPED';
@@ -223,8 +310,13 @@ export class ImportService {
     const imp = await this.prisma.import.findFirst({ where: { id: importId, userId } });
     if (!imp) throw new NotFoundException('Import not found');
 
+    const target = await this.prisma.mediaItem.findUnique({
+      where: { id: matchedMediaId },
+      select: { type: true },
+    });
+    const targetIsMovie = target?.type === 'MOVIE';
     // Ensure the chosen show has seasons/episodes so episode resolution can work.
-    await this.matcher.ensureShowHydrated(matchedMediaId);
+    if (!targetIsMovie) await this.matcher.ensureShowHydrated(matchedMediaId);
 
     // Core-normalized title (strips " (2023)" year suffixes) so "Silo" and "Silo (2023)" match.
     const coreNorm = (s: string) => normTitle(splitTitleYear(s).title);
@@ -262,6 +354,34 @@ export class ImportService {
 
       let status = 'MATCHED';
       let episodeId: string | null = null;
+      if (targetIsMovie) {
+        // Manual intent wins: episode/show-scoped items matched to a MOVIE are retyped to
+        // their movie equivalent (watched/rated/reacted/commented/watchlisted/favorited).
+        // Character votes have no movie equivalent — those stay NEEDS_REVIEW.
+        const retyped = EPISODE_TO_MOVIE_RETYPE[it.sourceEntityType];
+        if (retyped) {
+          await this.prisma.importItem.update({
+            where: { id: it.id },
+            data: {
+              matchedMediaId,
+              matchedEpisodeId: null,
+              sourceEntityType: retyped as any,
+              status: 'MATCHED',
+              confidenceScore: 1,
+            },
+          });
+          resolved++;
+          matched++;
+          continue;
+        }
+        await this.prisma.importItem.update({
+          where: { id: it.id },
+          data: { matchedMediaId, status: 'NEEDS_REVIEW', confidenceScore: 0 },
+        });
+        resolved++;
+        needsReview++;
+        continue;
+      }
       if (EPISODE_ENTITIES.includes(it.sourceEntityType)) {
         const season = Number(norm.season ?? norm.seasonNumber);
         const episode = Number(norm.episode ?? norm.episodeNumber);

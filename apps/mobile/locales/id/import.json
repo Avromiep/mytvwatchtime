@@ -61,5 +61,12 @@
     "duplicates": "Duplikat"
   },
   "progressPercent": "{{pct}}%",
-  "succeededIn": "Berhasil dalam {{duration}}"
+  "succeededIn": "Berhasil dalam {{duration}}",
+  "leaveTitle": "Tinggalkan tinjauan impor?",
+  "leaveDesc": "Impor Anda tetap tersimpan di server. Anda dapat mengimpor ulang file yang sama kapan saja — tidak akan ada duplikat.",
+  "leaveConfirm": "Tinggalkan",
+  "resumeTitle": "Impor sedang berjalan",
+  "resumeDesc": "Anda memiliki impor yang belum selesai dengan {{count}} item menunggu tinjauan. Lanjutkan dari terakhir kali, atau mulai yang baru — memulai baru membatalkan impor lama (mengimpor ulang tidak pernah menduplikasi).",
+  "resumeContinue": "Lanjutkan impor",
+  "resumeStartNew": "Mulai baru"
 }

@@ -61,5 +61,12 @@
     "duplicates": "Duplikate"
   },
   "progressPercent": "{{pct}} %",
-  "succeededIn": "Erfolgreich in {{duration}}"
+  "succeededIn": "Erfolgreich in {{duration}}",
+  "leaveTitle": "Importüberprüfung verlassen?",
+  "leaveDesc": "Dein Import bleibt auf dem Server gespeichert. Du kannst dieselbe Datei jederzeit erneut importieren – nichts wird je dupliziert.",
+  "leaveConfirm": "Verlassen",
+  "resumeTitle": "Import läuft",
+  "resumeDesc": "Du hast einen unvollendeten Import mit {{count}} Elementen zur Überprüfung. Mache weiter, wo du aufgehört hast, oder starte einen neuen — ein Neustart verwirft den alten Import (erneutes Importieren dupliziert nie).",
+  "resumeContinue": "Import fortsetzen",
+  "resumeStartNew": "Neu starten"
 }

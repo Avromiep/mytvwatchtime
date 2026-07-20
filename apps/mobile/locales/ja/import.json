@@ -61,5 +61,12 @@
     "duplicates": "重複"
   },
   "progressPercent": "{{pct}}%",
-  "succeededIn": "{{duration}} で完了"
+  "succeededIn": "{{duration}} で完了",
+  "leaveTitle": "インポート確認を終了しますか？",
+  "leaveDesc": "インポートはサーバーに保存されています。同じファイルはいつでも再インポートでき、重複は一切作成されません。",
+  "leaveConfirm": "終了",
+  "resumeTitle": "インポート実行中",
+  "resumeDesc": "レビュー待ちのアイテムが {{count}} 件ある未完了のインポートがあります。続きから再開するか、新しく始めるか選べます。新しく始めると古いインポートは破棄されます（再インポートしても重複しません）。",
+  "resumeContinue": "インポートを続ける",
+  "resumeStartNew": "新規開始"
 }

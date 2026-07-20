@@ -61,5 +61,12 @@
     "duplicates": "Doublons"
   },
   "progressPercent": "{{pct}} %",
-  "succeededIn": "Réussi en {{duration}}"
+  "succeededIn": "Réussi en {{duration}}",
+  "leaveTitle": "Quitter la révision de l'import ?",
+  "leaveDesc": "Votre import reste sauvegardé sur le serveur. Vous pouvez réimporter le même fichier à tout moment — rien ne sera jamais dupliqué.",
+  "leaveConfirm": "Quitter",
+  "resumeTitle": "Import en cours",
+  "resumeDesc": "Vous avez un import inachevé avec {{count}} éléments en attente de révision. Reprenez où vous étiez, ou commencez-en un nouveau — recommencer annule l'ancien import (réimporter ne duplique jamais).",
+  "resumeContinue": "Continuer l'import",
+  "resumeStartNew": "Nouveau"
 }

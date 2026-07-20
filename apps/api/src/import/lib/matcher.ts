@@ -626,8 +626,10 @@ export class ImportMatcher {
   /**
    * Show-level recovery via a TVDB EPISODE id (last resort): TV Time episode rows often carry
    * no series id, and translated titles (e.g. "The Mantis" → "La Mante") defeat title search.
-   * /find on one episode id returns the parent TMDB show id — an authoritative identity for
-   * the show itself. Only runs when normal show matching already failed (bounded call volume).
+   * Chain: local episode external ids (free) → TMDB /find (returns the parent show id) →
+   * TVDB episode → parent series id → the TVDB authority gate (covers TVDB-only shows whose
+   * export series id is dead/merged and TMDB has no mapping, e.g. some J-drama).
+   * Only runs when normal show matching already failed (bounded call volume).
    */
   async recoverShowByEpisodeId(
     title: string,
@@ -635,19 +637,53 @@ export class ImportMatcher {
     rawTvdbEpisodeId: string | number | null | undefined,
   ): Promise<MediaMatch> {
     const raw = rawTvdbEpisodeId == null ? '' : String(rawTvdbEpisodeId).trim();
-    if (!raw || !this.tmdb.enabled) return { mediaId: null, confidence: 0, matchedTitle: null };
-    try {
-      const found = await this.tmdb.findByExternalId(raw, 'tvdb_id');
-      const showId = found?.episode?.showId;
-      if (!showId) return { mediaId: null, confidence: 0, matchedTitle: null };
-      const mediaId = await this.meta.lightUpsertShow({ tmdbId: showId, title, year });
-      return { mediaId, confidence: 0.9, matchedTitle: title };
-    } catch (e) {
-      this.logger.debug(
-        `Show recovery via episode id ${raw} ("${title}") failed: ${(e as Error).message}`,
-      );
-      return { mediaId: null, confidence: 0, matchedTitle: null };
+    if (!raw) return { mediaId: null, confidence: 0, matchedTitle: null };
+    // 1) Local mapping: the episode is already hydrated somewhere — free, no provider call.
+    const local = await this.prisma.episodeExternalId.findFirst({
+      where: { provider: ExternalProvider.THE_TVDB, value: raw },
+      include: {
+        episode: { include: { season: { include: { show: { include: { media: true } } } } } },
+      },
+    });
+    const localMedia = (local as any)?.episode?.season?.show?.media;
+    if (localMedia) {
+      return { mediaId: localMedia.id, confidence: 0.95, matchedTitle: localMedia.title };
     }
+    // 2) TMDB /find on the episode id returns the parent TMDB show id.
+    if (this.tmdb.enabled) {
+      try {
+        const found = await this.tmdb.findByExternalId(raw, 'tvdb_id');
+        const showId = found?.episode?.showId;
+        if (showId) {
+          const mediaId = await this.meta.lightUpsertShow({ tmdbId: showId, title, year });
+          return { mediaId, confidence: 0.9, matchedTitle: title };
+        }
+      } catch (e) {
+        this.logger.debug(
+          `Show recovery via episode id ${raw} ("${title}") failed: ${(e as Error).message}`,
+        );
+      }
+    }
+    // 3) TVDB episode → parent series id → full authority gate (TVDB-only shows).
+    if (this.tvdb.enabled) {
+      try {
+        const ep = await this.tvdb.getEpisode(Number(raw));
+        if (ep.seriesId) {
+          const r = await this.matchByTvdbIds(
+            [String(ep.seriesId)],
+            title || `TVDB ${ep.seriesId}`,
+            'SHOW',
+            year ?? null,
+          );
+          if (r.mediaId) return r;
+        }
+      } catch (e) {
+        this.logger.debug(
+          `Show recovery via TVDB episode ${raw} ("${title}") failed: ${(e as Error).message}`,
+        );
+      }
+    }
+    return { mediaId: null, confidence: 0, matchedTitle: null };
   }
 
   /**

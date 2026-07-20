@@ -90,5 +90,12 @@
     "duplicates": "Duplicates"
   },
   "progressPercent": "{{pct}}%",
-  "succeededIn": "Succeeded in {{duration}}"
+  "succeededIn": "Succeeded in {{duration}}",
+  "leaveTitle": "Leave import review?",
+  "leaveDesc": "Your import stays saved on the server. You can re-import the same file at any time — nothing will ever be duplicated.",
+  "leaveConfirm": "Leave",
+  "resumeTitle": "Import in progress",
+  "resumeDesc": "You have an unfinished import with {{count}} items waiting for review. Continue where you left off, or start a new one — starting fresh dismisses the old import (re-importing never duplicates).",
+  "resumeContinue": "Continue import",
+  "resumeStartNew": "Start new"
 }

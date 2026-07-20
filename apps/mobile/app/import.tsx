@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { useRouter } from 'expo-router';
+import React, { useEffect, useRef, useState } from 'react';
+import { useRouter, useNavigation } from 'expo-router';
 import {
   ActivityIndicator,
   FlatList,
@@ -14,9 +14,10 @@ import {
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { MediaType } from '@tvwatch/shared';
 import { Header } from '../components/Header';
+import { api } from '../api/client';
 import {
   Button,
   Card,
@@ -42,12 +43,14 @@ import {
 } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
-import { showError, showInfo, showSuccess } from '../lib/dialog';
+import { showError, showInfo, showSuccess, showConfirm, showDialog } from '../lib/dialog';
 import { useTranslation } from 'react-i18next';
 
 export default function ImportScreen() {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['import', 'common']);
+  const router = useRouter();
+  const qc = useQueryClient();
   const [importId, setImportId] = useState<string | null>(null);
   const [activeItem, setActiveItem] = useState<any | null>(null);
   const upload = useUploadImport();
@@ -75,6 +78,71 @@ export default function ImportScreen() {
   const isProcessing =
     status &&
     !['READY_FOR_REVIEW', 'COMPLETED', 'FAILED', 'CANCELLED', 'ROLLED_BACK'].includes(status);
+
+  // Guard every back path (header back, system back/gesture, browser back) while the
+  // review is unconfirmed, via react-navigation's beforeRemove (works native + web —
+  // usePreventRemove is native-only). The explicit Cancel button bypasses via leaveNow.
+  const [leaveNow, setLeaveNow] = useState(false);
+  const navigation = useNavigation();
+  const guardArmed = useRef(false);
+  guardArmed.current = status === 'READY_FOR_REVIEW' && !leaveNow;
+  useEffect(() => {
+    const sub = navigation.addListener('beforeRemove', (e: any) => {
+      if (!guardArmed.current) return;
+      e.preventDefault();
+      showConfirm({
+        title: t('import:leaveTitle'),
+        description: t('import:leaveDesc'),
+        confirmLabel: t('import:leaveConfirm'),
+        destructive: true,
+        onConfirm: () => navigation.dispatch(e.data.action),
+      });
+    });
+    return sub;
+  }, [navigation, t]);
+  useEffect(() => {
+    if (leaveNow) router.back();
+  }, [leaveNow]);
+
+  // Resume prompt: when the import screen opens with no active import, offer to continue
+  // the user's latest unfinished import — or start fresh (which cancels the old ones so
+  // they never trigger the prompt again; re-uploading stays idempotent).
+  const resumableQ = useQuery({
+    queryKey: ['importResumable'],
+    queryFn: () => api.get<{ import: any }>('/imports/resumable'),
+    enabled: !importId && importsEnabled,
+    staleTime: 30_000,
+  });
+  const [resumePrompted, setResumePrompted] = useState(false);
+  useEffect(() => {
+    const pending = resumableQ.data?.import;
+    if (importId || resumePrompted || !pending) return;
+    setResumePrompted(true);
+    showDialog({
+      title: t('import:resumeTitle'),
+      description: t('import:resumeDesc', { count: pending.needsReviewCount ?? 0 }),
+      buttons: [
+        {
+          label: t('import:resumeContinue'),
+          variant: 'primary',
+          onPress: () => setImportId(pending.id),
+        },
+        {
+          label: t('import:resumeStartNew'),
+          variant: 'secondary',
+          onPress: async () => {
+            try {
+              await api.post('/imports/dismiss-pending', {});
+              qc.invalidateQueries({ queryKey: ['importResumable'] });
+            } catch {
+              // Best-effort dismiss — the upload UI is already up either way.
+            }
+          },
+        },
+        { label: t('common:cancel'), variant: 'ghost' },
+      ],
+    });
+  }, [resumableQ.data?.import, importId, resumePrompted, qc, t]);
 
   const pickFile = async () => {
     try {
@@ -127,13 +195,12 @@ export default function ImportScreen() {
 
   const confirm = useConfirmImport();
   const cancel = useCancelImport();
-  const qc = useQueryClient();
-  const router = useRouter();
 
-  // Cancel the import and navigate back immediately (fire-and-forget the backend cancel).
+  // Cancel the import and leave via the guard-bypassing state (the backend cancel is
+  // fire-and-forget; the route pop happens after leaveNow unregisters the guard).
   const doCancel = () => {
     if (importId) cancel.mutate(importId);
-    router.back();
+    setLeaveNow(true);
   };
 
   if (!importId) {
@@ -606,14 +673,6 @@ function ResolutionModal({
   const patch = usePatchImportItem(importId);
   const resolveAll = useResolveAllForShow(importId);
 
-  // On open: prefill the search with the show/movie name and reset the checkboxes (season on).
-  useEffect(() => {
-    setApplyToSeason(true);
-    setApplyToWholeShow(false);
-    const n: any = item?.normalizedData ?? {};
-    setQuery((n.showTitle ?? n.movieTitle ?? n.title ?? '').trim());
-  }, [item?.id]);
-
   // Hooks must run unconditionally (Rules of Hooks). Derive values defensively so that
   // `useSearch` stays disabled (empty query) when no item is active.
   const entityType = item ? String(item.sourceEntityType) : '';
@@ -621,9 +680,20 @@ function ResolutionModal({
   // without it a movie list item would search shows (and resolve against one).
   const normMediaType = String(item?.normalizedData?.mediaType ?? '').toLowerCase();
   const isMovie = /MOVIE/.test(entityType) || normMediaType === 'movie';
-  const searchType = isMovie ? MediaType.MOVIE : MediaType.SHOW;
+
+  // On open: prefill the search with the show/movie name and reset the checkboxes (season on).
+  useEffect(() => {
+    setApplyToSeason(true);
+    setApplyToWholeShow(false);
+    const n: any = item?.normalizedData ?? {};
+    setQuery((n.showTitle ?? n.movieTitle ?? n.title ?? '').trim());
+  }, [item?.id]);
   const trimmed = item ? query.trim() : '';
-  const search = useSearch(trimmed, searchType);
+  // Search BOTH types at once — sources mistype entities (TV Time lists some movies as
+  // shows, e.g. "Pirates of the Caribbean"), so shows and movies arrive in one merged list.
+  const showsQ = useSearch(trimmed, MediaType.SHOW);
+  const moviesQ = useSearch(trimmed, MediaType.MOVIE);
+  const isSearching = showsQ.isFetching || moviesQ.isFetching;
   const resolveStyles = buildResolveStyles(tokens);
 
   if (!item) return null;
@@ -635,9 +705,14 @@ function ResolutionModal({
   const sourceTitle = norm.showTitle ?? norm.movieTitle ?? norm.title ?? t('import:noTitle');
   const showSourceTitle = norm.showTitle ?? norm.title;
 
-  // useSearch is an infinite query — results live in data.pages[].items.
+  // useSearch is an infinite query — results live in data.pages[].items. Merged: shows + movies.
   const rawResults =
-    trimmed.length > 1 ? (search.data?.pages ?? []).flatMap((p) => p.items ?? []) : [];
+    trimmed.length > 1
+      ? [
+          ...(showsQ.data?.pages ?? []).flatMap((p) => p.items ?? []),
+          ...(moviesQ.data?.pages ?? []).flatMap((p) => p.items ?? []),
+        ]
+      : [];
 
   // Smart sort: exact title first, then closest season count, then popularity.
   const targetSeasons = season != null ? season : undefined;
@@ -671,18 +746,21 @@ function ResolutionModal({
   });
   const results = sortedResults;
 
-  const resolve = async (matchedMediaId: string) => {
+  const resolve = async (result: any) => {
     try {
-      // Checkboxes only apply to TV items (not movies). whole-show wins over season.
-      if (!isMovie && showSourceTitle && (applyToSeason || applyToWholeShow)) {
+      // A MOVIE target always resolves JUST this item: an episode→movie match is 1:1
+      // (a season's episodes are different movies — never the same one), so the
+      // apply-to-season/whole-show bulk path is intentionally bypassed for movies.
+      const targetIsMovie = result?.type === MediaType.MOVIE;
+      if (!targetIsMovie && !isMovie && showSourceTitle && (applyToSeason || applyToWholeShow)) {
         const resolveSeason = applyToWholeShow ? null : (season ?? null);
         await resolveAll.mutateAsync({
-          matchedMediaId,
+          matchedMediaId: result.id,
           sourceTitle: showSourceTitle,
           season: resolveSeason,
         });
       } else {
-        await patch.mutateAsync({ itemId: item.id, matchedMediaId });
+        await patch.mutateAsync({ itemId: item.id, matchedMediaId: result.id });
       }
       onClose();
     } catch (e: any) {
@@ -802,7 +880,7 @@ function ResolutionModal({
               autoFocus
             />
 
-            {search.isFetching && query.trim().length > 1 ? (
+            {isSearching && query.trim().length > 1 ? (
               <Spinner />
             ) : results.length === 0 ? (
               query.trim().length > 1 ? (
@@ -819,7 +897,7 @@ function ResolutionModal({
                   return (
                     <Pressable
                       key={r.id}
-                      onPress={() => resolve(r.id)}
+                      onPress={() => resolve(r)}
                       style={[
                         resolveStyles.resultRow,
                         isExact && {
@@ -888,6 +966,7 @@ function buildResolveStyles(tokens: ReturnType<typeof useAppearance>['tokens']) 
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: tokens.divider,
     },
+
     poster: {
       width: 38,
       height: 57,

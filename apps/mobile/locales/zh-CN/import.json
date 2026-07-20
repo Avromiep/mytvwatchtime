@@ -61,5 +61,12 @@
     "duplicates": "重复项"
   },
   "progressPercent": "{{pct}}%",
-  "succeededIn": "耗时 {{duration}} 完成"
+  "succeededIn": "耗时 {{duration}} 完成",
+  "leaveTitle": "离开导入审核？",
+  "leaveDesc": "您的导入会保留在服务器上。您可以随时重新导入同一文件——绝不会产生重复。",
+  "leaveConfirm": "离开",
+  "resumeTitle": "导入进行中",
+  "resumeDesc": "您有一个未完成的导入，其中 {{count}} 个项目待审核。可以从上次继续，或开始新的导入——重新开始会取消旧导入（重新导入绝不会重复）。",
+  "resumeContinue": "继续导入",
+  "resumeStartNew": "重新开始"
 }

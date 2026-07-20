@@ -17,6 +17,9 @@ describe('ImportService.resolveAllForShow — title identity safety', () => {
         update: jest.fn(async () => ({})),
         groupBy: jest.fn(async () => []),
       },
+      mediaItem: {
+        findUnique: jest.fn(async () => ({ id: 'm1', type: 'SHOW' })),
+      },
     };
     const matcher = {
       ensureShowHydrated: jest.fn(async () => undefined),
@@ -74,5 +77,98 @@ describe('ImportService.resolveAllForShow — title identity safety', () => {
     expect(res.resolved).toBe(1);
     const updatedIds = prisma.importItem.update.mock.calls.map((c: any[]) => c[0].where.id);
     expect(updatedIds).toEqual(['it-target']);
+  });
+
+  it('retitles episode-scoped items to MOVIE equivalents when the target is a movie', async () => {
+    const items = [
+      {
+        id: 'ep1',
+        sourceEntityType: 'WATCHED_EPISODE',
+        status: 'NEEDS_REVIEW',
+        normalizedData: { title: 'Pirates of the Caribbean', season: 1, episode: 2 },
+      },
+      {
+        id: 'r1',
+        sourceEntityType: 'EPISODE_RATING',
+        status: 'NEEDS_REVIEW',
+        normalizedData: { title: 'Pirates of the Caribbean', season: 1, episode: 2 },
+      },
+      {
+        id: 'cv1',
+        sourceEntityType: 'EPISODE_CHARACTER_VOTE',
+        status: 'NEEDS_REVIEW',
+        normalizedData: { title: 'Pirates of the Caribbean', season: 1, episode: 2 },
+      },
+    ];
+    const { service, prisma } = makeService(items);
+    prisma.mediaItem = { findUnique: jest.fn(async () => ({ id: 'm-pirates', type: 'MOVIE' })) };
+
+    const res = await service.resolveAllForShow(
+      'u1',
+      'imp1',
+      'm-pirates',
+      'Pirates of the Caribbean',
+      1,
+    );
+
+    const byId = Object.fromEntries(
+      prisma.importItem.update.mock.calls.map((c: any[]) => [c[0].where.id, c[0].data]),
+    );
+    expect(byId['ep1']).toEqual(
+      expect.objectContaining({
+        sourceEntityType: 'WATCHED_MOVIE',
+        matchedEpisodeId: null,
+        status: 'MATCHED',
+      }),
+    );
+    expect(byId['r1']).toEqual(
+      expect.objectContaining({ sourceEntityType: 'MOVIE_RATING', status: 'MATCHED' }),
+    );
+    // Character votes have no movie equivalent — they stay in review.
+    expect(byId['cv1']).toEqual(expect.objectContaining({ status: 'NEEDS_REVIEW' }));
+    expect(res.matched).toBe(2);
+    expect(res.needsReview).toBe(1);
+  });
+
+  it('patchItem retypes an episode item to WATCHED_MOVIE on a manual movie match', async () => {
+    const prisma: any = {
+      import: {
+        findFirst: jest.fn(async () => ({ id: 'imp1', userId: 'u1' })),
+        update: jest.fn(async () => ({})),
+      },
+      importItem: {
+        findFirst: jest.fn(async () => ({
+          id: 'ep1',
+          importId: 'imp1',
+          sourceEntityType: 'WATCHED_EPISODE',
+        })),
+        update: jest.fn(async (args: any) => args),
+        groupBy: jest.fn(async () => []),
+      },
+      mediaItem: { findUnique: jest.fn(async () => ({ id: 'm-pirates', type: 'MOVIE' })) },
+    };
+    const service = new ImportService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await service.patchItem('u1', 'imp1', 'ep1', { matchedMediaId: 'm-pirates' });
+
+    expect(prisma.importItem.update).toHaveBeenCalledWith({
+      where: { id: 'ep1' },
+      data: expect.objectContaining({
+        matchedMediaId: 'm-pirates',
+        matchedEpisodeId: null,
+        sourceEntityType: 'WATCHED_MOVIE',
+        status: 'MATCHED',
+      }),
+    });
   });
 });
