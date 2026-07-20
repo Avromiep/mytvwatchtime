@@ -754,11 +754,18 @@ function ResolutionModal({
       const targetIsMovie = result?.type === MediaType.MOVIE;
       if (!targetIsMovie && !isMovie && showSourceTitle && (applyToSeason || applyToWholeShow)) {
         const resolveSeason = applyToWholeShow ? null : (season ?? null);
-        await resolveAll.mutateAsync({
+        const r = await resolveAll.mutateAsync({
           matchedMediaId: result.id,
           sourceTitle: showSourceTitle,
           season: resolveSeason,
         });
+        // Bulk transparency: a single pick can resolve a whole season/show at once —
+        // tell the user exactly how many items moved instead of a silent counter jump.
+        if (r.matched > 1) {
+          showInfo({
+            title: t('import:resolvedBulk', { count: r.matched, title: showSourceTitle }),
+          });
+        }
       } else {
         await patch.mutateAsync({ itemId: item.id, matchedMediaId: result.id });
       }

@@ -139,7 +139,7 @@ export class ImportProcessor implements OnModuleInit {
 
   private async runBody(importId: string, imp: any) {
     try {
-      await this.setStatus(importId, 'EXTRACTING', { progress: 5 });
+      await this.setStatus(importId, 'EXTRACTING', { progress: 2 });
       const bytes = await this.storage.read(imp.storageKey!);
 
       // Trakt JSON export? Detect on zip entry names (or the standalone .json filename) BEFORE
@@ -155,7 +155,7 @@ export class ImportProcessor implements OnModuleInit {
       if (tvTimeJsonEntries) return await this.runTvTimeJsonBody(importId, tvTimeJsonEntries);
 
       const files = this.extractAndParse(imp.sourceType, imp.originalFilename ?? 'upload', bytes);
-      await this.setStatus(importId, 'PARSING', { totalFiles: files.length, progress: 10 });
+      await this.setStatus(importId, 'PARSING', { totalFiles: files.length, progress: 5 });
 
       // Per-file normalize → flat item list + ImportFile rows
       const allItems: NormalizedItem[] = [];
@@ -189,7 +189,7 @@ export class ImportProcessor implements OnModuleInit {
       const fileInputs = files.map((f) => ({ filename: f.filename, rows: f.rows }));
       const archiveLang = resolveArchiveLanguage(fileInputs);
 
-      await this.setStatus(importId, 'NORMALIZING', { totalRows, progress: 15 });
+      await this.setStatus(importId, 'NORMALIZING', { totalRows, progress: 8 });
       // Dedupe by entity|normTitle|season|episode (keep one). The same episode can
       // appear in seen_episode_source (single watch) AND rewatched_episode (total
       // count via cpt); keep the authoritative higher watchCount and the latest
@@ -215,7 +215,7 @@ export class ImportProcessor implements OnModuleInit {
         dedup.push({ ...it, watchCount: it.watchCount ?? 1 });
       }
 
-      await this.setStatus(importId, 'MATCHING', { progress: 25 });
+      await this.setStatus(importId, 'MATCHING', { progress: 10 });
       // Season/episode footprint per show in the import — used to disambiguate duplicate titles
       // (e.g. two shows named "Silo"): the candidate must have enough seasons AND enough episodes
       // in each referenced season (import watched S1 up to E10 → S1 must have ≥10 episodes).
@@ -257,7 +257,7 @@ export class ImportProcessor implements OnModuleInit {
       const structureGuarded = new Set<string>();
       let hydrateIdx = 0;
       for (const it of dedup) {
-        await this.reportProgress(importId, 25 + (5 * hydrateIdx++) / Math.max(1, dedup.length));
+        await this.reportProgress(importId, 10 + (30 * hydrateIdx++) / Math.max(1, dedup.length));
         if (it.entityType !== 'WATCHED_EPISODE') continue;
         if (showMediaByNorm.has(it.normTitle)) continue;
         const seMap = seasonEpisodesByNorm.get(it.normTitle);
@@ -316,7 +316,7 @@ export class ImportProcessor implements OnModuleInit {
 
       let matchIdx = 0;
       for (const it of dedup) {
-        await this.reportProgress(importId, 30 + (55 * matchIdx++) / Math.max(1, dedup.length));
+        await this.reportProgress(importId, 40 + (44 * matchIdx++) / Math.max(1, dedup.length));
         if (!it.title) {
           invalid++;
           continue;
@@ -434,6 +434,16 @@ export class ImportProcessor implements OnModuleInit {
           );
         const listBatch: any[] = [];
         let noIdentityCount = 0;
+        // Lists + favorites span 85→87 on the bar (per resolved object).
+        const listObjTotal = Math.max(
+          1,
+          lists.reduce((n, l) => n + l.items.length, 0) +
+            favorites.series.length +
+            favorites.movies.length,
+        );
+        let listObjIdx = 0;
+        const reportLists = () =>
+          this.reportProgress(importId, 85 + (2 * listObjIdx++) / listObjTotal);
 
         // Resolve one list/favorite object to a media id. Series go through the TVDB-id
         // authority gate (id-authoritative — title search only when a real name exists);
@@ -479,6 +489,7 @@ export class ImportProcessor implements OnModuleInit {
           let unresolved = 0;
           const itemRows: any[] = [];
           for (const it of list.items) {
+            await reportLists();
             const r = await resolveEntry(it);
             // Objects with no recoverable identity (movie uuid unknown to the export,
             // dead series id without a name) are counted on the list but not staged —
@@ -542,6 +553,7 @@ export class ImportProcessor implements OnModuleInit {
           },
           entityType: 'FAVORITE_SHOW' | 'FAVORITE_MOVIE',
         ) => {
+          await reportLists();
           const r = await resolveEntry(entry);
           if (!r.title) {
             noIdentityCount++;
@@ -1450,7 +1462,7 @@ export class ImportProcessor implements OnModuleInit {
       for (const c of showsRes.episodes) {
         await this.reportProgress(
           importId,
-          25 + (20 * epIdx++) / Math.max(1, showsRes.episodes.length),
+          25 + (45 * epIdx++) / Math.max(1, showsRes.episodes.length),
         );
         const { mediaId } = await matchShowIds(c.showIds, c.showTitle, c.year, true);
         let episodeId: string | null = null;
@@ -1576,19 +1588,19 @@ export class ImportProcessor implements OnModuleInit {
       );
       let mediaStageIdx = 0;
       for (const c of moviesRes.watched) {
-        await this.reportProgress(importId, 45 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await this.reportProgress(importId, 70 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem('WATCHED_MOVIE', c.movieIds, c.movieTitle, c.year, c.watchedAt, 1);
       }
       for (const c of moviesRes.watchlist) {
-        await this.reportProgress(importId, 45 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await this.reportProgress(importId, 70 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem('WATCHLIST_MOVIE', c.ids, c.title, c.year, c.listedAt, 1);
       }
       for (const c of watchlistShows) {
-        await this.reportProgress(importId, 45 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await this.reportProgress(importId, 70 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem('WATCHLIST_SHOW', c.ids, c.title, c.year, c.listedAt, 1);
       }
       for (const c of favorites) {
-        await this.reportProgress(importId, 45 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await this.reportProgress(importId, 70 + (15 * mediaStageIdx++) / mediaStageTotal);
         await stageMediaItem(
           c.type === 'movie' ? 'FAVORITE_MOVIE' : 'FAVORITE_SHOW',
           c.ids,
@@ -1612,7 +1624,7 @@ export class ImportProcessor implements OnModuleInit {
         let unresolved = 0;
         const itemRows: any[] = [];
         for (const it of list.items) {
-          await this.reportProgress(importId, 60 + (10 * listItemIdx++) / listItemTotal);
+          await this.reportProgress(importId, 85 + (10 * listItemIdx++) / listItemTotal);
           const m = await this.matcher.matchByExternalIds(
             it.ids,
             it.mediaType === 'movie' ? 'MOVIE' : 'SHOW',
@@ -1672,7 +1684,7 @@ export class ImportProcessor implements OnModuleInit {
       for (const c of ratingsRes.candidates) {
         await this.reportProgress(
           importId,
-          80 + (15 * ratingIdx++) / Math.max(1, ratingsRes.candidates.length),
+          95 + (5 * ratingIdx++) / Math.max(1, ratingsRes.candidates.length),
         );
         let mediaId: string | null = null;
         let episodeId: string | null = null;
@@ -1820,8 +1832,57 @@ export class ImportProcessor implements OnModuleInit {
     }
     const ratingDedup = dedupeRatings(allRatings);
     counts.ratingDuplicatesIgnored += ratingDedup.duplicates;
+    // ----- Emotions -----
+    const allEmotions: NormalizedImportedEmotion[] = [];
+    for (const f of files) {
+      const res = normalizeEmotions(f.filename, f.rows);
+      counts.emotionsDetected += res.detected;
+      counts.emotionsSkippedUnsupported += res.unsupported;
+      allEmotions.push(...res.candidates.filter((c) => c.supported));
+    }
+    const emotionDedup = dedupeEmotions(allEmotions);
+    counts.emotionDuplicatesIgnored += emotionDedup.duplicates;
+    // ----- Comments -----
+    const allComments: NormalizedImportedComment[] = [];
+    for (const f of files) {
+      const res = normalizeComments(f.filename, f.rows, ownerId);
+      counts.commentRowsDetected += res.rowsDetected;
+      counts.topLevelCommentsDetected += res.topLevelDetected;
+      counts.commentRepliesSkipped += res.repliesSkipped;
+      counts.commentActivityRowsSkipped += res.activityRowsSkipped;
+      counts.commentsByOtherUsersSkipped += res.otherUsersSkipped;
+      counts.commentsSkippedInvalid += res.invalid;
+      allComments.push(...res.candidates);
+    }
+    const commentDedup = dedupeComments(allComments);
+    counts.commentDuplicatesIgnored += commentDedup.duplicates;
+    // ----- Character votes (show_character_episode_vote.csv) -----
+    // Episodes resolve via TVDB episode external ids (local), characters resolve at apply
+    // time via media_cast.characterExternalId (local) — no provider calls per vote.
+    const allCharVotes: NormalizedCharacterVote[] = [];
+    for (const f of files) {
+      const res = normalizeCharacterVotes(f.filename, f.rows);
+      counts.characterVotesDetected += res.detected;
+      counts.characterVotesSkippedInvalid += res.invalid;
+      allCharVotes.push(...res.candidates);
+    }
+    const charVoteUnique = dedupeCharacterVotes(allCharVotes);
+    counts.characterVoteDuplicatesIgnored += allCharVotes.length - charVoteUnique.length;
+    // Progress spans 87→95 across ALL extras sections (shared counter, weighted by
+    // candidate count) — the extras staging was previously invisible on the bar.
+    const extrasTotal = Math.max(
+      1,
+      ratingDedup.unique.length +
+        emotionDedup.unique.length +
+        commentDedup.unique.length +
+        charVoteUnique.length,
+    );
+    let extrasIdx = 0;
+    const reportExtras = () => this.reportProgress(importId, 87 + (8 * extrasIdx++) / extrasTotal);
+
     const ratingItems: any[] = [];
     for (const c of ratingDedup.unique) {
+      await reportExtras();
       const { mediaId, episodeId, confidence, status } = await this.resolveRatingTarget(
         c,
         showMediaByNorm,
@@ -1837,18 +1898,9 @@ export class ImportProcessor implements OnModuleInit {
     }
     await this.flushItems(importId, ratingItems);
 
-    // ----- Emotions -----
-    const allEmotions: NormalizedImportedEmotion[] = [];
-    for (const f of files) {
-      const res = normalizeEmotions(f.filename, f.rows);
-      counts.emotionsDetected += res.detected;
-      counts.emotionsSkippedUnsupported += res.unsupported;
-      allEmotions.push(...res.candidates.filter((c) => c.supported));
-    }
-    const emotionDedup = dedupeEmotions(allEmotions);
-    counts.emotionDuplicatesIgnored += emotionDedup.duplicates;
     const emotionItems: any[] = [];
     for (const c of emotionDedup.unique) {
+      await reportExtras();
       const { mediaId, episodeId, confidence, status } = await this.resolveEmotionTarget(
         c,
         showMediaByNorm,
@@ -1863,22 +1915,9 @@ export class ImportProcessor implements OnModuleInit {
     }
     await this.flushItems(importId, emotionItems);
 
-    // ----- Comments -----
-    const allComments: NormalizedImportedComment[] = [];
-    for (const f of files) {
-      const res = normalizeComments(f.filename, f.rows, ownerId);
-      counts.commentRowsDetected += res.rowsDetected;
-      counts.topLevelCommentsDetected += res.topLevelDetected;
-      counts.commentRepliesSkipped += res.repliesSkipped;
-      counts.commentActivityRowsSkipped += res.activityRowsSkipped;
-      counts.commentsByOtherUsersSkipped += res.otherUsersSkipped;
-      counts.commentsSkippedInvalid += res.invalid;
-      allComments.push(...res.candidates);
-    }
-    const commentDedup = dedupeComments(allComments);
-    counts.commentDuplicatesIgnored += commentDedup.duplicates;
     const commentItems: any[] = [];
     for (const c of commentDedup.unique) {
+      await reportExtras();
       const { mediaId, episodeId, confidence, status } = await this.resolveCommentTarget(
         c,
         showMediaByNorm,
@@ -1893,20 +1932,9 @@ export class ImportProcessor implements OnModuleInit {
     }
     await this.flushItems(importId, commentItems);
 
-    // ----- Character votes (show_character_episode_vote.csv) -----
-    // Episodes resolve via TVDB episode external ids (local), characters resolve at apply
-    // time via media_cast.characterExternalId (local) — no provider calls per vote.
-    const allCharVotes: NormalizedCharacterVote[] = [];
-    for (const f of files) {
-      const res = normalizeCharacterVotes(f.filename, f.rows);
-      counts.characterVotesDetected += res.detected;
-      counts.characterVotesSkippedInvalid += res.invalid;
-      allCharVotes.push(...res.candidates);
-    }
-    const charVoteUnique = dedupeCharacterVotes(allCharVotes);
-    counts.characterVoteDuplicatesIgnored += allCharVotes.length - charVoteUnique.length;
     const charVoteItems: any[] = [];
     for (const c of charVoteUnique) {
+      await reportExtras();
       const { mediaId, episodeId, confidence, status } = await this.resolveShowEpisode(
         c.showTitle,
         c.seasonNumber,

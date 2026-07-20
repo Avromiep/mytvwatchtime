@@ -97,5 +97,6 @@
   "resumeTitle": "Import in progress",
   "resumeDesc": "You have an unfinished import with {{count}} items waiting for review. Continue where you left off, or start a new one — starting fresh dismisses the old import (re-importing never duplicates).",
   "resumeContinue": "Continue import",
-  "resumeStartNew": "Start new"
+  "resumeStartNew": "Start new",
+  "resolvedBulk": "Resolved {{count}} items for {{title}}"
 }

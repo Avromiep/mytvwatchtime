@@ -171,4 +171,28 @@ describe('ImportService.resolveAllForShow — title identity safety', () => {
       }),
     });
   });
+
+  it('never merges year variants in bulk resolves ("One Piece" ≠ "ONE PIECE (2023)")', async () => {
+    const items = [
+      {
+        id: 'it-anime',
+        sourceEntityType: 'WATCHED_EPISODE',
+        status: 'NEEDS_REVIEW',
+        normalizedData: { title: 'One Piece', season: 1, episode: 5 },
+      },
+      {
+        id: 'it-live',
+        sourceEntityType: 'WATCHED_EPISODE',
+        status: 'NEEDS_REVIEW',
+        normalizedData: { title: 'ONE PIECE (2023)', season: 1, episode: 5 },
+      },
+    ];
+    const { service, prisma } = makeService(items);
+
+    const res = await service.resolveAllForShow('u1', 'imp1', 'm-onepiece', 'One Piece', null);
+
+    expect(res.resolved).toBe(1);
+    const updatedIds = prisma.importItem.update.mock.calls.map((c: any[]) => c[0].where.id);
+    expect(updatedIds).toEqual(['it-anime']);
+  });
 });

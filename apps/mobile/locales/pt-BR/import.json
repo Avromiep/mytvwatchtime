@@ -68,5 +68,6 @@
   "resumeTitle": "Importação em andamento",
   "resumeDesc": "Você tem uma importação inacabada com {{count}} itens aguardando revisão. Continue de onde parou ou comece uma nova — recomeçar descarta a importação antiga (reimportar nunca duplica).",
   "resumeContinue": "Continuar importação",
-  "resumeStartNew": "Nova"
+  "resumeStartNew": "Nova",
+  "resolvedBulk": "{{count}} itens resolvidos para {{title}}"
 }

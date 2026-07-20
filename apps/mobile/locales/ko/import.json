@@ -68,5 +68,6 @@
   "resumeTitle": "가져오기 진행 중",
   "resumeDesc": "검토 대기 중인 항목 {{count}}개가 있는 미완료 가져오기가 있습니다. 중단한 곳부터 이어가거나 새로 시작하세요 — 새로 시작하면 이전 가져오기는 취소됩니다(다시 가져와도 중복되지 않습니다).",
   "resumeContinue": "가져오기 계속",
-  "resumeStartNew": "새로 시작"
+  "resumeStartNew": "새로 시작",
+  "resolvedBulk": "{{title}}의 항목 {{count}}개가 해결됨"
 }

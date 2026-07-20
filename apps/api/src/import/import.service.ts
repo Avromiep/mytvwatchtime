@@ -10,7 +10,7 @@ import { CommentImageProcessor } from '../comment-images/comment-image.processor
 import { IMPORT_LIMITS } from './lib/limits';
 import { ImportStorage } from './lib/storage';
 import { ImportMatcher } from './lib/matcher';
-import { normTitle, splitTitleYear } from './lib/inference';
+import { normTitle } from './lib/inference';
 import { ImportProcessor } from './import.processor';
 import { HydrationQueue } from '../media-metadata/hydration/hydration.queue';
 import { InvalidUploadError } from './errors';
@@ -318,9 +318,9 @@ export class ImportService {
     // Ensure the chosen show has seasons/episodes so episode resolution can work.
     if (!targetIsMovie) await this.matcher.ensureShowHydrated(matchedMediaId);
 
-    // Core-normalized title (strips " (2023)" year suffixes) so "Silo" and "Silo (2023)" match.
-    const coreNorm = (s: string) => normTitle(splitTitleYear(s).title);
-    const nt = coreNorm(sourceTitle);
+    // Exact normalized title — NO year stripping: "One Piece" and "ONE PIECE (2023)" are
+    // DIFFERENT shows, and bulk-resolving across year variants mismatches whole libraries.
+    const nt = normTitle(sourceTitle);
     if (!nt) {
       // The source title carries no letters/digits in any script — a title match would
       // hit every other letter-less title. Never bulk-resolve on an empty identity.
@@ -347,7 +347,7 @@ export class ImportService {
     for (const it of items) {
       const norm: any = it.normalizedData ?? {};
       const title = norm.showTitle ?? norm.title;
-      if (!title || coreNorm(title) !== nt) continue;
+      if (!title || normTitle(title) !== nt) continue;
       // Per-season scoping: only resolve items in the chosen source season (anthology support).
       const itemSeason = Number(norm.season ?? norm.seasonNumber);
       if (season != null && Number.isFinite(itemSeason) && itemSeason !== season) continue;

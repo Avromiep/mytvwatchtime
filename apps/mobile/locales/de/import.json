@@ -68,5 +68,6 @@
   "resumeTitle": "Import läuft",
   "resumeDesc": "Du hast einen unvollendeten Import mit {{count}} Elementen zur Überprüfung. Mache weiter, wo du aufgehört hast, oder starte einen neuen — ein Neustart verwirft den alten Import (erneutes Importieren dupliziert nie).",
   "resumeContinue": "Import fortsetzen",
-  "resumeStartNew": "Neu starten"
+  "resumeStartNew": "Neu starten",
+  "resolvedBulk": "{{count}} Einträge für {{title}} aufgelöst"
 }

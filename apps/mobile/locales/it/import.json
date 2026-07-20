@@ -68,5 +68,6 @@
   "resumeTitle": "Importazione in corso",
   "resumeDesc": "Hai un'importazione non completata con {{count}} elementi in attesa di revisione. Riprendi da dove eri rimasto o iniziane una nuova: ricominciare annulla la vecchia importazione (reimportare non duplica mai).",
   "resumeContinue": "Continua importazione",
-  "resumeStartNew": "Nuova"
+  "resumeStartNew": "Nuova",
+  "resolvedBulk": "{{count}} elementi risolti per {{title}}"
 }

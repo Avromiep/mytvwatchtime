@@ -90,8 +90,20 @@ export class MediaMetadataService {
    *  the request-locale override. The base columns hold English so every language
    *  reads correctly via `override[lang] ?? override['en'] ?? base`. */
   private newMediaLocaleFields(
-    item: { title: string; overview?: string | null; posterUrl?: string | null; backdropUrl?: string | null },
-    enBase: { title?: string; overview?: string | null; posterUrl?: string | null; backdropUrl?: string | null } | undefined,
+    item: {
+      title: string;
+      overview?: string | null;
+      posterUrl?: string | null;
+      backdropUrl?: string | null;
+    },
+    enBase:
+      | {
+          title?: string;
+          overview?: string | null;
+          posterUrl?: string | null;
+          backdropUrl?: string | null;
+        }
+      | undefined,
     lang: string,
   ) {
     return {
@@ -100,10 +112,30 @@ export class MediaMetadataService {
       posterUrl: enBase?.posterUrl ?? item.posterUrl,
       backdropUrl: enBase?.backdropUrl ?? item.backdropUrl,
       titleLocale: enBase ? 'en' : lang,
-      titles: mergeLocalized(mergeLocalized(null, 'en', enBase?.title, undefined), lang, item.title, undefined),
-      overviews: mergeLocalized(mergeLocalized(null, 'en', enBase?.overview, undefined), lang, item.overview, undefined),
-      posterUrls: mergeLocalized(mergeLocalized(null, 'en', enBase?.posterUrl, undefined), lang, item.posterUrl, undefined),
-      backdropUrls: mergeLocalized(mergeLocalized(null, 'en', enBase?.backdropUrl, undefined), lang, item.backdropUrl, undefined),
+      titles: mergeLocalized(
+        mergeLocalized(null, 'en', enBase?.title, undefined),
+        lang,
+        item.title,
+        undefined,
+      ),
+      overviews: mergeLocalized(
+        mergeLocalized(null, 'en', enBase?.overview, undefined),
+        lang,
+        item.overview,
+        undefined,
+      ),
+      posterUrls: mergeLocalized(
+        mergeLocalized(null, 'en', enBase?.posterUrl, undefined),
+        lang,
+        item.posterUrl,
+        undefined,
+      ),
+      backdropUrls: mergeLocalized(
+        mergeLocalized(null, 'en', enBase?.backdropUrl, undefined),
+        lang,
+        item.backdropUrl,
+        undefined,
+      ),
     };
   }
 
@@ -117,7 +149,12 @@ export class MediaMetadataService {
    */
   private localeOverrideUpdate(
     existing: { titles: any; overviews: any; posterUrls: any; backdropUrls: any },
-    item: { title?: string; overview?: string | null; posterUrl?: string | null; backdropUrl?: string | null },
+    item: {
+      title?: string;
+      overview?: string | null;
+      posterUrl?: string | null;
+      backdropUrl?: string | null;
+    },
     lang: string,
   ) {
     const data = {
@@ -149,7 +186,11 @@ export class MediaMetadataService {
   }): Promise<string> {
     const tmdbVal = String(item.tmdbId);
     const lang = currentLanguage();
-    const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal, ProviderEntityKind.SERIES);
+    const existing = await this.findMediaByExternal(
+      ExternalProvider.TMDB,
+      tmdbVal,
+      ProviderEntityKind.SERIES,
+    );
     if (existing) {
       // List data is single-language: store it as a locale override only, never
       // overwriting the (English) base so other users aren't contaminated.
@@ -160,7 +201,10 @@ export class MediaMetadataService {
       // Backfill a missing year on stubs created before search mapped the year.
       if (item.year) {
         await this.prisma.show
-          .updateMany({ where: { mediaId: existing.id, yearStart: null }, data: { yearStart: item.year } })
+          .updateMany({
+            where: { mediaId: existing.id, yearStart: null },
+            data: { yearStart: item.year },
+          })
           .catch(() => undefined);
       }
       return existing.id;
@@ -168,7 +212,11 @@ export class MediaMetadataService {
     try {
       const created = await this.prisma.mediaItem.create({
         data: {
-          ...this.newMediaLocaleFields(item, await this.fetchEnBase(MediaType.SHOW, item.tmdbId), lang),
+          ...this.newMediaLocaleFields(
+            item,
+            await this.fetchEnBase(MediaType.SHOW, item.tmdbId),
+            lang,
+          ),
           type: MediaType.SHOW,
           rating: item.rating ?? undefined,
           popularity: item.popularity ?? 0,
@@ -176,7 +224,13 @@ export class MediaMetadataService {
             create: { yearStart: item.year ?? null, inProduction: true },
           },
           externalIds: {
-            create: [{ provider: ExternalProvider.TMDB, providerEntityKind: ProviderEntityKind.SERIES, value: tmdbVal }],
+            create: [
+              {
+                provider: ExternalProvider.TMDB,
+                providerEntityKind: ProviderEntityKind.SERIES,
+                value: tmdbVal,
+              },
+            ],
           },
         },
       });
@@ -184,7 +238,11 @@ export class MediaMetadataService {
     } catch (e: any) {
       // Race condition: another concurrent call (search/import) created this media first.
       if (e?.code === 'P2002') {
-        const found = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal, ProviderEntityKind.SERIES);
+        const found = await this.findMediaByExternal(
+          ExternalProvider.TMDB,
+          tmdbVal,
+          ProviderEntityKind.SERIES,
+        );
         if (found) return found.id;
       }
       throw e;
@@ -203,7 +261,11 @@ export class MediaMetadataService {
   }): Promise<string> {
     const tmdbVal = String(item.tmdbId);
     const lang = currentLanguage();
-    const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal, ProviderEntityKind.MOVIE);
+    const existing = await this.findMediaByExternal(
+      ExternalProvider.TMDB,
+      tmdbVal,
+      ProviderEntityKind.MOVIE,
+    );
     if (existing) {
       const { data, changed } = this.localeOverrideUpdate(existing, item, lang);
       if (changed) {
@@ -211,7 +273,10 @@ export class MediaMetadataService {
       }
       if (item.year) {
         await this.prisma.movie
-          .updateMany({ where: { mediaId: existing.id, releaseYear: null }, data: { releaseYear: item.year } })
+          .updateMany({
+            where: { mediaId: existing.id, releaseYear: null },
+            data: { releaseYear: item.year },
+          })
           .catch(() => undefined);
       }
       return existing.id;
@@ -219,18 +284,34 @@ export class MediaMetadataService {
     try {
       const created = await this.prisma.mediaItem.create({
         data: {
-          ...this.newMediaLocaleFields(item, await this.fetchEnBase(MediaType.MOVIE, item.tmdbId), lang),
+          ...this.newMediaLocaleFields(
+            item,
+            await this.fetchEnBase(MediaType.MOVIE, item.tmdbId),
+            lang,
+          ),
           type: MediaType.MOVIE,
           rating: item.rating ?? undefined,
           popularity: item.popularity ?? 0,
           movie: { create: { releaseYear: item.year ?? null } },
-          externalIds: { create: [{ provider: ExternalProvider.TMDB, providerEntityKind: ProviderEntityKind.MOVIE, value: tmdbVal }] },
+          externalIds: {
+            create: [
+              {
+                provider: ExternalProvider.TMDB,
+                providerEntityKind: ProviderEntityKind.MOVIE,
+                value: tmdbVal,
+              },
+            ],
+          },
         },
       });
       return created.id;
     } catch (e: any) {
       if (e?.code === 'P2002') {
-        const found = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal, ProviderEntityKind.MOVIE);
+        const found = await this.findMediaByExternal(
+          ExternalProvider.TMDB,
+          tmdbVal,
+          ProviderEntityKind.MOVIE,
+        );
         if (found) return found.id;
       }
       throw e;
@@ -248,7 +329,11 @@ export class MediaMetadataService {
   }): Promise<string> {
     const tvdbVal = String(item.tvdbId);
     const lang = currentLanguage();
-    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal, ProviderEntityKind.SERIES);
+    const existing = await this.findMediaByExternal(
+      ExternalProvider.THE_TVDB,
+      tvdbVal,
+      ProviderEntityKind.SERIES,
+    );
     if (existing) {
       await this.prisma.mediaItem.update({
         where: { id: existing.id },
@@ -256,27 +341,28 @@ export class MediaMetadataService {
           titles: mergeLocalized(existing.titles as any, lang, item.title, undefined),
           overviews: mergeLocalized(existing.overviews as any, lang, item.overview, undefined),
           posterUrls: mergeLocalized(existing.posterUrls as any, lang, item.posterUrl, undefined),
-          backdropUrls: mergeLocalized(existing.backdropUrls as any, lang, item.backdropUrl, undefined),
+          backdropUrls: mergeLocalized(
+            existing.backdropUrls as any,
+            lang,
+            item.backdropUrl,
+            undefined,
+          ),
         },
       });
       if (item.year) {
         await this.prisma.show
-          .updateMany({ where: { mediaId: existing.id, yearStart: null }, data: { yearStart: item.year } })
+          .updateMany({
+            where: { mediaId: existing.id, yearStart: null },
+            data: { yearStart: item.year },
+          })
           .catch(() => undefined);
       }
       return existing.id;
     }
 
-    const byTitle = await this.prisma.mediaItem.findFirst({
-      where: { title: { equals: item.title, mode: 'insensitive' }, type: MediaType.SHOW },
-    });
-    if (byTitle) {
-      await this.prisma.externalId
-        .create({ data: { provider: ExternalProvider.THE_TVDB, providerEntityKind: ProviderEntityKind.SERIES, value: tvdbVal, mediaId: byTitle.id } })
-        .catch(() => undefined);
-      return byTitle.id;
-    }
-
+    // NOTE: NO title-based attach here — a TVDB id is authoritative for identity, a title
+    // is not (US vs AU "Married at First Sight" collide; attaching by title poisoned the AU
+    // row with the US id and mis-routed every later lookup). Unknown id = a new row, always.
     const created = await this.prisma.mediaItem.create({
       data: {
         type: MediaType.SHOW,
@@ -291,7 +377,15 @@ export class MediaMetadataService {
         posterUrls: mergeLocalized(null, lang, item.posterUrl, undefined),
         backdropUrls: mergeLocalized(null, lang, item.backdropUrl, undefined),
         show: { create: { yearStart: item.year ?? null, inProduction: true } },
-        externalIds: { create: [{ provider: ExternalProvider.THE_TVDB, providerEntityKind: ProviderEntityKind.SERIES, value: tvdbVal }] },
+        externalIds: {
+          create: [
+            {
+              provider: ExternalProvider.THE_TVDB,
+              providerEntityKind: ProviderEntityKind.SERIES,
+              value: tvdbVal,
+            },
+          ],
+        },
       },
     });
     return created.id;
@@ -309,7 +403,11 @@ export class MediaMetadataService {
   }): Promise<string> {
     const tvdbVal = String(item.tvdbId);
     const lang = currentLanguage();
-    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal, ProviderEntityKind.MOVIE);
+    const existing = await this.findMediaByExternal(
+      ExternalProvider.THE_TVDB,
+      tvdbVal,
+      ProviderEntityKind.MOVIE,
+    );
     if (existing) {
       await this.prisma.mediaItem.update({
         where: { id: existing.id },
@@ -317,27 +415,28 @@ export class MediaMetadataService {
           titles: mergeLocalized(existing.titles as any, lang, item.title, undefined),
           overviews: mergeLocalized(existing.overviews as any, lang, item.overview, undefined),
           posterUrls: mergeLocalized(existing.posterUrls as any, lang, item.posterUrl, undefined),
-          backdropUrls: mergeLocalized(existing.backdropUrls as any, lang, item.backdropUrl, undefined),
+          backdropUrls: mergeLocalized(
+            existing.backdropUrls as any,
+            lang,
+            item.backdropUrl,
+            undefined,
+          ),
         },
       });
       if (item.year) {
         await this.prisma.movie
-          .updateMany({ where: { mediaId: existing.id, releaseYear: null }, data: { releaseYear: item.year } })
+          .updateMany({
+            where: { mediaId: existing.id, releaseYear: null },
+            data: { releaseYear: item.year },
+          })
           .catch(() => undefined);
       }
       return existing.id;
     }
 
-    const byTitle = await this.prisma.mediaItem.findFirst({
-      where: { title: { equals: item.title, mode: 'insensitive' }, type: MediaType.MOVIE },
-    });
-    if (byTitle) {
-      await this.prisma.externalId
-        .create({ data: { provider: ExternalProvider.THE_TVDB, providerEntityKind: ProviderEntityKind.MOVIE, value: tvdbVal, mediaId: byTitle.id } })
-        .catch(() => undefined);
-      return byTitle.id;
-    }
-
+    // NOTE: NO title-based attach here — a TVDB id is authoritative for identity, a title
+    // is not (US vs AU "Married at First Sight" collide; attaching by title poisoned the AU
+    // row with the US id and mis-routed every later lookup). Unknown id = a new row, always.
     const created = await this.prisma.mediaItem.create({
       data: {
         type: MediaType.MOVIE,
@@ -352,7 +451,15 @@ export class MediaMetadataService {
         posterUrls: mergeLocalized(null, lang, item.posterUrl, undefined),
         backdropUrls: mergeLocalized(null, lang, item.backdropUrl, undefined),
         movie: { create: { releaseYear: item.year ?? null } },
-        externalIds: { create: [{ provider: ExternalProvider.THE_TVDB, providerEntityKind: ProviderEntityKind.MOVIE, value: tvdbVal }] },
+        externalIds: {
+          create: [
+            {
+              provider: ExternalProvider.THE_TVDB,
+              providerEntityKind: ProviderEntityKind.MOVIE,
+              value: tvdbVal,
+            },
+          ],
+        },
       },
     });
     return created.id;
@@ -379,7 +486,7 @@ export class MediaMetadataService {
         externalIds: { select: { provider: true, value: true } },
       },
     });
-    const missing = rows.filter((m) => !((m.titles as any)?.[lang]));
+    const missing = rows.filter((m) => !(m.titles as any)?.[lang]);
     const toFetch = missing.slice(0, 100); // bound TMDb calls per request (TMDb paces starts at ~40rps)
     await Promise.all(
       toFetch.map(async (m) => {
@@ -397,7 +504,12 @@ export class MediaMetadataService {
               titles: mergeLocalized(titles, lang, base.title, undefined),
               overviews: mergeLocalized(m.overviews as any, lang, base.overview, undefined),
               posterUrls: mergeLocalized(m.posterUrls as any, lang, base.posterUrl, undefined),
-              backdropUrls: mergeLocalized(m.backdropUrls as any, lang, base.backdropUrl, undefined),
+              backdropUrls: mergeLocalized(
+                m.backdropUrls as any,
+                lang,
+                base.backdropUrl,
+                undefined,
+              ),
             },
           });
         } catch {
@@ -426,7 +538,11 @@ export class MediaMetadataService {
         season: {
           select: {
             number: true,
-            show: { select: { media: { select: { externalIds: { select: { provider: true, value: true } } } } } },
+            show: {
+              select: {
+                media: { select: { externalIds: { select: { provider: true, value: true } } } },
+              },
+            },
           },
         },
       },
@@ -435,7 +551,9 @@ export class MediaMetadataService {
     const toFetch = missing.slice(0, 100); // bound TMDb calls per request (TMDb paces starts at ~40rps)
     await Promise.all(
       toFetch.map(async (ep) => {
-        const tmdb = ep.season.show.media.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
+        const tmdb = ep.season.show.media.externalIds.find(
+          (e) => e.provider === ExternalProvider.TMDB,
+        );
         if (!tmdb) return;
         try {
           const base = await this.tmdb.localizedEpisodeBase(
@@ -462,13 +580,21 @@ export class MediaMetadataService {
   // ---- Full show/movie hydration ----
   /** A media row needs a full refresh when missing or older than 24h. */
   private isStale(existing: { metadataRefreshedAt?: Date | null } | null): boolean {
-    return !existing || !existing.metadataRefreshedAt || Date.now() - existing.metadataRefreshedAt.getTime() > DAY_MS;
+    return (
+      !existing ||
+      !existing.metadataRefreshedAt ||
+      Date.now() - existing.metadataRefreshedAt.getTime() > DAY_MS
+    );
   }
 
   async ensureShowFull(tmdbId: number, userId?: string): Promise<string> {
     const lang = currentLanguage();
     const tmdbVal = String(tmdbId);
-    const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal, ProviderEntityKind.SERIES);
+    const existing = await this.findMediaByExternal(
+      ExternalProvider.TMDB,
+      tmdbVal,
+      ProviderEntityKind.SERIES,
+    );
     let mediaId: string;
     let externals: { provider: ExternalProvider; value: string }[] = [];
     if (this.isStale(existing)) {
@@ -476,7 +602,13 @@ export class MediaMetadataService {
       // English; show-level locales come from the translations payload — no second fetch.
       const enData = await this.tmdb.getShow(tmdbId, 'en-US');
       externals = enData.externals;
-      mediaId = await this.persistShow(enData, existing?.id, 'en', undefined, ExternalProvider.TMDB);
+      mediaId = await this.persistShow(
+        enData,
+        existing?.id,
+        'en',
+        undefined,
+        ExternalProvider.TMDB,
+      );
       if (lang !== 'en') {
         // Request-locale overrides (top-level + season/episode text) — same flow as before.
         const data = await this.tmdb.getShow(tmdbId, lang);
@@ -504,11 +636,19 @@ export class MediaMetadataService {
     return mediaId;
   }
 
-  async ensureShowFullTvdb(tvdbId: number, userId?: string, opts?: { skipClassification?: boolean }): Promise<string> {
+  async ensureShowFullTvdb(
+    tvdbId: number,
+    userId?: string,
+    opts?: { skipClassification?: boolean },
+  ): Promise<string> {
     const lang = currentLanguage();
     const data = await this.tvdb.getShow(tvdbId, lang); // pass locale → episodes get correct language
     const tvdbVal = String(tvdbId);
-    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal, ProviderEntityKind.SERIES);
+    const existing = await this.findMediaByExternal(
+      ExternalProvider.THE_TVDB,
+      tvdbVal,
+      ProviderEntityKind.SERIES,
+    );
     let mediaId: string;
     if (this.isStale(existing)) {
       const enData = lang !== 'en' ? await this.tvdb.getShow(tvdbId, 'en') : undefined;
@@ -537,7 +677,11 @@ export class MediaMetadataService {
     const lang = currentLanguage();
     const data = await this.tvdb.getMovie(tvdbId, lang);
     const tvdbVal = String(tvdbId);
-    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal, ProviderEntityKind.MOVIE);
+    const existing = await this.findMediaByExternal(
+      ExternalProvider.THE_TVDB,
+      tvdbVal,
+      ProviderEntityKind.MOVIE,
+    );
     let mediaId: string;
     if (this.isStale(existing)) {
       // No second call needed: data.translations already has ALL locales (including English).
@@ -578,7 +722,12 @@ export class MediaMetadataService {
             titles: mergeLocalized(media.titles as any, lang, data.title, undefined),
             overviews: mergeLocalized(media.overviews as any, lang, data.overview, undefined),
             posterUrls: mergeLocalized(media.posterUrls as any, lang, data.posterUrl, undefined),
-            backdropUrls: mergeLocalized(media.backdropUrls as any, lang, data.backdropUrl, undefined),
+            backdropUrls: mergeLocalized(
+              media.backdropUrls as any,
+              lang,
+              data.backdropUrl,
+              undefined,
+            ),
           },
         });
       }
@@ -594,7 +743,9 @@ export class MediaMetadataService {
           titles: true,
           overviews: true,
           posterUrls: true,
-          episodes: { select: { id: true, number: true, titles: true, overviews: true, stillUrls: true } },
+          episodes: {
+            select: { id: true, number: true, titles: true, overviews: true, stillUrls: true },
+          },
         },
       });
       const seasonMap = new Map(existingSeasons.map((s) => [s.number, s]));
@@ -626,7 +777,10 @@ export class MediaMetadataService {
     });
   }
 
-  private async enrichAirtimes(mediaId: string, externals: { provider: ExternalProvider; value: string }[]) {
+  private async enrichAirtimes(
+    mediaId: string,
+    externals: { provider: ExternalProvider; value: string }[],
+  ) {
     if (!this.tvmaze.enabled) return;
     const tvdb = externals.find((e) => e.provider === ExternalProvider.THE_TVDB)?.value;
     const imdb = externals.find((e) => e.provider === ExternalProvider.IMDB)?.value;
@@ -683,7 +837,11 @@ export class MediaMetadataService {
   async ensureMovieFull(tmdbId: number): Promise<string> {
     const lang = currentLanguage();
     const tmdbVal = String(tmdbId);
-    const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal, ProviderEntityKind.MOVIE);
+    const existing = await this.findMediaByExternal(
+      ExternalProvider.TMDB,
+      tmdbVal,
+      ProviderEntityKind.MOVIE,
+    );
     let mediaId: string;
     if (this.isStale(existing)) {
       // ONE English call — base + all show-level locales via the translations payload.
@@ -718,13 +876,22 @@ export class MediaMetadataService {
       let prev = existingId
         ? await tx.mediaItem.findUnique({
             where: { id: existingId },
-            select: { titles: true, overviews: true, posterUrls: true, backdropUrls: true, titleLocale: true, type: true },
+            select: {
+              titles: true,
+              overviews: true,
+              posterUrls: true,
+              backdropUrls: true,
+              titleLocale: true,
+              type: true,
+            },
           })
         : null;
       // Cross-type guard: series data must NEVER merge into a MOVIE row (TMDB/TVDB use
       // separate movie/series id namespaces — a shared number is a different entity).
       if (prev && prev.type !== MediaType.SHOW) {
-        this.logger.warn(`persistShow: refusing to merge series into ${prev.type} row ${existingId} — creating a new show row`);
+        this.logger.warn(
+          `persistShow: refusing to merge series into ${prev.type} row ${existingId} — creating a new show row`,
+        );
         existingId = undefined;
         prev = null;
       }
@@ -756,8 +923,18 @@ export class MediaMetadataService {
         titleLocale: enData ? 'en' : (prev?.titleLocale ?? lang),
         titles,
         overviews,
-        posterUrls: mergeLocalized(prev?.posterUrls as any, lang, data.posterUrl, enData?.posterUrl),
-        backdropUrls: mergeLocalized(prev?.backdropUrls as any, lang, data.backdropUrl, enData?.backdropUrl),
+        posterUrls: mergeLocalized(
+          prev?.posterUrls as any,
+          lang,
+          data.posterUrl,
+          enData?.posterUrl,
+        ),
+        backdropUrls: mergeLocalized(
+          prev?.backdropUrls as any,
+          lang,
+          data.backdropUrl,
+          enData?.backdropUrl,
+        ),
       };
 
       let mediaId = existingId;
@@ -778,8 +955,19 @@ export class MediaMetadataService {
       // upsert externals (in case new ones appeared)
       for (const e of data.externals) {
         await tx.externalId.upsert({
-          where: { provider_providerEntityKind_value: { provider: e.provider, providerEntityKind: ProviderEntityKind.SERIES, value: e.value } },
-          create: { mediaId: mediaId!, provider: e.provider, providerEntityKind: ProviderEntityKind.SERIES, value: e.value },
+          where: {
+            provider_providerEntityKind_value: {
+              provider: e.provider,
+              providerEntityKind: ProviderEntityKind.SERIES,
+              value: e.value,
+            },
+          },
+          create: {
+            mediaId: mediaId!,
+            provider: e.provider,
+            providerEntityKind: ProviderEntityKind.SERIES,
+            value: e.value,
+          },
           update: {},
         });
       }
@@ -811,7 +999,9 @@ export class MediaMetadataService {
           episodesCount: data.episodesCount,
           inProduction: data.inProduction,
           // Only TMDB supplies origin evidence — preserve existing values on TVDB refreshes.
-          ...(data.originalLanguage !== undefined ? { originalLanguage: data.originalLanguage } : {}),
+          ...(data.originalLanguage !== undefined
+            ? { originalLanguage: data.originalLanguage }
+            : {}),
           ...(data.originalTitle !== undefined ? { originalTitle: data.originalTitle } : {}),
           ...(data.originCountries !== undefined ? { originCountries: data.originCountries } : {}),
           // TVDB supplies no keywords — never clobber TMDB-persisted ones.
@@ -822,7 +1012,14 @@ export class MediaMetadataService {
       await this.syncGenres(tx, mediaId!, genres);
       await this.syncProviders(tx, mediaId!, providers);
       await this.syncCast(tx, mediaId!, castMembers, data.cast, lang, enData?.cast);
-      await this.syncSeasons(tx, mediaId!, data.seasons, lang, enData?.seasons, episodeExternalProvider);
+      await this.syncSeasons(
+        tx,
+        mediaId!,
+        data.seasons,
+        lang,
+        enData?.seasons,
+        episodeExternalProvider,
+      );
 
       return mediaId!;
     });
@@ -830,7 +1027,9 @@ export class MediaMetadataService {
     if (data.reviews && this.externalReviews) {
       await this.externalReviews
         .syncMediaReviews(mediaId!, data.reviews)
-        .catch((e) => this.logger.debug(`Review sync skipped for ${mediaId}: ${(e as Error).message}`));
+        .catch((e) =>
+          this.logger.debug(`Review sync skipped for ${mediaId}: ${(e as Error).message}`),
+        );
     }
     return mediaId!;
   }
@@ -845,12 +1044,21 @@ export class MediaMetadataService {
       let prev = existingId
         ? await tx.mediaItem.findUnique({
             where: { id: existingId },
-            select: { titles: true, overviews: true, posterUrls: true, backdropUrls: true, titleLocale: true, type: true },
+            select: {
+              titles: true,
+              overviews: true,
+              posterUrls: true,
+              backdropUrls: true,
+              titleLocale: true,
+              type: true,
+            },
           })
         : null;
       // Cross-type guard (mirror of persistShow): movie data must NEVER merge into a SHOW row.
       if (prev && prev.type !== MediaType.MOVIE) {
-        this.logger.warn(`persistMovie: refusing to merge movie into ${prev.type} row ${existingId} — creating a new movie row`);
+        this.logger.warn(
+          `persistMovie: refusing to merge movie into ${prev.type} row ${existingId} — creating a new movie row`,
+        );
         existingId = undefined;
         prev = null;
       }
@@ -881,8 +1089,18 @@ export class MediaMetadataService {
         titleLocale: enData ? 'en' : (prev?.titleLocale ?? lang),
         titles,
         overviews,
-        posterUrls: mergeLocalized(prev?.posterUrls as any, lang, data.posterUrl, enData?.posterUrl),
-        backdropUrls: mergeLocalized(prev?.backdropUrls as any, lang, data.backdropUrl, enData?.backdropUrl),
+        posterUrls: mergeLocalized(
+          prev?.posterUrls as any,
+          lang,
+          data.posterUrl,
+          enData?.posterUrl,
+        ),
+        backdropUrls: mergeLocalized(
+          prev?.backdropUrls as any,
+          lang,
+          data.backdropUrl,
+          enData?.backdropUrl,
+        ),
       };
 
       let mediaId = existingId;
@@ -902,8 +1120,19 @@ export class MediaMetadataService {
       // Upsert externals (conflict-safe: a parked id on another row is left in place).
       for (const e of data.externals) {
         await tx.externalId.upsert({
-          where: { provider_providerEntityKind_value: { provider: e.provider, providerEntityKind: ProviderEntityKind.MOVIE, value: e.value } },
-          create: { mediaId: mediaId!, provider: e.provider, providerEntityKind: ProviderEntityKind.MOVIE, value: e.value },
+          where: {
+            provider_providerEntityKind_value: {
+              provider: e.provider,
+              providerEntityKind: ProviderEntityKind.MOVIE,
+              value: e.value,
+            },
+          },
+          create: {
+            mediaId: mediaId!,
+            provider: e.provider,
+            providerEntityKind: ProviderEntityKind.MOVIE,
+            value: e.value,
+          },
           update: {},
         });
       }
@@ -939,7 +1168,9 @@ export class MediaMetadataService {
     if (data.reviews && this.externalReviews) {
       await this.externalReviews
         .syncMediaReviews(mediaId!, data.reviews)
-        .catch((e) => this.logger.debug(`Review sync skipped for ${mediaId}: ${(e as Error).message}`));
+        .catch((e) =>
+          this.logger.debug(`Review sync skipped for ${mediaId}: ${(e as Error).message}`),
+        );
     }
     return mediaId!;
   }
@@ -956,7 +1187,10 @@ export class MediaMetadataService {
         ? {
             watchlist: { where: { userId }, select: { id: true } },
             favorites: { where: { userId }, select: { id: true } },
-            showStatuses: { where: { userId }, select: { id: true, watchedCount: true, totalCount: true } },
+            showStatuses: {
+              where: { userId },
+              select: { id: true, watchedCount: true, totalCount: true },
+            },
           }
         : {}),
     } as const;
@@ -1002,7 +1236,11 @@ export class MediaMetadataService {
       const now = new Date();
       const [watchedEp, totalEp] = await Promise.all([
         this.prisma.userEpisodeStatus.count({
-          where: { userId, watched: true, episode: { season: { show: { mediaId }, isSpecial: false } } },
+          where: {
+            userId,
+            watched: true,
+            episode: { season: { show: { mediaId }, isSpecial: false } },
+          },
         }),
         this.prisma.episode.count({
           where: {
@@ -1025,7 +1263,13 @@ export class MediaMetadataService {
     // every user rating row ever cast on it (thousands of rows) to average in JS,
     // on every show-detail view.
     const eps = await this.prisma.$queryRaw<
-      { number: number; seasonNumber: number; tmdbRating: number | null; votes: number; avg: number | null }[]
+      {
+        number: number;
+        seasonNumber: number;
+        tmdbRating: number | null;
+        votes: number;
+        avg: number | null;
+      }[]
     >`
       SELECT e.number, s.number AS "seasonNumber", e.rating AS "tmdbRating",
              COUNT(r.id)::int AS votes, AVG(r.rating)::float AS avg
@@ -1071,16 +1315,21 @@ export class MediaMetadataService {
               include: {
                 episodes: {
                   orderBy: { number: 'asc' },
-                      ...(userId
-                        ? {
-                            include: {
-                              userStatuses: {
-                                where: { userId },
-                                select: { watched: true, watchedAt: true, device: true, watchCount: true },
-                              },
+                  ...(userId
+                    ? {
+                        include: {
+                          userStatuses: {
+                            where: { userId },
+                            select: {
+                              watched: true,
+                              watchedAt: true,
+                              device: true,
+                              watchCount: true,
                             },
-                          }
-                        : {}),
+                          },
+                        },
+                      }
+                    : {}),
                 },
               },
             },
@@ -1105,7 +1354,10 @@ export class MediaMetadataService {
           ? {
               watchlist: { where: { userId }, select: { id: true } },
               favorites: { where: { userId }, select: { id: true } },
-              movieStatuses: { where: { userId }, select: { id: true, watched: true, watchedAt: true } },
+              movieStatuses: {
+                where: { userId },
+                select: { id: true, watched: true, watchedAt: true },
+              },
             }
           : {}),
       },
@@ -1185,8 +1437,18 @@ export class MediaMetadataService {
         const enE = enS?.episodes.find((ee) => ee.number === e.number);
         const prevEp = epMap.get(e.number);
         const epTitles = mergeLocalized(prevEp?.titles as any, lang, e.title, enE?.title);
-        const epOverviews = mergeLocalized(prevEp?.overviews as any, lang, e.overview, enE?.overview);
-        const epStillUrls = mergeLocalized(prevEp?.stillUrls as any, lang, e.stillUrl, enE?.stillUrl);
+        const epOverviews = mergeLocalized(
+          prevEp?.overviews as any,
+          lang,
+          e.overview,
+          enE?.overview,
+        );
+        const epStillUrls = mergeLocalized(
+          prevEp?.stillUrls as any,
+          lang,
+          e.stillUrl,
+          enE?.stillUrl,
+        );
         const ep = await tx.episode.upsert({
           where: { seasonId_number: { seasonId: season.id, number: e.number } },
           create: {
@@ -1227,15 +1489,28 @@ export class MediaMetadataService {
   }
 
   /** Persist one episode-level external id (best-effort; repoints on provider+value conflicts). */
-  private async syncEpisodeExternalId(tx: PrismaTransaction, episodeId: string, provider: ExternalProvider, value: string) {
+  private async syncEpisodeExternalId(
+    tx: PrismaTransaction,
+    episodeId: string,
+    provider: ExternalProvider,
+    value: string,
+  ) {
     try {
       await tx.episodeExternalId.upsert({
-        where: { provider_providerEntityKind_value: { provider, providerEntityKind: ProviderEntityKind.EPISODE, value } },
+        where: {
+          provider_providerEntityKind_value: {
+            provider,
+            providerEntityKind: ProviderEntityKind.EPISODE,
+            value,
+          },
+        },
         create: { episodeId, provider, providerEntityKind: ProviderEntityKind.EPISODE, value },
         update: { episodeId },
       });
     } catch (e) {
-      this.logger.debug(`episodeExternalId upsert failed for ${provider}:${value}: ${(e as Error).message}`);
+      this.logger.debug(
+        `episodeExternalId upsert failed for ${provider}:${value}: ${(e as Error).message}`,
+      );
     }
   }
 
@@ -1267,7 +1542,9 @@ export class MediaMetadataService {
         // the same order for every locale, so the English name lines up by index.
         (enGenres && enGenres.length === genres.length ? enGenres[index]?.name : undefined);
       const slug = slugify(enName ?? g.name);
-      const existing = await tx.genre.findUnique({ where: { slug }, select: { names: true } }).catch(() => null);
+      const existing = await tx.genre
+        .findUnique({ where: { slug }, select: { names: true } })
+        .catch(() => null);
       const names = mergeLocalized((existing?.names as any) ?? null, lang, g.name, enName);
       const genre = await tx.genre.upsert({
         where: { slug },
@@ -1279,7 +1556,10 @@ export class MediaMetadataService {
     return ids;
   }
 
-  private async upsertProviders(tx: PrismaTransaction, providers: { name: string; logoUrl?: string | null }[]) {
+  private async upsertProviders(
+    tx: PrismaTransaction,
+    providers: { name: string; logoUrl?: string | null }[],
+  ) {
     const ids: string[] = [];
     for (const p of providers) {
       const provider = await tx.watchProvider.upsert({
@@ -1292,7 +1572,10 @@ export class MediaMetadataService {
     return ids;
   }
 
-  private async upsertCast(tx: PrismaTransaction, cast: { tmdbPersonId: number; name: string; profileUrl?: string | null }[]) {
+  private async upsertCast(
+    tx: PrismaTransaction,
+    cast: { tmdbPersonId: number; name: string; profileUrl?: string | null }[],
+  ) {
     const map = new Map<string, { name: string; profileUrl?: string | null }>();
     for (const c of cast) {
       map.set(`TMDB_${c.tmdbPersonId}`, { name: c.name, profileUrl: c.profileUrl });
@@ -1333,9 +1616,19 @@ export class MediaMetadataService {
     tx: PrismaTransaction,
     mediaId: string,
     castMemberIds: string[],
-    cast: { tmdbPersonId?: number; character?: string | null; characterExternalId?: number | null; order: number }[],
+    cast: {
+      tmdbPersonId?: number;
+      character?: string | null;
+      characterExternalId?: number | null;
+      order: number;
+    }[],
     lang: string = currentLanguage(),
-    enCast?: { tmdbPersonId?: number; character?: string | null; characterExternalId?: number | null; order: number }[],
+    enCast?: {
+      tmdbPersonId?: number;
+      character?: string | null;
+      characterExternalId?: number | null;
+      order: number;
+    }[],
   ) {
     // Preserve other locales' characters: read existing JSON before recreating rows.
     const existing = await tx.mediaCast.findMany({
@@ -1347,7 +1640,9 @@ export class MediaMetadataService {
     for (let i = 0; i < castMemberIds.length; i++) {
       const id = castMemberIds[i];
       const c = cast[i];
-      const enChar = enCast?.find((e) => e.tmdbPersonId != null && e.tmdbPersonId === c?.tmdbPersonId)?.character;
+      const enChar = enCast?.find(
+        (e) => e.tmdbPersonId != null && e.tmdbPersonId === c?.tmdbPersonId,
+      )?.character;
       const characters = mergeLocalized(existingMap.get(id) ?? null, lang, c?.character, enChar);
       await tx.mediaCast.create({
         data: {
