@@ -142,13 +142,14 @@ export class MetadataBackfillService {
           GROUP BY media_id, provider_entity_kind
           HAVING count(*) > 1
         ) x`,
-      // Rows without a trusted ENGLISH base slot: base explicitly non-English, or the
-      // 'en' override is missing. Re-hydration with an English base heals them (and
-      // overwrites any wrong-language value in the 'en' slot).
+      // Rows EXPLICITLY marked as non-English base (title_locale set and != 'en') — the
+      // only cheap SQL signal for wrong-language bases. Rows with an UNSET marker are
+      // not counted (most have a fine English base title and just predate the overrides
+      // structure). Rows marked 'en' with wrong content are SQL-undetectable; the repair
+      // heals them too when run, but they can't be counted here.
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
-        WHERE m.title_locale IS DISTINCT FROM 'en'
-           OR m.titles->>'en' IS NULL`,
+        WHERE m.title_locale IS NOT NULL AND m.title_locale != 'en'`,
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     return {
@@ -1053,7 +1054,7 @@ export class MetadataBackfillService {
     try {
       const candidates = await this.prisma.mediaItem.findMany({
         where: {
-          OR: [{ titleLocale: { not: 'en' } }, { titleLocale: null }],
+          AND: [{ titleLocale: { not: 'en' } }, { titleLocale: { not: null } }],
           externalIds: { some: {} },
         },
         orderBy: { id: 'asc' },
@@ -1062,9 +1063,28 @@ export class MetadataBackfillService {
           id: true,
           title: true,
           type: true,
+          contentClassification: true,
+          show: { select: { keywords: true } },
+          movie: { select: { keywords: true } },
           externalIds: { select: { provider: true, value: true, providerEntityKind: true } },
+          genres: { select: { genre: { select: { slug: true, name: true } } } },
         },
       });
+
+      // Anime routing — the app's REAL signals, not a genre guess:
+      // 1) the classifier's persisted verdict (Kitsu/Jikan/TMDB-keyword matched),
+      // 2) the TMDB `anime` keyword (id 210024 — decisive, persisted by hydration),
+      // 3) the Animation genre as the weakest fallback.
+      const isAnime = (m: (typeof candidates)[number]) => {
+        if (m.contentClassification === 'ANIME') return true;
+        const kw = ((m.show?.keywords ?? m.movie?.keywords ?? []) as string[]).map((k) =>
+          String(k).toLowerCase(),
+        );
+        if (kw.includes('anime')) return true;
+        return m.genres.some(
+          (g) => g.genre.slug === 'animation' || g.genre.name.toLowerCase() === 'animation',
+        );
+      };
 
       let succeeded = 0;
       let failed = 0;
@@ -1081,7 +1101,18 @@ export class MetadataBackfillService {
             (e) => e.provider === 'TMDB' && e.providerEntityKind !== 'EPISODE',
           );
           const tvdbExt = m.externalIds.find((e) => e.provider === 'THE_TVDB');
-          if (tmdbExt) {
+          // Source rules: ANIME (classifier verdict / anime keyword / Animation genre) is
+          // TVDB-authoritative (TMDB anime structures are wrong; it never refreshes from
+          // TMDB). Everything else is TMDB-first, TVDB fallback for TVDB-only rows.
+          if (isAnime(m)) {
+            if (tvdbExt) {
+              await this.meta.ensureShowFullTvdb(Number(tvdbExt.value));
+            } else {
+              // No TVDB id yet: the anime repair resolves it (cross-id → strict title+year),
+              // force-hydrates from TVDB and remaps the structure.
+              await this.fixAnimeShowFromTvdb(m.id);
+            }
+          } else if (tmdbExt) {
             if (m.type === 'SHOW') await this.meta.ensureShowFull(Number(tmdbExt.value));
             else await this.meta.ensureMovieFull(Number(tmdbExt.value));
           } else if (tvdbExt) {

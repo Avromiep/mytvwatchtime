@@ -42,7 +42,7 @@ const STAT_HINTS: Record<string, string> = {
   multiTvdbIds:
     'Rows carrying more than one TVDB id — merge leftovers (harmless) or id poisoning from an old bug (one id belongs to a DIFFERENT show, mis-routing matches). Repair verifies each id via TMDB and detaches only the wrong ones. User history is never deleted.',
   nonEnglishBase:
-    "Rows whose base title/overview was written in a non-English language (older contamination — that's why English users see foreign titles). Repair re-hydrates them with a proper English base and restores the 'en' override. No user data touched.",
+    "Rows explicitly marked as having a non-English base title (title_locale ≠ en). Repair re-hydrates them with a proper English base and restores the 'en' override. Rows with an unset marker are NOT counted (most have a fine English base already). No user data touched.",
 };
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {

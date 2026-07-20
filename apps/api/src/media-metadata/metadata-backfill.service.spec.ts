@@ -85,6 +85,7 @@ describe('MetadataBackfillService.repairNonEnglishBase', () => {
     title: 'Chirurgové',
     type: 'SHOW',
     externalIds: [{ provider: 'TMDB', value: '1416', providerEntityKind: 'SERIES' }],
+    genres: [],
     ...over,
   });
 
@@ -99,6 +100,68 @@ describe('MetadataBackfillService.repairNonEnglishBase', () => {
     expect(res).toEqual(
       expect.objectContaining({ processed: 1, succeeded: 1, failed: 0, sample: ['Chirurgové'] }),
     );
+  });
+
+  it('animation rows are TVDB-authoritative (never TMDB), with the anime repair as id fallback', async () => {
+    const anime = (over: Record<string, any> = {}) =>
+      row({
+        genres: [{ genre: { slug: 'animation', name: 'Animation' } }],
+        ...over,
+      });
+    const { service, meta } = make([
+      anime({
+        id: 'a1',
+        externalIds: [
+          { provider: 'TMDB', value: '1416', providerEntityKind: 'SERIES' },
+          { provider: 'THE_TVDB', value: '789', providerEntityKind: 'SERIES' },
+        ],
+      }),
+      anime({
+        id: 'a2',
+        externalIds: [{ provider: 'TMDB', value: '65942', providerEntityKind: 'SERIES' }],
+      }),
+    ]);
+    const animeFix = jest
+      .spyOn(service as any, 'fixAnimeShowFromTvdb')
+      .mockResolvedValue(undefined as any);
+
+    await service.repairNonEnglishBase();
+
+    // Both ids present → TVDB wins over TMDB.
+    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
+    expect(meta.ensureShowFull).not.toHaveBeenCalled();
+    // No TVDB id → the anime repair resolves it instead of using TMDB.
+    expect(animeFix).toHaveBeenCalledWith('a2');
+  });
+
+  it('anime routing uses the REAL signals: classification verdict and the anime keyword (not just genre)', async () => {
+    const { service, meta } = make([
+      // Classified ANIME — TVDB wins even without the Animation genre.
+      row({
+        id: 'c1',
+        contentClassification: 'ANIME',
+        genres: [],
+        externalIds: [
+          { provider: 'TMDB', value: '1', providerEntityKind: 'SERIES' },
+          { provider: 'THE_TVDB', value: '305089', providerEntityKind: 'SERIES' },
+        ],
+      }),
+      // anime keyword persisted — TVDB wins too.
+      row({
+        id: 'c2',
+        show: { keywords: ['anime', 'isekai'] },
+        genres: [],
+        externalIds: [
+          { provider: 'TMDB', value: '2', providerEntityKind: 'SERIES' },
+          { provider: 'THE_TVDB', value: '305089', providerEntityKind: 'SERIES' },
+        ],
+      }),
+    ]);
+
+    await service.repairNonEnglishBase();
+
+    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(305089);
+    expect(meta.ensureShowFull).not.toHaveBeenCalled();
   });
 
   it('falls back to TVDB for TVDB-only rows (movie path for movies)', async () => {
