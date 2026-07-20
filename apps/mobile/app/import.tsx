@@ -252,9 +252,31 @@ export default function ImportScreen() {
 
   // READY_FOR_REVIEW
   const imp = importQ.data;
+  const processingDuration = formatImportDuration(imp?.createdAt, imp?.processedAt);
+  const totals = imp?.importTotals;
+  const totalsParts: string[] = [];
+  if (processingDuration)
+    totalsParts.push(t('import:succeededIn', { duration: processingDuration }));
+  if (totals) {
+    if (totals.shows) totalsParts.push(`${totals.shows} ${t('import:shows').toLowerCase()}`);
+    if (totals.movies) totalsParts.push(`${totals.movies} ${t('import:movies').toLowerCase()}`);
+    if (totals.lists) totalsParts.push(`${totals.lists} ${t('import:lists').toLowerCase()}`);
+    if (totals.comments)
+      totalsParts.push(`${totals.comments} ${t('import:comments').toLowerCase()}`);
+    if (totals.reactions)
+      totalsParts.push(`${totals.reactions} ${t('import:emotions').toLowerCase()}`);
+    if (totals.ratings) totalsParts.push(`${totals.ratings} ${t('import:ratings').toLowerCase()}`);
+    if (totals.characterVotes)
+      totalsParts.push(`${totals.characterVotes} ${t('import:characterVotes').toLowerCase()}`);
+  }
   return (
     <Screen>
       <Header title={t('import:reviewImport')} showBack />
+      {totalsParts.length ? (
+        <T variant="micro" muted style={styles.durationLine}>
+          {totalsParts.join(' · ')}
+        </T>
+      ) : null}
       <View style={styles.summary}>
         <Stat label={t('import:matched')} value={imp?.matchedCount} color={tokens.watched} />
         <Stat label={t('import:needsReview')} value={imp?.needsReviewCount} color={tokens.orange} />
@@ -307,6 +329,21 @@ function Stat({ label, value, color }: { label: string; value?: number; color: s
       </T>
     </View>
   );
+}
+
+/** Compact processing duration: "45s" · "2m 45s" · "1h 12m". */
+function formatImportDuration(createdAt?: string, processedAt?: string): string | null {
+  if (!createdAt || !processedAt) return null;
+  const ms = new Date(processedAt).getTime() - new Date(createdAt).getTime();
+  if (!(ms > 0)) return null;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return rs ? `${m}m ${rs}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm ? `${h}h ${rm}m` : `${h}h`;
 }
 
 function ReviewItems({
@@ -871,6 +908,11 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
   },
   row: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm },
+  durationLine: {
+    textAlign: 'left',
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.xs,
+  },
   fab: {
     position: 'absolute',
     right: spacing.lg,

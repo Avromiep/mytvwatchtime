@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Pressable, View } from 'react-native';
 import { router } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import type { CommentDto, ExternalReviewDto } from '@tvwatch/shared';
+import type { CommentDto } from '@tvwatch/shared';
 import { Header } from '../Header';
 import { EmptyState, Screen, Spinner, T } from '../primitives';
 import { SortBar } from './SortBar';
@@ -15,9 +15,9 @@ import {
   useCommentsFeed,
   useMe,
   useToggleCommentLike,
+  useToggleExternalReviewLike,
   type CommentSortMode,
 } from '../../api/hooks';
-import { ExternalReviewCard } from './ExternalReviewCard';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { spacing } from '../../theme/theme';
 import { showError } from '../../lib/dialog';
@@ -37,29 +37,38 @@ export function CommentsFeed({
 
   const [sort, setSort] = useState<CommentSortMode>('LATEST');
   const [editing, setEditing] = useState<CommentDto | null>(null);
-  // TMDB review currently being replied to (review acts as the parent post).
-  const [reviewReply, setReviewReply] = useState<ExternalReviewDto | null>(null);
 
   const { data: me } = useMe();
   const currentUserId = me?.id;
   const feed = useCommentsFeed({ threadType, threadId, sort, polling: true });
   const like = useToggleCommentLike();
+  const reviewLike = useToggleExternalReviewLike();
   const { openOverflow } = useCommentActions({ onEdit: setEditing });
 
   const items: CommentDto[] = feed.data?.pages.flatMap((p) => p.items) ?? [];
   const total = feed.data?.pages[0]?.total ?? 0;
-  const externalReviews = feed.data?.pages[0]?.externalReviews ?? [];
   const isFetchingNextPage = feed.isFetchingNextPage;
 
-  const openThread = (c: CommentDto) => router.push(`/comment/${c.id}` as any);
+  // Reviews are first-class thread roots: they open their own thread page and like
+  // through the review endpoint; everything else behaves like a normal comment card.
+  const openThread = (c: CommentDto) =>
+    c.kind === 'review'
+      ? router.push(`/review/${c.reviewId}` as any)
+      : router.push(`/comment/${c.id}` as any);
+  const handleLike = (c: CommentDto) =>
+    c.kind === 'review'
+      ? reviewLike.mutate({ reviewId: c.reviewId!, liked: c.likedByMe })
+      : like.mutate({ commentId: c.id, liked: c.likedByMe });
   const openAuthor = (c: CommentDto) =>
-    c.author?.username && router.push(`/user/${encodeURIComponent(c.author.username)}` as any);
+    c.kind !== 'review' &&
+    c.author?.username &&
+    router.push(`/user/${encodeURIComponent(c.author.username)}` as any);
 
   const renderItem = ({ item }: { item: CommentDto }) => (
     <CommentCard
       comment={item}
       isOwner={item.author?.id === currentUserId}
-      onLike={(c) => like.mutate({ commentId: c.id, liked: c.likedByMe })}
+      onLike={handleLike}
       onOpenThread={openThread}
       onOverflow={(c) => openOverflow(c, c.author?.id === currentUserId)}
       onPressAuthor={openAuthor}
@@ -121,29 +130,17 @@ export function CommentsFeed({
                 />
               }
               ListFooterComponent={
-                <View>
-                  {isFetchingNextPage ? (
-                    <View style={{ paddingVertical: spacing.md, alignItems: 'center' }}>
-                      <T variant="micro" muted>
-                        {t('comments:loadingMore')}
-                      </T>
-                    </View>
-                  ) : items.length > 0 && !feed.hasNextPage ? (
-                    <T variant="micro" muted style={{ textAlign: 'center', marginTop: spacing.md }}>
-                      {t('comments:reachedEnd')}
+                isFetchingNextPage ? (
+                  <View style={{ paddingVertical: spacing.md, alignItems: 'center' }}>
+                    <T variant="micro" muted>
+                      {t('comments:loadingMore')}
                     </T>
-                  ) : null}
-                  {externalReviews.length > 0 && (
-                    <View style={{ marginTop: spacing.lg }}>
-                      <T variant="caption" muted style={{ marginBottom: spacing.sm }}>
-                        {t('comments:tmdbReviews')}
-                      </T>
-                      {externalReviews.map((r) => (
-                        <ExternalReviewCard key={r.id} review={r} onReply={setReviewReply} />
-                      ))}
-                    </View>
-                  )}
-                </View>
+                  </View>
+                ) : items.length > 0 && !feed.hasNextPage ? (
+                  <T variant="micro" muted style={{ textAlign: 'center', marginTop: spacing.md }}>
+                    {t('comments:reachedEnd')}
+                  </T>
+                ) : null
               }
               onEndReached={() => {
                 if (feed.hasNextPage && !isFetchingNextPage && !feed.isError)
@@ -163,9 +160,6 @@ export function CommentsFeed({
           threadId={threadId}
           parentId={null}
           placeholder={t('comments:addComment')}
-          reviewTarget={reviewReply}
-          onCancelReviewReply={() => setReviewReply(null)}
-          onSent={() => setReviewReply(null)}
         />
         <CommentEditDialog comment={editing} onClose={() => setEditing(null)} />
       </Screen>

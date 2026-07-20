@@ -60,5 +60,6 @@
     "unmatched": "Tidak cocok",
     "duplicates": "Duplikat"
   },
-  "progressPercent": "{{pct}}%"
+  "progressPercent": "{{pct}}%",
+  "succeededIn": "Berhasil dalam {{duration}}"
 }

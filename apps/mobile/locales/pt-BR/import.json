@@ -60,5 +60,6 @@
     "unmatched": "Sem correspondência",
     "duplicates": "Duplicados"
   },
-  "progressPercent": "{{pct}}%"
+  "progressPercent": "{{pct}}%",
+  "succeededIn": "Concluído em {{duration}}"
 }

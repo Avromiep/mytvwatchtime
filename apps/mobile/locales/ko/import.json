@@ -60,5 +60,6 @@
     "unmatched": "매칭 안 됨",
     "duplicates": "중복"
   },
-  "progressPercent": "{{pct}}%"
+  "progressPercent": "{{pct}}%",
+  "succeededIn": "{{duration}} 만에 완료"
 }

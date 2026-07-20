@@ -94,8 +94,41 @@ export class ImportService {
   }
 
   // ---------------- status / files / items ----------------
-  getStatus(userId: string, importId: string) {
-    return this.prisma.import.findFirst({ where: { id: importId, userId } });
+  async getStatus(userId: string, importId: string) {
+    const imp = await this.prisma.import.findFirst({ where: { id: importId, userId } });
+    if (!imp) return null;
+    // Import-wide totals for the review banner: distinct matched shows/movies (any item
+    // family) + per-family item counts (lists, comments, reactions, ratings, votes).
+    const [mediaCounts, typeGroups] = await Promise.all([
+      this.prisma.$queryRaw<[{ shows: bigint | number; movies: bigint | number }]>`
+        SELECT
+          COUNT(DISTINCT ii.matched_media_id) FILTER (WHERE m.type = 'SHOW') AS shows,
+          COUNT(DISTINCT ii.matched_media_id) FILTER (WHERE m.type = 'MOVIE') AS movies
+        FROM import_items ii
+        JOIN media_items m ON m.id = ii.matched_media_id
+        WHERE ii.import_id = ${importId}
+      `,
+      this.prisma.importItem.groupBy({
+        by: ['sourceEntityType'],
+        where: { importId },
+        _count: { _all: true },
+      }),
+    ]);
+    const byType: Record<string, number> = {};
+    for (const g of typeGroups) byType[g.sourceEntityType] = g._count._all;
+    const sum = (...keys: string[]) => keys.reduce((n, k) => n + (byType[k] ?? 0), 0);
+    return {
+      ...imp,
+      importTotals: {
+        shows: Number(mediaCounts[0]?.shows ?? 0),
+        movies: Number(mediaCounts[0]?.movies ?? 0),
+        lists: byType['LIST'] ?? 0,
+        comments: sum('EPISODE_COMMENT', 'MOVIE_COMMENT', 'SHOW_COMMENT'),
+        reactions: sum('EPISODE_EMOTION', 'MOVIE_EMOTION'),
+        ratings: sum('EPISODE_RATING', 'MOVIE_RATING', 'SHOW_RATING'),
+        characterVotes: byType['EPISODE_CHARACTER_VOTE'] ?? 0,
+      },
+    };
   }
 
   getFiles(userId: string, importId: string) {
@@ -115,6 +148,7 @@ export class ImportService {
     const pageSize = Math.min(opts.pageSize || 50, 200);
     const where: any = { importId };
     if (opts.status) where.status = opts.status.toUpperCase();
+    const entityWhere: any = { ...where };
     if (opts.entity && isNaN(Number(opts.entity))) {
       // Single type or comma-separated group (e.g. "FAVORITE_SHOW,FAVORITE_MOVIE" for the
       // Favorites chip, "LIST,LIST_ITEM" for the Lists chip in the review UI).
@@ -125,7 +159,7 @@ export class ImportService {
       if (types.length === 1) where.sourceEntityType = types[0];
       else if (types.length > 1) where.sourceEntityType = { in: types };
     }
-    const [items, total] = await Promise.all([
+    const [items, total, entityGroups] = await Promise.all([
       this.prisma.importItem.findMany({
         where,
         orderBy: [{ status: 'asc' }, { confidenceScore: 'desc' }],
@@ -133,8 +167,17 @@ export class ImportService {
         take: pageSize,
       }),
       this.prisma.importItem.count({ where }),
+      // Per-entity-type counts under the ACTIVE STATUS filter only (entity filter ignored)
+      // — drives the per-chip counters in the review UI.
+      this.prisma.importItem.groupBy({
+        by: ['sourceEntityType'],
+        where: entityWhere,
+        _count: { _all: true },
+      }),
     ]);
-    return { items, total, page, pageSize };
+    const entityCounts: Record<string, number> = {};
+    for (const g of entityGroups) entityCounts[g.sourceEntityType] = g._count._all;
+    return { items, total, page, pageSize, entityCounts };
   }
 
   async patchItem(

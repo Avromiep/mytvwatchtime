@@ -53,13 +53,17 @@ export function usePushNotifications(enabled: boolean) {
         let token: string;
         try {
           if (projectId) {
-            token = (await Notifications.getExpoPushTokenAsync({ projectId: projectId as any })).data;
+            token = (await Notifications.getExpoPushTokenAsync({ projectId: projectId as any }))
+              .data;
           } else {
             token = (await Notifications.getExpoPushTokenAsync()).data;
           }
         } catch (tokenErr: any) {
           console.error('[PUSH] Token generation FAILED:', tokenErr?.message || tokenErr);
-          showError({ title: 'Push token failed', description: tokenErr?.message || 'Unknown error' });
+          showError({
+            title: 'Push token failed',
+            description: tokenErr?.message || 'Unknown error',
+          });
           return;
         }
 
@@ -68,6 +72,9 @@ export function usePushNotifications(enabled: boolean) {
         const res = await api.post('/devices/register', {
           token,
           platform: Platform.OS === 'ios' ? 'IOS' : 'ANDROID',
+          // Device timezone drives per-user notification scheduling server-side.
+          // Re-registered on every app start, so tz changes and pre-tz users backfill.
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         });
         console.log('[PUSH] Device registered:', JSON.stringify(res));
 

@@ -107,7 +107,12 @@ export class ImportProcessor implements OnModuleInit {
     status: ImportStatus,
     extra: Record<string, unknown> = {},
   ) {
-    await this.prisma.import.update({ where: { id: importId }, data: { status, ...extra } });
+    // Stamps the processing end time once — drives the "Succeeded in X" review banner.
+    const processedAt = status === 'READY_FOR_REVIEW' ? { processedAt: new Date() } : {};
+    await this.prisma.import.update({
+      where: { id: importId },
+      data: { status, ...processedAt, ...extra },
+    });
   }
 
   // Monotonic 0-99 progress per import (100 is set by the terminal stage writes). The guard

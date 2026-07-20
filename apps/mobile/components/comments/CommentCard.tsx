@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -60,6 +60,9 @@ export function CommentCard({
   const openMedia = (media: CommentMediaRefDto) =>
     router.push(`/${media.mediaType === 'SHOW' ? 'show' : 'movie'}/${media.mediaId}` as any);
   const openList = (list: CommentListRefDto) => router.push(`/list/${list.id}` as any);
+  const isReview = comment.kind === 'review';
+  const openReviewSource = () =>
+    comment.reviewUrl && Linking.openURL(comment.reviewUrl).catch(() => undefined);
 
   return (
     <Pressable
@@ -77,7 +80,8 @@ export function CommentCard({
         <Pressable
           onPress={(e) => {
             stop(e);
-            onPressAuthor?.(comment);
+            if (isReview) openReviewSource();
+            else onPressAuthor?.(comment);
           }}
           hitSlop={6}
           accessibilityRole="button"
@@ -95,6 +99,23 @@ export function CommentCard({
             <T variant="caption" style={{ fontWeight: '700', color: tokens.textPrimary }}>
               {author?.username}
             </T>
+            {isReview ? (
+              <Pressable
+                onPress={(e) => {
+                  stop(e);
+                  openReviewSource();
+                }}
+                hitSlop={6}
+                accessibilityRole="link"
+                accessibilityLabel="TMDB"
+                style={styles.reviewBadge}
+              >
+                <T variant="micro" style={styles.reviewBadgeText}>
+                  TMDB
+                </T>
+                <Ionicons name="open-outline" size={10} color="#fff" />
+              </Pressable>
+            ) : null}
             {comment.isEdited && !tombstone ? (
               <T variant="micro" muted style={{ marginLeft: spacing.xs }}>
                 · {t('comments:edited')}
@@ -106,18 +127,20 @@ export function CommentCard({
           </T>
         </View>
 
-        <Pressable
-          onPress={(e) => {
-            stop(e);
-            onOverflow(comment);
-          }}
-          hitSlop={10}
-          style={styles.overflowBtn}
-          accessibilityRole="button"
-          accessibilityLabel={t('common:moreOptions')}
-        >
-          <Ionicons name="ellipsis-horizontal" size={20} color={tokens.textMuted} />
-        </Pressable>
+        {!isReview ? (
+          <Pressable
+            onPress={(e) => {
+              stop(e);
+              onOverflow(comment);
+            }}
+            hitSlop={10}
+            style={styles.overflowBtn}
+            accessibilityRole="button"
+            accessibilityLabel={t('common:moreOptions')}
+          >
+            <Ionicons name="ellipsis-horizontal" size={20} color={tokens.textMuted} />
+          </Pressable>
+        ) : null}
       </View>
 
       {/* Spoiler cover: replaces body + all attachments until the reader taps to reveal */}
@@ -305,6 +328,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  reviewBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    borderRadius: radius.sm,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    marginLeft: spacing.xs,
+    backgroundColor: '#01b4e4',
+  },
+  reviewBadgeText: { color: '#fff', fontWeight: '900', letterSpacing: 0.5, fontSize: 9 },
   mediaCard: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -62,6 +62,15 @@ export interface CommentDto {
   /** Spoiler-flag tally; `isSpoiler` flips at COMMENT_SPOILER_THRESHOLD. */
   spoilerCount: number;
   spoilerReportedByMe: boolean;
+  /** Set when this item is a provider review rendered as a thread root (not a Comment row). */
+  kind?: 'review';
+  provider?: 'TMDB';
+  /** The external_reviews id (likes/thread target) — only when kind === 'review'. */
+  reviewId?: string;
+  /** Canonical provider review URL (badge link). */
+  reviewUrl?: string;
+  /** Provider 1..10 author rating. */
+  reviewRating?: number | null;
   /** True when the author soft-deleted the comment (tombstone): body/attachments are hidden. */
   deletedByUser: boolean;
   /** True when the comment has been edited at least once. */
@@ -89,6 +98,12 @@ export interface ExternalReviewDto {
   createdAt: string;
   /** User replies posted against this review. */
   repliesCount: number;
+  /** Likes from app users (reviews are likeable thread roots). */
+  likesCount: number;
+  likedByMe: boolean;
+  /** The comment thread this review belongs to (for the reply composer). */
+  threadType: 'SHOW' | 'MOVIE' | 'EPISODE';
+  threadId: string;
 }
 
 export interface CommentRepliesQuery extends PaginationQuery {

@@ -60,5 +60,6 @@
     "unmatched": "不一致",
     "duplicates": "重複"
   },
-  "progressPercent": "{{pct}}%"
+  "progressPercent": "{{pct}}%",
+  "succeededIn": "{{duration}} で完了"
 }

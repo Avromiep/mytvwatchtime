@@ -60,5 +60,6 @@
     "unmatched": "Non associés",
     "duplicates": "Doublons"
   },
-  "progressPercent": "{{pct}} %"
+  "progressPercent": "{{pct}} %",
+  "succeededIn": "Réussi en {{duration}}"
 }

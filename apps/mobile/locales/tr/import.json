@@ -60,5 +60,6 @@
     "unmatched": "Eşleşmeyen",
     "duplicates": "Yinelenenler"
   },
-  "progressPercent": "%{{pct}}"
+  "progressPercent": "%{{pct}}",
+  "succeededIn": "{{duration}} içinde tamamlandı"
 }

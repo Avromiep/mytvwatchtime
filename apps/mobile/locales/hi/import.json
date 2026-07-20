@@ -60,5 +60,6 @@
     "unmatched": "मिलान नहीं हुआ",
     "duplicates": "डुप्लिकेट"
   },
-  "progressPercent": "{{pct}}%"
+  "progressPercent": "{{pct}}%",
+  "succeededIn": "{{duration}} में सफल"
 }

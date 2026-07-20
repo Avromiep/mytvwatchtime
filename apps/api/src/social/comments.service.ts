@@ -102,20 +102,28 @@ export class CommentsService {
       ),
     );
 
-    // TMDB reviews for media/episode threads (page 1): lazy-sync — inline when the target
-    // was never synced, background refresh when stale — then serve the stored set.
-    let externalReviews: any[] = [];
+    // TMDB reviews are first-class thread roots in this feed: merge them into the items
+    // stream (page 1 only) after the lazy sync, sorted with the comments.
     const reviewable =
       q.threadType === 'SHOW' || q.threadType === 'MOVIE' || q.threadType === 'EPISODE';
     if (page === 1 && reviewable && this.externalReviews) {
       await this.externalReviews
         .ensureFreshForThread(q.threadType, q.threadId)
         .catch(() => undefined);
-      externalReviews = await this.externalReviews
-        .listForThread(q.threadType, q.threadId)
-        .catch(() => []);
+      const pseudo = await this.reviewPseudoItems(userId, q.threadType, q.threadId);
+      if (pseudo.length) {
+        const merged = [...items, ...pseudo];
+        if (q.resolvedSort === 'MOST_LIKED') {
+          merged.sort((a: any, b: any) => (b.likesCount ?? 0) - (a.likesCount ?? 0));
+        } else {
+          merged.sort(
+            (a: any, b: any) => +new Date(b.createdAt as string) - +new Date(a.createdAt as string),
+          );
+        }
+        return paginate(merged, page, pageSize, total);
+      }
     }
-    return { ...paginate(items, page, pageSize, total), externalReviews };
+    return paginate(items, page, pageSize, total);
   }
 
   async create(userId: string, dto: CreateCommentDto) {
@@ -685,7 +693,146 @@ export class CommentsService {
         spoilerReported.has(r.id),
       ),
     );
-  } /** Map a Prisma comment row (with user + image includes) to the public DTO. */
+  }
+
+  /** Reviews as feed items: pseudo-comments (kind='review') merged into the main feed. */
+  private async reviewPseudoItems(userId: string, threadType: any, threadId: string) {
+    const rows = await this.prisma.externalReview.findMany({
+      where: threadType === 'EPISODE' ? { episodeId: threadId } : { mediaId: threadId },
+      orderBy: { reviewCreatedAt: 'desc' },
+      take: 10,
+    });
+    if (!rows.length) return [];
+    const ids = rows.map((r) => r.id);
+    const [likes, replyCounts] = await Promise.all([
+      this.prisma.externalReviewLike.findMany({
+        where: { userId, externalReviewId: { in: ids } },
+        select: { externalReviewId: true },
+      }),
+      this.prisma.comment.groupBy({
+        by: ['externalReviewId'],
+        where: {
+          externalReviewId: { in: ids },
+          deletedByUser: false,
+          adminDeleted: false,
+          hidden: false,
+        },
+        _count: { _all: true },
+      }),
+    ]);
+    const likedSet = new Set(likes.map((l: any) => l.externalReviewId));
+    const countMap = new Map(replyCounts.map((r: any) => [r.externalReviewId, r._count._all]));
+    return rows.map((r) =>
+      this.toReviewDto(r, threadType, threadId, likedSet.has(r.id), countMap.get(r.id) ?? 0),
+    );
+  }
+
+  /** Map a stored provider review to a feed/thread-root pseudo-comment DTO. */
+  private toReviewDto(
+    r: any,
+    threadType: any,
+    threadId: string,
+    likedByMe: boolean,
+    repliesCount: number,
+  ) {
+    return {
+      id: `review:${r.id}`, // prefixed — can never collide with a comment id
+      parentId: null,
+      depth: 0,
+      threadType,
+      threadId,
+      author: {
+        id: r.id,
+        username: r.author,
+        avatarUrl: r.avatarUrl,
+        bio: null,
+        createdAt: r.reviewCreatedAt,
+        _followersCount: 0,
+        _followingCount: 0,
+        _commentsCount: 0,
+      },
+      body: r.content,
+      imageUrl: null,
+      gifUrl: null,
+      image: null,
+      media: null,
+      list: null,
+      likesCount: r.likesCount,
+      repliesCount,
+      likedByMe,
+      reportedByMe: false,
+      isSpoiler: false,
+      spoilerCount: 0,
+      spoilerReportedByMe: false,
+      deletedByUser: false,
+      isEdited: false,
+      editedAt: null,
+      createdAt: r.reviewCreatedAt.toISOString(),
+      kind: 'review',
+      provider: 'TMDB',
+      reviewId: r.id,
+      reviewUrl: r.url,
+      reviewRating: r.rating,
+    };
+  }
+
+  /** Thread header for a provider review (id, counts, likedByMe). */
+  async getExternalReview(userId: string, id: string) {
+    const r = await this.prisma.externalReview.findUnique({
+      where: { id },
+      include: { media: { select: { type: true } } },
+    });
+    if (!r) throw new NotFoundException('Review not found');
+    const [liked, repliesCount] = await Promise.all([
+      this.prisma.externalReviewLike.findUnique({
+        where: { userId_externalReviewId: { userId, externalReviewId: id } },
+      }),
+      this.prisma.comment.count({
+        where: { externalReviewId: id, deletedByUser: false, adminDeleted: false, hidden: false },
+      }),
+    ]);
+    return {
+      id: r.id,
+      provider: r.provider,
+      author: r.author,
+      username: r.username,
+      avatarUrl: r.avatarUrl,
+      rating: r.rating,
+      content: r.content,
+      url: r.url,
+      createdAt: r.reviewCreatedAt,
+      repliesCount,
+      likesCount: r.likesCount,
+      likedByMe: !!liked,
+      // The thread this review belongs to (for the reply composer).
+      threadType: r.episodeId ? 'EPISODE' : (r.media?.type ?? 'SHOW'),
+      threadId: r.episodeId ?? r.mediaId,
+    };
+  }
+
+  /** Like/unlike a provider review (denormalized tally on the review row). */
+  async likeExternalReview(userId: string, id: string) {
+    await this.prisma.externalReviewLike.createMany({
+      data: [{ userId, externalReviewId: id }],
+      skipDuplicates: true,
+    });
+    const likesCount = await this.prisma.externalReviewLike.count({
+      where: { externalReviewId: id },
+    });
+    await this.prisma.externalReview.update({ where: { id }, data: { likesCount } });
+    return { liked: true, likesCount };
+  }
+
+  async unlikeExternalReview(userId: string, id: string) {
+    await this.prisma.externalReviewLike.deleteMany({ where: { userId, externalReviewId: id } });
+    const likesCount = await this.prisma.externalReviewLike.count({
+      where: { externalReviewId: id },
+    });
+    await this.prisma.externalReview.update({ where: { id }, data: { likesCount } });
+    return { liked: false, likesCount };
+  }
+
+  /** Map a Prisma comment row (with user + image includes) to the public DTO. */
   private toDto(
     r: any,
     counts: any,

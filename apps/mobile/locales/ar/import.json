@@ -60,5 +60,6 @@
     "unmatched": "غير مطابق",
     "duplicates": "مكررات"
   },
-  "progressPercent": "٪{{pct}}"
+  "progressPercent": "٪{{pct}}",
+  "succeededIn": "تم بنجاح في {{duration}}"
 }

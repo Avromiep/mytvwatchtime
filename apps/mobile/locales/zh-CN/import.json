@@ -60,5 +60,6 @@
     "unmatched": "未匹配",
     "duplicates": "重复项"
   },
-  "progressPercent": "{{pct}}%"
+  "progressPercent": "{{pct}}%",
+  "succeededIn": "耗时 {{duration}} 完成"
 }

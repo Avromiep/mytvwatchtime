@@ -112,6 +112,21 @@ export class SocialController {
     return this.comments.listExternalReviewReplies(userId, id);
   }
 
+  @Get('external-reviews/:id')
+  externalReview(@CurrentUser('id') userId: string, @Param('id') id: string) {
+    return this.comments.getExternalReview(userId, id);
+  }
+
+  @Post('external-reviews/:id/like')
+  likeExternalReview(@CurrentUser('id') userId: string, @Param('id') id: string) {
+    return this.comments.likeExternalReview(userId, id);
+  }
+
+  @Delete('external-reviews/:id/like')
+  unlikeExternalReview(@CurrentUser('id') userId: string, @Param('id') id: string) {
+    return this.comments.unlikeExternalReview(userId, id);
+  }
+
   // ---- Block / Unblock ----
   @Post('users/:id/block')
   block(@CurrentUser('id') userId: string, @Param('id') targetId: string) {

@@ -336,6 +336,7 @@ model User {
   comments           Comment[]
   commentLikes       CommentLike[]
   commentSpoilerReports CommentSpoilerReport[]
+  externalReviewLikes ExternalReviewLike[]
   notifications      Notification[]
   notificationPrefs  NotificationPreference?
   badges             UserBadge[]
@@ -638,6 +639,7 @@ model ExternalReview {
   rating          Float?           // provider 1..10 scale, as given
   content         String           @db.Text
   url             String           // canonical provider review URL (badge target)
+  likesCount      Int              @default(0) @map("likes_count")
   reviewCreatedAt DateTime         @map("review_created_at")
   reviewUpdatedAt DateTime?        @map("review_updated_at")
   pulledAt        DateTime         @default(now()) @map("pulled_at")
@@ -645,11 +647,27 @@ model ExternalReview {
   media   MediaItem? @relation(fields: [mediaId], references: [id], onDelete: Cascade)
   episode Episode?   @relation(fields: [episodeId], references: [id], onDelete: Cascade)
   comments Comment[]
+  likes   ExternalReviewLike[]
 
   @@unique([provider, externalId])
   @@index([mediaId])
   @@index([episodeId])
   @@map("external_reviews")
+}
+
+// Likes on provider reviews (reviews act as first-class thread roots).
+model ExternalReviewLike {
+  id               String   @id @default(cuid())
+  userId           String   @map("user_id")
+  externalReviewId String   @map("external_review_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  review ExternalReview @relation(fields: [externalReviewId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, externalReviewId])
+  @@index([externalReviewId])
+  @@map("external_review_likes")
 }
 
 // Episode-level external identities (e.g. a TVDB episode id). Separate table = no
@@ -1297,6 +1315,8 @@ model Import {
   errorMessage     String?        @map("error_message")
   createdAt        DateTime       @default(now()) @map("created_at")
   updatedAt        DateTime       @updatedAt @map("updated_at")
+  // When processing finished (reached READY_FOR_REVIEW) — drives "Succeeded in X".
+  processedAt      DateTime?      @map("processed_at")
   completedAt      DateTime?      @map("completed_at")
   cancelledAt      DateTime?      @map("cancelled_at")
   rolledBackAt     DateTime?      @map("rolled_back_at")

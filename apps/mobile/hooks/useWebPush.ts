@@ -5,7 +5,8 @@ import { api } from '../api/client';
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = typeof atob !== 'undefined' ? atob(base64) : Buffer.from(base64, 'base64').toString('binary');
+  const rawData =
+    typeof atob !== 'undefined' ? atob(base64) : Buffer.from(base64, 'base64').toString('binary');
   const outputArray = new Uint8Array(rawData.length);
   for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
   return outputArray;
@@ -14,7 +15,12 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 export function useWebPush(enabled: boolean) {
   useEffect(() => {
     if (Platform.OS !== 'web' || !enabled) return;
-    if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (
+      typeof window === 'undefined' ||
+      !('serviceWorker' in navigator) ||
+      !('PushManager' in window)
+    )
+      return;
 
     let subscribed = false;
 
@@ -46,6 +52,7 @@ export function useWebPush(enabled: boolean) {
           pushEndpoint: subscription.endpoint,
           pushP256dh: sub.keys?.p256dh,
           pushAuth: sub.keys?.auth,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         });
         subscribed = true;
       } catch (e) {
@@ -53,6 +60,8 @@ export function useWebPush(enabled: boolean) {
       }
     })();
 
-    return () => { subscribed = false; };
+    return () => {
+      subscribed = false;
+    };
   }, [enabled]);
 }

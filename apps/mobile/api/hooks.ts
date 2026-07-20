@@ -381,7 +381,31 @@ export const useExternalReviewReplies = (reviewId: string | null, enabled = true
     queryKey: ['externalReviewReplies', reviewId],
     queryFn: () => api.get<CommentDto[]>(`/external-reviews/${reviewId}/replies`),
     enabled: enabled && !!reviewId,
-  }); /** Infinite-scrolling replies for a comment. depth=2 also returns each direct child's first children. */
+  });
+
+/** A single provider review (thread header). */
+export const useExternalReview = (reviewId: string | null, polling = false) =>
+  useQuery({
+    queryKey: ['externalReview', reviewId],
+    queryFn: () => api.get<ExternalReviewDto>(`/external-reviews/${reviewId}`),
+    enabled: !!reviewId,
+    refetchInterval: polling ? COMMENT_POLL_INTERVAL : false,
+  });
+
+/** Like/unlike a provider review. */
+export const useToggleExternalReviewLike = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { reviewId: string; liked: boolean }) =>
+      args.liked
+        ? api.delete(`/external-reviews/${args.reviewId}/like`)
+        : api.post(`/external-reviews/${args.reviewId}/like`, {}),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['externalReview', vars.reviewId] });
+      qc.invalidateQueries({ queryKey: ['comments'] });
+    },
+  });
+}; /** Infinite-scrolling replies for a comment. depth=2 also returns each direct child's first children. */
 export const useCommentReplies = (
   commentId: string,
   sort: CommentSortMode,
@@ -1078,15 +1102,18 @@ export const useImportItems = (
   useQuery({
     queryKey: ['importItems', id, status ?? 'all', entity ?? 'all'],
     queryFn: () =>
-      api.get<{ items: any[]; total: number; page: number; pageSize: number }>(
-        `/imports/${id}/items`,
-        {
-          status,
-          entity,
-          page: 1,
-          pageSize: 500,
-        },
-      ),
+      api.get<{
+        items: any[];
+        total: number;
+        page: number;
+        pageSize: number;
+        entityCounts?: Record<string, number>;
+      }>(`/imports/${id}/items`, {
+        status,
+        entity,
+        page: 1,
+        pageSize: 500,
+      }),
     enabled: !!id,
     // No placeholderData: after a status change / filter switch we'd otherwise briefly show the
     // previous (wrong) filter's rows. Correctness over flicker for the review list.

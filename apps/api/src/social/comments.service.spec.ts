@@ -579,23 +579,30 @@ describe('CommentsService.reportSpoiler', () => {
 });
 
 describe('CommentsService.list — TMDB external reviews', () => {
-  it('merges stored TMDB reviews into page 1 and triggers the lazy sync', async () => {
+  it('merges stored TMDB reviews into the feed as pseudo-items (kind=review)', async () => {
     const prisma: any = mockPrisma();
+    prisma.externalReview = {
+      findMany: jest.fn().mockResolvedValue([
+        {
+          id: 'er1',
+          provider: 'TMDB',
+          author: 'MovieGuys',
+          username: 'mg',
+          avatarUrl: null,
+          rating: 8,
+          content: 'provider review body',
+          url: 'https://www.themoviedb.org/review/er1',
+          likesCount: 3,
+          reviewCreatedAt: new Date('2026-01-01'),
+        },
+      ]),
+    };
+    prisma.externalReviewLike = { findMany: jest.fn().mockResolvedValue([]) };
     const events: any = { emit: jest.fn() };
     const notifications: any = { createForUser: jest.fn().mockResolvedValue(undefined) };
     const commentImages: any = mockCommentImages();
     const externalReviews: any = {
       ensureFreshForThread: jest.fn().mockResolvedValue(undefined),
-      listForThread: jest.fn().mockResolvedValue([
-        {
-          id: 'er1',
-          provider: 'TMDB',
-          author: 'MovieGuys',
-          content: 'x',
-          url: 'https://www.themoviedb.org/review/er1',
-          createdAt: new Date(),
-        },
-      ]),
     };
     const service = new CommentsService(
       prisma,
@@ -608,19 +615,26 @@ describe('CommentsService.list — TMDB external reviews', () => {
     const res = await service.list('u1', { threadType: 'SHOW', threadId: 'm1' } as any);
 
     expect(externalReviews.ensureFreshForThread).toHaveBeenCalledWith('SHOW', 'm1');
-    expect(externalReviews.listForThread).toHaveBeenCalledWith('SHOW', 'm1');
-    expect(res.externalReviews).toHaveLength(1);
-    expect(res.externalReviews[0]).toEqual(
-      expect.objectContaining({ provider: 'TMDB', author: 'MovieGuys' }),
+    const reviewItem: any = res.items.find((i: any) => i.kind === 'review');
+    expect(reviewItem).toBeDefined();
+    expect(reviewItem).toEqual(
+      expect.objectContaining({
+        provider: 'TMDB',
+        reviewId: 'er1',
+        body: 'provider review body',
+        likesCount: 3,
+        reviewUrl: 'https://www.themoviedb.org/review/er1',
+      }),
     );
+    expect(reviewItem.author.username).toBe('MovieGuys');
   });
 
-  it('returns an empty externalReviews array without the service (graceful degradation)', async () => {
+  it('adds no review pseudo-items without the service (graceful degradation)', async () => {
     const { service } = makeService();
 
     const res = await service.list('u1', { threadType: 'SHOW', threadId: 't1' } as any);
 
-    expect(res.externalReviews).toEqual([]);
+    expect(res.items.every((i: any) => i.kind !== 'review')).toBe(true);
   });
 
   it('excludes review replies from the top-level feed (list + count)', async () => {
@@ -636,5 +650,74 @@ describe('CommentsService.list — TMDB external reviews', () => {
     expect(prisma.comment.count).toHaveBeenCalledWith({
       where: expect.objectContaining({ externalReviewId: null }),
     });
+  });
+});
+
+describe('CommentsService — external review threads (header + likes)', () => {
+  function makeReviewService(review: any) {
+    const prisma: any = {
+      externalReview: {
+        findUnique: jest.fn().mockResolvedValue(review),
+        update: jest.fn(async () => ({})),
+      },
+      externalReviewLike: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        createMany: jest.fn(async () => ({})),
+        deleteMany: jest.fn(async () => ({})),
+        count: jest.fn(async () => 7),
+      },
+      comment: { count: jest.fn().mockResolvedValue(4) },
+    };
+    const service = new CommentsService(prisma, { emit: jest.fn() } as any, {} as any, {} as any);
+    return { service, prisma };
+  }
+
+  it('getExternalReview returns the thread header with counts + thread target', async () => {
+    const { service } = makeReviewService({
+      id: 'er1',
+      provider: 'TMDB',
+      author: 'A',
+      username: 'a',
+      avatarUrl: null,
+      rating: 9,
+      content: 'body',
+      url: 'https://www.themoviedb.org/review/er1',
+      likesCount: 3,
+      reviewCreatedAt: new Date('2026-01-01'),
+      mediaId: 'm1',
+      episodeId: null,
+      media: { type: 'SHOW' },
+    });
+
+    const res = await service.getExternalReview('u1', 'er1');
+
+    expect(res).toEqual(
+      expect.objectContaining({
+        id: 'er1',
+        likesCount: 3,
+        repliesCount: 4,
+        likedByMe: false,
+        threadType: 'SHOW',
+        threadId: 'm1',
+      }),
+    );
+  });
+
+  it('like/unlike syncs the denormalized likesCount from the like table', async () => {
+    const { service, prisma } = makeReviewService({ id: 'er1' });
+
+    const liked = await service.likeExternalReview('u1', 'er1');
+    expect(prisma.externalReviewLike.createMany).toHaveBeenCalledWith({
+      data: [{ userId: 'u1', externalReviewId: 'er1' }],
+      skipDuplicates: true,
+    });
+    expect(prisma.externalReview.update).toHaveBeenCalledWith({
+      where: { id: 'er1' },
+      data: { likesCount: 7 },
+    });
+    expect(liked).toEqual({ liked: true, likesCount: 7 });
+
+    const unliked = await service.unlikeExternalReview('u1', 'er1');
+    expect(unliked).toEqual({ liked: false, likesCount: 7 });
   });
 });

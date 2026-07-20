@@ -89,5 +89,6 @@
     "unmatched": "Unmatched",
     "duplicates": "Duplicates"
   },
-  "progressPercent": "{{pct}}%"
+  "progressPercent": "{{pct}}%",
+  "succeededIn": "Succeeded in {{duration}}"
 }
