@@ -85,6 +85,12 @@ export class ImportMatcher {
      * fallback is refused only when EVERY id fails.
      */
     rawTvdbSeriesIds?: string[],
+    /**
+     * Set false by callers that have NO trustworthy title (e.g. list items whose only
+     * identity is a TVDB id): when every id is dead, return null instead of title-matching
+     * a placeholder string to an arbitrary show.
+     */
+    allowTitleFallback = true,
   ): Promise<{ mediaId: string | null; confidence: number; matchedTitle: string | null }> {
     const ids = rawTvdbSeriesIds?.length
       ? rawTvdbSeriesIds
@@ -117,7 +123,13 @@ export class ImportMatcher {
         });
         return r;
       }
-      this.logger.log(`All ${ids.length} TVDB id(s) for "${title}" are dead (404) — falling back to title search`);
+      if (!allowTitleFallback) {
+        this.mediaCache.set(key, { mediaId: null, confidence: 0, title: null });
+        return { mediaId: null, confidence: 0, matchedTitle: null };
+      }
+      this.logger.log(
+        `All ${ids.length} TVDB id(s) for "${title}" are dead (404) — falling back to title search`,
+      );
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -287,6 +299,131 @@ export class ImportMatcher {
   }
 
   /**
+   * Resolve-by-name matching (bulk manual resolve from the review UI). Like the title flow
+   * of matchMedia but STRICT about the name: a candidate is accepted only when the source
+   * title normalizes to its title, its original-language title, or one of its stored
+   * localized titles (language aware — e.g. "7. Koğuştaki Mucize" matches the row whose
+   * English title is "Miracle in Cell No. 7"). Show candidates are disambiguated by the
+   * import's season/episode footprint (same approximation as the review UI's smart sort).
+   * No id authority, no first-hit gambles — a non-matching name NEVER resolves.
+   */
+  async matchByTitleVerified(
+    norm: string,
+    title: string,
+    type: 'SHOW' | 'MOVIE',
+    hint?: {
+      maxSeason?: number | null;
+      seasonEpisodes?: { season: number; maxEpisode: number }[] | null;
+    } | null,
+  ): Promise<{ mediaId: string | null; confidence: number; matchedTitle: string | null }> {
+    const mediaType = type === 'SHOW' ? MediaType.SHOW : MediaType.MOVIE;
+    const nameMatches = (cand: {
+      title?: string | null;
+      originalTitle?: string | null;
+      titles?: unknown;
+    }): boolean => {
+      if (cand.title && normTitle(cand.title) === norm) return true;
+      if (cand.originalTitle && normTitle(cand.originalTitle) === norm) return true;
+      if (cand.titles && typeof cand.titles === 'object') {
+        return Object.values(cand.titles as Record<string, unknown>).some(
+          (v) => normTitle(String(v)) === norm,
+        );
+      }
+      return false;
+    };
+
+    // 1) Local catalog: base title OR original title OR localized titles JSON.
+    const like = await this.prisma.mediaItem.findMany({
+      where: {
+        type: mediaType,
+        OR: [
+          { title: { contains: title, mode: 'insensitive' } },
+          { show: { originalTitle: { contains: title, mode: 'insensitive' } } },
+        ],
+      },
+      take: 10,
+      include: { show: { select: { originalTitle: true } } },
+    });
+    const dbHit = like.find((m) =>
+      nameMatches({ title: m.title, originalTitle: m.show?.originalTitle ?? null }),
+    );
+    if (dbHit) return { mediaId: dbHit.id, confidence: 0.85, matchedTitle: dbHit.title };
+
+    // 1b) Localized titles JSON (covers hydrated rows whose base title is another language).
+    const jsonCandidates = await this.prisma.$queryRaw<
+      Array<{ id: string; title: string; titles: any }>
+    >`
+      SELECT id, title, titles FROM media_items
+      WHERE type::text = ${mediaType} AND titles IS NOT NULL
+        AND EXISTS (SELECT 1 FROM jsonb_each_text(titles) kv WHERE kv.value ILIKE ${title})
+      LIMIT 10
+    `;
+    const jsonHit = jsonCandidates.find((c) => nameMatches(c));
+    if (jsonHit) return { mediaId: jsonHit.id, confidence: 0.85, matchedTitle: jsonHit.title };
+
+    // 2) TMDB search — verified by title OR original-language title.
+    if (this.tmdb.enabled) {
+      try {
+        const res =
+          type === 'SHOW'
+            ? await this.tmdb.searchShows(title, 1)
+            : await this.tmdb.searchMovies(title, 1);
+        const verified = res.items.filter((i) => nameMatches(i));
+        if (verified.length) {
+          let best = verified[0];
+          const hasHint =
+            !!hint && (!!hint.maxSeason || !!(hint.seasonEpisodes && hint.seasonEpisodes.length));
+          if (type === 'SHOW' && verified.length > 1 && hasHint) {
+            best = (await this.disambiguateShow(verified, hint!)) ?? best;
+          }
+          const mediaId =
+            type === 'SHOW'
+              ? await this.meta.lightUpsertShow(best)
+              : await this.meta.lightUpsertMovie(best);
+          return { mediaId, confidence: 0.85, matchedTitle: best.title };
+        }
+      } catch (e) {
+        this.logger.warn(
+          `Resolve-by-name TMDb search failed for "${title}": ${(e as Error).message}`,
+        );
+      }
+    }
+
+    // 3) TVDB search (backup provider) — title-only check (TVDB has no separate original title).
+    if (this.tvdb.enabled) {
+      try {
+        const res =
+          type === 'SHOW'
+            ? await this.tvdb.searchShows(title, 1)
+            : await this.tvdb.searchMovies(title, 1);
+        const best = res.items.find((i) => normTitle(i.title) === norm);
+        if (best && best.tvdbId) {
+          const tvdbArgs = {
+            tvdbId: best.tvdbId,
+            title: best.title,
+            overview: best.overview ?? null,
+            posterUrl: best.posterUrl ?? null,
+            backdropUrl: best.backdropUrl ?? null,
+            popularity: best.popularity ?? 0,
+            year: best.year ?? null,
+          };
+          const mediaId =
+            type === 'SHOW'
+              ? await this.meta.lightUpsertShowTvdb(tvdbArgs)
+              : await this.meta.lightUpsertMovieTvdb(tvdbArgs);
+          return { mediaId, confidence: 0.8, matchedTitle: best.title };
+        }
+      } catch (e) {
+        this.logger.warn(
+          `Resolve-by-name TVDB search failed for "${title}": ${(e as Error).message}`,
+        );
+      }
+    }
+
+    return { mediaId: null, confidence: 0, matchedTitle: null };
+  }
+
+  /**
    * TVDB-authority resolution (shared by the CSV rawTvdbSeriesId gate and the Trakt
    * external-id path): local TVDB mapping → exact TMDB /find translation → direct TVDB fetch.
    * NEVER falls back to title matching — an unresolvable id returns null/confidence 0.
@@ -436,11 +573,15 @@ export class ImportMatcher {
             // upstream) is inconclusive: keep refusing, we can't tell if it's live.
             dead = isProviderError(e2) && e2.category === 'not_found';
             if (!dead) {
-              this.logger.warn(`TVDB exact-id recovery failed for ${rawTvdbSeriesId}: ${(e2 as Error).message}`);
+              this.logger.warn(
+                `TVDB exact-id recovery failed for ${rawTvdbSeriesId}: ${(e2 as Error).message}`,
+              );
             }
           }
         } else {
-          this.logger.warn(`TVDB exact-id recovery failed for ${rawTvdbSeriesId}: ${(e as Error).message}`);
+          this.logger.warn(
+            `TVDB exact-id recovery failed for ${rawTvdbSeriesId}: ${(e as Error).message}`,
+          );
         }
       }
     }

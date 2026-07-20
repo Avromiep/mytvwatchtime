@@ -68,13 +68,15 @@ export class HydrationProcessor implements OnModuleInit {
 
   /** Background TVDB re-hydration of one show (queued by import character-vote apply).
    *  Bypasses the 24h staleness gate (queued specifically to rewrite stale data such as
-   *  missing cast character ids); rate-limit errors rethrow so BullMQ retries. */
+   *  missing cast character ids); rate-limit errors rethrow so BullMQ retries.
+   *  skipClassification: cast-purpose rehydration — anime evidence is unchanged, and the
+   *  classification enqueue storm would saturate Kitsu/Jikan during import waves. */
   async tvdbRehydrate(data: { mediaId: string; tvdbId: number }): Promise<void> {
     if (!this.tvdb.enabled) return;
     await this.prisma.mediaItem
       .update({ where: { id: data.mediaId }, data: { metadataRefreshedAt: null } })
       .catch(() => undefined);
-    await this.meta.ensureShowFullTvdb(data.tvdbId);
+    await this.meta.ensureShowFullTvdb(data.tvdbId, undefined, { skipClassification: true });
     this.logger.debug(`tvdb-rehydrate: ${data.mediaId} hydrated from TVDB ${data.tvdbId}`);
   }
 
@@ -147,6 +149,13 @@ export class HydrationProcessor implements OnModuleInit {
   async animeHydrate(mediaId: string): Promise<void> {
     const media = await this.loadMedia(mediaId);
     if (!media || media.manualClassification) return;
+    // Already confirmed ANIME: provider re-matching can only add failure noise — a
+    // confirmed verdict is terminal (re-hydration version bumps don't weaken it).
+    // GENERAL-confirmed stays re-checkable: new hydration data may turn a stub-era
+    // negative into a candidate (that re-check is by design).
+    if (media.contentClassification === 'ANIME' && media.classificationTier === 'confirmed') {
+      return;
+    }
     const input = this.inputFromMedia(media);
     // Old row (predates keywords persistence): one light TMDB keywords lookup BEFORE any
     // Kitsu/Jikan call — persisted so it never re-checks ([] = checked, none found).

@@ -734,7 +734,10 @@ describe('ImportMatcher — dead TVDB id title fallback', () => {
     const tmdb = {
       enabled: true,
       findByExternalId: jest.fn(async () => null),
-      searchShows: jest.fn(async () => ({ items: [{ tmdbId: 240001, title: 'Lord of Mysteries' }], total: 1 })),
+      searchShows: jest.fn(async () => ({
+        items: [{ tmdbId: 240001, title: 'Lord of Mysteries' }],
+        total: 1,
+      })),
     };
     const tvdb = {
       enabled: true,
@@ -748,7 +751,15 @@ describe('ImportMatcher — dead TVDB id title fallback', () => {
     };
     const matcher = new ImportMatcher(prisma as any, meta() as any, tmdb as any, tvdb as any);
 
-    const res = await matcher.matchMedia('lord of the mysteries', 'Lord of the Mysteries', 'SHOW', null, undefined, null, '438102');
+    const res = await matcher.matchMedia(
+      'lord of the mysteries',
+      'Lord of the Mysteries',
+      'SHOW',
+      null,
+      undefined,
+      null,
+      '438102',
+    );
 
     expect(tmdb.searchShows).toHaveBeenCalledWith('Lord of the Mysteries', 1);
     expect(res).toEqual({ mediaId: 'm-lotm', confidence: 0.5, matchedTitle: 'Lord of Mysteries' });
@@ -756,7 +767,11 @@ describe('ImportMatcher — dead TVDB id title fallback', () => {
 
   it('still refuses title fallback on an inconclusive failure (non-404)', async () => {
     const prisma = fakePrisma({});
-    const tmdb = { enabled: true, findByExternalId: jest.fn(async () => null), searchShows: jest.fn() };
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      searchShows: jest.fn(),
+    };
     const tvdb = {
       enabled: true,
       getShow: jest.fn(async () => {
@@ -766,10 +781,158 @@ describe('ImportMatcher — dead TVDB id title fallback', () => {
     };
     const matcher = new ImportMatcher(prisma as any, meta() as any, tmdb as any, tvdb as any);
 
-    const res = await matcher.matchMedia('lord of the mysteries', 'Lord of the Mysteries', 'SHOW', null, undefined, null, '438102');
+    const res = await matcher.matchMedia(
+      'lord of the mysteries',
+      'Lord of the Mysteries',
+      'SHOW',
+      null,
+      undefined,
+      null,
+      '438102',
+    );
 
     expect(res.mediaId).toBeNull();
     expect(tmdb.searchShows).not.toHaveBeenCalled();
+  });
+});
+
+describe('ImportMatcher — matchByTitleVerified (resolve by name)', () => {
+  const meta = () => ({
+    lightUpsertShow: jest.fn(async () => 'm-show'),
+    lightUpsertMovie: jest.fn(async () => 'm-movie'),
+    lightUpsertShowTvdb: jest.fn(async () => 'm-tvdb'),
+    lightUpsertMovieTvdb: jest.fn(async () => 'm-tvdb'),
+    ensureShowFull: jest.fn(async () => undefined),
+  });
+
+  it('accepts a TMDB hit whose ORIGINAL title matches (language aware)', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      searchMovies: jest.fn(async () => ({
+        items: [
+          { tmdbId: 412121, title: 'Miracle in Cell No. 7', originalTitle: '7. Koğuştaki Mucize' },
+        ],
+        total: 1,
+      })),
+    };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      m as any,
+      tmdb as any,
+      { enabled: false } as any,
+    );
+
+    const res = await matcher.matchByTitleVerified(
+      '7 kogustaki mucize',
+      '7. Koğuştaki Mucize',
+      'MOVIE',
+      null,
+    );
+
+    expect(m.lightUpsertMovie).toHaveBeenCalled();
+    expect(res).toEqual({
+      mediaId: 'm-movie',
+      confidence: 0.85,
+      matchedTitle: 'Miracle in Cell No. 7',
+    });
+  });
+
+  it('rejects a TMDB hit whose name does NOT match (no first-hit gambles)', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      searchMovies: jest.fn(async () => ({
+        items: [{ tmdbId: 1, title: 'Some Other Movie', originalTitle: null }],
+        total: 1,
+      })),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      m as any,
+      tmdb as any,
+      { enabled: false } as any,
+    );
+
+    const res = await matcher.matchByTitleVerified('kogustaki', 'Koğuştaki', 'MOVIE', null);
+
+    expect(m.lightUpsertMovie).not.toHaveBeenCalled();
+    expect(res.mediaId).toBeNull();
+  });
+
+  it('matches a local row via its localized titles JSON', async () => {
+    const prisma = fakePrisma({});
+    (prisma.$queryRaw as any) = jest.fn(async () => [
+      {
+        id: 'm-tr',
+        title: 'Miracle in Cell No. 7',
+        titles: { en: 'Miracle in Cell No. 7', tr: '7. Koğuştaki Mucize' },
+      },
+    ]);
+    const matcher = new ImportMatcher(
+      prisma as any,
+      meta() as any,
+      fakeTmdb as any,
+      { enabled: false } as any,
+    );
+
+    const res = await matcher.matchByTitleVerified(
+      '7 kogustaki mucize',
+      '7. Koğuştaki Mucize',
+      'MOVIE',
+      null,
+    );
+
+    expect(res).toEqual({
+      mediaId: 'm-tr',
+      confidence: 0.85,
+      matchedTitle: 'Miracle in Cell No. 7',
+    });
+  });
+
+  it('disambiguates duplicate show titles by the season/episode footprint', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      searchShows: jest.fn(async () => ({
+        items: [
+          { tmdbId: 1, title: 'Silo', originalTitle: null },
+          { tmdbId: 2, title: 'Silo', originalTitle: null },
+        ],
+        total: 2,
+      })),
+      getShow: jest.fn(async (id: number) =>
+        id === 1
+          ? { seasonsCount: 1, seasons: [{ number: 1, episodeCount: 10, isSpecial: false }] }
+          : {
+              seasonsCount: 4,
+              seasons: [
+                { number: 1, episodeCount: 10, isSpecial: false },
+                { number: 2, episodeCount: 10, isSpecial: false },
+                { number: 3, episodeCount: 10, isSpecial: false },
+                { number: 4, episodeCount: 10, isSpecial: false },
+              ],
+            },
+      ),
+    };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      m as any,
+      tmdb as any,
+      { enabled: false } as any,
+    );
+
+    const res = await matcher.matchByTitleVerified('silo', 'Silo', 'SHOW', {
+      maxSeason: 4,
+      seasonEpisodes: [{ season: 4, maxEpisode: 8 }],
+    });
+
+    expect(m.lightUpsertShow).toHaveBeenCalledWith(expect.objectContaining({ tmdbId: 2 }));
+    expect(res.mediaId).toBe('m-show');
   });
 });
 
@@ -789,7 +952,15 @@ describe('ImportMatcher — cross-type id authority (legacy movie-typed show row
     const tvdb = { enabled: true, getShow: jest.fn(), searchShows: jest.fn() };
     const matcher = new ImportMatcher(prisma as any, meta() as any, fakeTmdb as any, tvdb as any);
 
-    const res = await matcher.matchMedia('some movie', 'Some Movie', 'SHOW', null, null, null, '555');
+    const res = await matcher.matchMedia(
+      'some movie',
+      'Some Movie',
+      'SHOW',
+      null,
+      null,
+      null,
+      '555',
+    );
 
     expect(res).toEqual({ mediaId: 'm-mov', confidence: 0.9, matchedTitle: 'Some Movie' });
   });
@@ -808,9 +979,21 @@ describe('ImportMatcher — cross-type id authority (legacy movie-typed show row
     const tvdb = { enabled: false, getShow: jest.fn(), getMovie: jest.fn() };
     const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
 
-    const res = await matcher.matchMedia('one piece', 'One Piece', 'MOVIE', null, undefined, null, '81797');
+    const res = await matcher.matchMedia(
+      'one piece',
+      'One Piece',
+      'MOVIE',
+      null,
+      undefined,
+      null,
+      '81797',
+    );
 
-    expect(m.lightUpsertShow).toHaveBeenCalledWith({ tmdbId: 45950, title: 'One Piece', year: null });
+    expect(m.lightUpsertShow).toHaveBeenCalledWith({
+      tmdbId: 45950,
+      title: 'One Piece',
+      year: null,
+    });
     expect(m.lightUpsertMovie).not.toHaveBeenCalled();
     expect(res).toEqual({ mediaId: 'm-show', confidence: 0.9, matchedTitle: 'One Piece' });
   });
@@ -836,7 +1019,15 @@ describe('ImportMatcher — cross-type id authority (legacy movie-typed show row
     };
     const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
 
-    const res = await matcher.matchMedia('bleach', 'Bleach', 'MOVIE', null, undefined, null, '74796');
+    const res = await matcher.matchMedia(
+      'bleach',
+      'Bleach',
+      'MOVIE',
+      null,
+      undefined,
+      null,
+      '74796',
+    );
 
     expect(tvdb.getMovie).toHaveBeenCalledWith(74796);
     expect(tvdb.getShow).toHaveBeenCalledWith(74796);
@@ -863,7 +1054,15 @@ describe('ImportMatcher — cross-type id authority (legacy movie-typed show row
     };
     const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
 
-    const res = await matcher.matchMedia('dracula', 'Dracula', 'MOVIE', null, undefined, null, '361160');
+    const res = await matcher.matchMedia(
+      'dracula',
+      'Dracula',
+      'MOVIE',
+      null,
+      undefined,
+      null,
+      '361160',
+    );
 
     expect(tmdb.searchMovies).toHaveBeenCalledWith('Dracula', 1);
     expect(res).toEqual({ mediaId: 'm-movie', confidence: 0.75, matchedTitle: 'Dracula' });
@@ -888,7 +1087,15 @@ describe('ImportMatcher — cross-type id authority (legacy movie-typed show row
     };
     const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
 
-    const res = await matcher.matchMedia('bleach', 'Bleach', 'MOVIE', null, undefined, null, '74796');
+    const res = await matcher.matchMedia(
+      'bleach',
+      'Bleach',
+      'MOVIE',
+      null,
+      undefined,
+      null,
+      '74796',
+    );
 
     expect(res.mediaId).toBeNull();
     expect(tmdb.searchMovies).not.toHaveBeenCalled();

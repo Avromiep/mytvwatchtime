@@ -12,7 +12,7 @@ import { parseCsv } from './lib/csv';
 import { detectProfile, normalizeRow, normTitle, type NormalizedItem } from './lib/inference';
 import { ImportMatcher, needsTvdbRehydration } from './lib/matcher';
 import { HydrationQueue } from '../media-metadata/hydration/hydration.queue';
-import { buildSeriesIdNameMap, isListsFile, normalizeLists } from './lib/lists';
+import { buildMovieUuidNameMap, buildSeriesIdNameMap, isListsFile, normalizeLists } from './lib/lists';
 import { normalizeRatings, dedupeRatings, type NormalizedImportedRating } from './lib/ratings';
 import { normalizeEmotions, dedupeEmotions, type NormalizedImportedEmotion } from './lib/emotions';
 import { normalizeCharacterVotes, dedupeCharacterVotes, type NormalizedCharacterVote } from './lib/character-votes';
@@ -347,42 +347,87 @@ export class ImportProcessor implements OnModuleInit {
       }
       await flush();
 
-      // ---- Lists pass (lists-prod-lists.csv) ----
-      // Lists are staged as LIST + LIST_ITEM items (resolved here, applied on confirm).
+      // ---- Lists + favorites pass (lists-prod-lists.csv) ----
+      // The file carries three row kinds: metadata (collection/count), the favorites
+      // pseudo-lists (s_key favorite-series/favorite-movies — the user's favorites, NOT
+      // custom lists), and real custom lists (s_key uuid, often unnamed — the collection
+      // blob's s_key→name map restores their titles). Custom lists stage as LIST +
+      // LIST_ITEM items; favorites stage as FAVORITE_SHOW/FAVORITE_MOVIE items and flow
+      // through the shared favorites apply pipeline.
       const listsFile = files.find((f) => isListsFile(f.filename));
       if (listsFile) {
-        const seriesMap = buildSeriesIdNameMap(files.map((f) => ({ filename: f.filename, rows: f.rows })));
-        const { lists, errors } = normalizeLists(listsFile.rows);
+        const seriesMap = buildSeriesIdNameMap(fileInputs);
+        const movieUuidMap = buildMovieUuidNameMap(fileInputs);
+        const { lists, favorites, errors } = normalizeLists(listsFile.rows);
         for (const e of errors) this.logger.warn(`Import ${importId} list parse — row ${e.row} (${e.sourceKey}): ${e.reason}`);
         const listBatch: any[] = [];
+        let noIdentityCount = 0;
+
+        // Resolve one list/favorite object to a media id. Series go through the TVDB-id
+        // authority gate (id-authoritative — title search only when a real name exists);
+        // movies resolve via the uuid→name map (the uuid is their only export identity).
+        const resolveEntry = async (entry: {
+          type: string;
+          seriesId: number | null;
+          uuid: string | null;
+        }): Promise<{ mediaId: string | null; title: string | null; confidence: number }> => {
+          if (entry.type === 'series' && entry.seriesId != null) {
+            const name = seriesMap.get(entry.seriesId) ?? null;
+            const m = await this.matcher.matchMedia(
+              normTitle(name ?? `tvdb-${entry.seriesId}`),
+              name ?? `TVDB ${entry.seriesId}`,
+              'SHOW',
+              undefined,
+              undefined,
+              archiveLang,
+              String(entry.seriesId),
+              undefined,
+              !!name, // no name → id-only; never title-match a placeholder
+            );
+            return { mediaId: m.mediaId, title: name ?? m.matchedTitle, confidence: m.confidence };
+          }
+          if (entry.type === 'movie' && entry.uuid) {
+            const name = movieUuidMap.get(entry.uuid) ?? null;
+            if (!name) return { mediaId: null, title: null, confidence: 0 };
+            const m = await this.matcher.matchMedia(
+              normTitle(name),
+              name,
+              'MOVIE',
+              undefined,
+              undefined,
+              archiveLang,
+            );
+            return { mediaId: m.mediaId, title: name, confidence: m.confidence };
+          }
+          return { mediaId: null, title: null, confidence: 0 };
+        };
+
         for (const list of lists) {
           let resolved = 0;
           let unresolved = 0;
           const itemRows: any[] = [];
           for (const it of list.items) {
-            let mediaId: string | null = null;
-            let title: string | null = null;
-            if (it.type === 'series' && it.seriesId != null) {
-              const name = seriesMap.get(it.seriesId);
-              if (name) {
-                const m = await this.matcher.matchMedia(normTitle(name), name, 'SHOW', undefined, undefined, archiveLang);
-                mediaId = m.mediaId;
-                title = name;
-              }
+            const r = await resolveEntry(it);
+            // Objects with no recoverable identity (movie uuid unknown to the export,
+            // dead series id without a name) are counted on the list but not staged —
+            // a title-less row can never be reviewed or matched anyway.
+            if (!r.title) {
+              unresolved++;
+              noIdentityCount++;
+              continue;
             }
-            // movie objects carry only a uuid (no name source in the export) → unresolved
-            if (mediaId) resolved++;
+            if (r.mediaId && r.confidence >= 0.7) resolved++;
             else unresolved++;
             itemRows.push({
               importId,
               rowNumber: it.order,
               sourceEntityType: 'LIST_ITEM',
               targetEntityType: 'LIST_ITEM',
-              status: mediaId ? 'MATCHED' : 'NEEDS_REVIEW',
+              status: r.mediaId && r.confidence >= 0.7 ? 'MATCHED' : 'NEEDS_REVIEW',
               rawData: { sourceKey: list.sourceKey, order: it.order } as any,
-              normalizedData: { sourceKey: list.sourceKey, order: it.order, title, mediaType: it.type, createdAt: it.createdAt?.toISOString() ?? null } as any,
-              matchedMediaId: mediaId,
-              confidenceScore: mediaId ? 0.8 : 0,
+              normalizedData: { sourceKey: list.sourceKey, order: it.order, title: r.title, mediaType: it.type, createdAt: it.createdAt?.toISOString() ?? null } as any,
+              matchedMediaId: r.mediaId,
+              confidenceScore: r.mediaId ? r.confidence : 0,
             });
           }
           listBatch.push({
@@ -396,10 +441,41 @@ export class ImportProcessor implements OnModuleInit {
           });
           listBatch.push(...itemRows);
         }
+
+        // Favorites pseudo-lists → staged as regular favorite items (shared apply path,
+        // deduped by mediaId against favorites from user_tv_show_data/v1 follows).
+        let favoritesStaged = 0;
+        const stageFavorite = async (
+          entry: { type: string; seriesId: number | null; uuid: string | null; createdAt: Date | null; order: number },
+          entityType: 'FAVORITE_SHOW' | 'FAVORITE_MOVIE',
+        ) => {
+          const r = await resolveEntry(entry);
+          if (!r.title) {
+            noIdentityCount++;
+            return;
+          }
+          listBatch.push({
+            importId,
+            rowNumber: entry.order,
+            sourceEntityType: entityType,
+            targetEntityType: entityType,
+            status: r.mediaId && r.confidence >= 0.7 ? 'MATCHED' : 'NEEDS_REVIEW',
+            rawData: { sourceKey: entityType === 'FAVORITE_SHOW' ? 'favorite-series' : 'favorite-movies' } as any,
+            normalizedData: { title: r.title, mediaType: entry.type, createdAt: entry.createdAt?.toISOString() ?? null } as any,
+            matchedMediaId: r.mediaId,
+            confidenceScore: r.mediaId ? r.confidence : 0,
+          });
+          favoritesStaged++;
+        };
+        for (const f of favorites.series) await stageFavorite(f, 'FAVORITE_SHOW');
+        for (const f of favorites.movies) await stageFavorite(f, 'FAVORITE_MOVIE');
+
         for (let i = 0; i < listBatch.length; i += 200) {
           await this.prisma.importItem.createMany({ data: listBatch.slice(i, i + 200) });
         }
-        this.logger.log(`Import ${importId} staged ${lists.length} list(s) from ${listsFile.filename}`);
+        this.logger.log(
+          `Import ${importId} staged ${lists.length} list(s) + ${favoritesStaged} favorite(s) from ${listsFile.filename} (${noIdentityCount} no-identity object(s) counted only)`,
+        );
       }
 
       // ---- Ratings / Emotions / Comments pass ----

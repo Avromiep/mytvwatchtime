@@ -162,4 +162,31 @@ describe('HydrationProcessor.animeHydrate', () => {
     expect(prisma.show.update).not.toHaveBeenCalled();
     expect(animeMatch.matchAnime).toHaveBeenCalled();
   });
+
+  it('skips provider matching entirely when ANIME is already confirmed (terminal verdict)', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue({
+      ...media,
+      contentClassification: 'ANIME',
+      classificationTier: 'confirmed',
+    });
+    await processor.animeHydrate('m1');
+    expect(animeMatch.matchAnime).not.toHaveBeenCalled();
+    expect(prisma.mediaItem.update).not.toHaveBeenCalled();
+  });
+
+  it('still re-checks a GENERAL-confirmed row (new hydration data may flip it)', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue({
+      ...media,
+      contentClassification: 'GENERAL',
+      classificationTier: 'confirmed',
+    });
+    animeMatch.matchAnime.mockResolvedValue({
+      matched: true,
+      provider: 'KITSU',
+      externalId: 'k1',
+      confidence: 0.9,
+    });
+    await processor.animeHydrate('m1');
+    expect(animeMatch.matchAnime).toHaveBeenCalled();
+  });
 });

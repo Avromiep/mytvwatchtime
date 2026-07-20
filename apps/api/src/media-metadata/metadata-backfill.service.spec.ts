@@ -446,8 +446,8 @@ describe('MetadataBackfillService', () => {
         data: { metadataRefreshedAt: null },
       });
       expect(meta.ensureShowFullTvdb).toHaveBeenCalledTimes(2);
-      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(73255);
-      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(73996);
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(73255, undefined, { skipClassification: true });
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(73996, undefined, { skipClassification: true });
       expect(res).toMatchObject({ processed: 2, succeeded: 2, failed: 0, rateLimited: 0 });
     });
 

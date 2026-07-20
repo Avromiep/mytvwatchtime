@@ -1,4 +1,17 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -6,7 +19,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { FeatureFlagService } from '../common/feature-flag.service';
 import { currentLanguage } from '../common/language.context';
 import { ImportService } from './import.service';
-import { ListImportItemsDto, PatchImportItemDto } from './dto';
+import { ListImportItemsDto, PatchImportItemDto, ResolveByNameDto } from './dto';
 
 @ApiTags('imports')
 @ApiBearerAuth()
@@ -21,14 +34,21 @@ export class ImportController {
   @Post('upload')
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
-  @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
+  @ApiBody({
+    schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } },
+  })
   async upload(@CurrentUser('id') userId: string, @UploadedFile() file: any) {
-    if (!(await this.flags.isEnabled('imports_enabled'))) throw new BadRequestException('Imports are temporarily disabled');
-    return this.imports.upload(userId, {
-      buffer: file?.buffer,
-      originalname: file?.originalname ?? 'upload',
-      size: file?.size ?? 0,
-    }, currentLanguage());
+    if (!(await this.flags.isEnabled('imports_enabled')))
+      throw new BadRequestException('Imports are temporarily disabled');
+    return this.imports.upload(
+      userId,
+      {
+        buffer: file?.buffer,
+        originalname: file?.originalname ?? 'upload',
+        size: file?.size ?? 0,
+      },
+      currentLanguage(),
+    );
   }
 
   @Get(':id')
@@ -47,7 +67,11 @@ export class ImportController {
   }
 
   @Get(':id/items')
-  items(@CurrentUser('id') userId: string, @Param('id') id: string, @Query() q: ListImportItemsDto) {
+  items(
+    @CurrentUser('id') userId: string,
+    @Param('id') id: string,
+    @Query() q: ListImportItemsDto,
+  ) {
     return this.imports.getItems(userId, id, {
       status: q.status,
       entity: q.entity,
@@ -72,7 +96,22 @@ export class ImportController {
     @Param('id') id: string,
     @Body() dto: { matchedMediaId: string; sourceTitle: string; season?: number },
   ) {
-    return this.imports.resolveAllForShow(userId, id, dto.matchedMediaId, dto.sourceTitle, dto.season);
+    return this.imports.resolveAllForShow(
+      userId,
+      id,
+      dto.matchedMediaId,
+      dto.sourceTitle,
+      dto.season,
+    );
+  }
+
+  @Post(':id/resolve-by-name')
+  resolveByName(
+    @CurrentUser('id') userId: string,
+    @Param('id') id: string,
+    @Body() dto: ResolveByNameDto,
+  ) {
+    return this.imports.resolveByName(userId, id, { status: dto.status, entity: dto.entity });
   }
 
   @Post(':id/confirm')

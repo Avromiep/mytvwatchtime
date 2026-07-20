@@ -111,6 +111,19 @@ describe('import inference', () => {
     expect(normTitle('Mr. Robot')).toBe('mr robot');
   });
 
+  it('keeps non-Latin scripts distinct (no empty-norm collisions)', () => {
+    // The Yatterman incident: an ASCII-only class normalized every non-Latin title to
+    // the same '', so bulk by-title resolves matched dozens of unrelated items.
+    expect(normTitle('승리호')).not.toBe('');
+    expect(normTitle('승리호')).not.toBe(normTitle('소울메이트'));
+    expect(normTitle('聲の形')).not.toBe(normTitle('승리호'));
+    expect(normTitle('രോമാഞ്ചം')).not.toBe('');
+    // Latin behavior unchanged.
+    expect(normTitle('7. Koğuştaki Mucize')).toBe('7 kogustaki mucize');
+    // Only truly letter-less titles produce an empty norm.
+    expect(normTitle('???')).toBe('');
+  });
+
   describe('tvtime_tracking', () => {
     it('classifies the file by filename', () => {
       expect(detectProfile('tracking-prod-records.csv', [])).toBe('tvtime_tracking');

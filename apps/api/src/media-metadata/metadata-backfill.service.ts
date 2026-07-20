@@ -775,7 +775,9 @@ export class MetadataBackfillService {
         try {
           // Bypass the 24h isStale gate — the cast rewrite only happens on a full refresh.
           await this.prisma.mediaItem.update({ where: { id: m.id }, data: { metadataRefreshedAt: null } });
-          await this.meta.ensureShowFullTvdb(Number(m.externalIds[0].value));
+          // skipClassification: this is a cast-only refresh — re-enqueueing anime
+          // classification for every backfilled show saturates Kitsu/Jikan for nothing.
+          await this.meta.ensureShowFullTvdb(Number(m.externalIds[0].value), undefined, { skipClassification: true });
           succeeded++;
           if (sample.length < 5) sample.push(m.title);
         } catch (e) {

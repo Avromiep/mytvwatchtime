@@ -1116,6 +1116,22 @@ export const useResolveAllForShow = (importId: string) => {
   });
 };
 
+/** Bulk-resolve the currently filtered review items by their source titles (server-verified). */
+export const useResolveByName = (importId: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { status?: string; entity?: string }) =>
+      api.post<{ examined: number; resolved: number; stillUnresolved: number }>(
+        `/imports/${importId}/resolve-by-name`,
+        { status: args.status, entity: args.entity },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['importItems'] });
+      qc.invalidateQueries({ queryKey: ['import'] });
+    },
+  });
+};
+
 export const useConfirmImport = () => {
   const qc = useQueryClient();
   return useMutation({

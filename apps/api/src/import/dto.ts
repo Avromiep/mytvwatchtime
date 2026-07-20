@@ -46,3 +46,15 @@ export class PatchImportItemDto {
   @IsString()
   userResolution?: 'accept' | 'skip' | 'replace_existing' | 'keep_existing';
 }
+
+export class ResolveByNameDto {
+  @ApiPropertyOptional({ description: 'status filter of the visible items, e.g. needs_review' })
+  @IsOptional()
+  @IsString()
+  status?: string;
+
+  @ApiPropertyOptional({ description: 'entity filter (single type or comma group)' })
+  @IsOptional()
+  @IsString()
+  entity?: string;
+}

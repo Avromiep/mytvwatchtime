@@ -114,8 +114,16 @@ export class ImportService {
     const pageSize = Math.min(opts.pageSize || 50, 200);
     const where: any = { importId };
     if (opts.status) where.status = opts.status.toUpperCase();
-    if (opts.entity && isNaN(Number(opts.entity)))
-      where.sourceEntityType = opts.entity.toUpperCase();
+    if (opts.entity && isNaN(Number(opts.entity))) {
+      // Single type or comma-separated group (e.g. "FAVORITE_SHOW,FAVORITE_MOVIE" for the
+      // Favorites chip, "LIST,LIST_ITEM" for the Lists chip in the review UI).
+      const types = opts.entity
+        .split(',')
+        .map((s) => s.trim().toUpperCase())
+        .filter(Boolean);
+      if (types.length === 1) where.sourceEntityType = types[0];
+      else if (types.length > 1) where.sourceEntityType = { in: types };
+    }
     const [items, total] = await Promise.all([
       this.prisma.importItem.findMany({
         where,
@@ -177,6 +185,12 @@ export class ImportService {
     // Core-normalized title (strips " (2023)" year suffixes) so "Silo" and "Silo (2023)" match.
     const coreNorm = (s: string) => normTitle(splitTitleYear(s).title);
     const nt = coreNorm(sourceTitle);
+    if (!nt) {
+      // The source title carries no letters/digits in any script — a title match would
+      // hit every other letter-less title. Never bulk-resolve on an empty identity.
+      this.logger.warn(`resolveAllForShow: refusing to bulk-resolve an empty title identity (import ${importId})`);
+      return { resolved: 0, matched: 0, needsReview: 0 };
+    }
     const items = await this.prisma.importItem.findMany({
       where: { importId, status: { in: ['NEEDS_REVIEW', 'UNMATCHED'] } },
     });
@@ -230,6 +244,134 @@ export class ImportService {
     // Keep the Import summary counters in sync with the new item statuses.
     await this.recountImportStatuses(importId);
     return { resolved, matched, needsReview };
+  }
+
+  /**
+   * Resolve-by-name: bulk-resolve the items currently visible in the review UI (the
+   * caller's status + entity filter) using their source titles. A candidate is accepted
+   * ONLY when the name actually matches (see matcher.matchByTitleVerified — language
+   * aware, footprint-disambiguated for shows). Episode-scoped items resolve their episode
+   * by S/E after the show is hydrated. Returns counts so the UI can report the outcome.
+   */
+  async resolveByName(
+    userId: string,
+    importId: string,
+    opts: { status?: string; entity?: string },
+  ): Promise<{ examined: number; resolved: number; stillUnresolved: number }> {
+    const imp = await this.prisma.import.findFirst({ where: { id: importId, userId } });
+    if (!imp) throw new NotFoundException('Import not found');
+
+    const where: any = {
+      importId,
+      status: opts.status ? opts.status.toUpperCase() : { in: ['NEEDS_REVIEW', 'UNMATCHED'] },
+      // LIST rows are containers, not media — never resolve them by name.
+      sourceEntityType: { not: 'LIST' },
+    };
+    if (opts.entity) {
+      const types = opts.entity
+        .split(',')
+        .map((s) => s.trim().toUpperCase())
+        .filter((t) => Boolean(t) && t !== 'LIST'); // containers are never name-resolved
+      if (types.length === 1) where.sourceEntityType = types[0];
+      else if (types.length > 1) where.sourceEntityType = { in: types };
+    }
+    const items = await this.prisma.importItem.findMany({ where, take: 500 });
+
+    const EPISODE_ENTITIES = [
+      'WATCHED_EPISODE',
+      'EPISODE_RATING',
+      'EPISODE_EMOTION',
+      'EPISODE_COMMENT',
+      'EPISODE_CHARACTER_VOTE',
+    ];
+    const titleOf = (it: any): string | null => {
+      const n: any = it.normalizedData ?? {};
+      const t = n.showTitle ?? n.movieTitle ?? n.title;
+      return typeof t === 'string' && t.trim() ? t.trim() : null;
+    };
+    const typeOf = (it: any): 'SHOW' | 'MOVIE' =>
+      /MOVIE/.test(String(it.sourceEntityType)) ? 'MOVIE' : 'SHOW';
+
+    // Group by media type + normalized title: one provider search per distinct title.
+    const groups = new Map<string, { type: 'SHOW' | 'MOVIE'; title: string; items: any[] }>();
+    for (const it of items) {
+      const title = titleOf(it);
+      if (!title) continue;
+      const type = typeOf(it);
+      const key = `${type}:${normTitle(title)}`;
+      if (!groups.has(key)) groups.set(key, { type, title, items: [] });
+      groups.get(key)!.items.push(it);
+    }
+
+    let examined = 0;
+    let resolved = 0;
+    for (const g of groups.values()) {
+      examined += g.items.length;
+
+      // Season/episode footprint (shows): the candidate must contain the referenced S/E.
+      let hint: {
+        maxSeason?: number | null;
+        seasonEpisodes?: { season: number; maxEpisode: number }[] | null;
+      } | null = null;
+      if (g.type === 'SHOW') {
+        let maxSeason: number | null = null;
+        const seMap = new Map<number, number>();
+        for (const it of g.items) {
+          const n: any = it.normalizedData ?? {};
+          const s = Number(n.season ?? n.seasonNumber);
+          const e = Number(n.episode ?? n.episodeNumber);
+          if (Number.isFinite(s)) {
+            maxSeason = Math.max(maxSeason ?? 0, s);
+            if (Number.isFinite(e)) seMap.set(s, Math.max(seMap.get(s) ?? 0, e));
+          }
+        }
+        if (maxSeason != null || seMap.size) {
+          hint = {
+            maxSeason,
+            seasonEpisodes: [...seMap.entries()].map(([season, maxEpisode]) => ({
+              season,
+              maxEpisode,
+            })),
+          };
+        }
+      }
+
+      const m = await this.matcher.matchByTitleVerified(normTitle(g.title), g.title, g.type, hint);
+      if (!m.mediaId) continue;
+      if (g.type === 'SHOW') await this.matcher.ensureShowHydrated(m.mediaId);
+
+      for (const it of g.items) {
+        let episodeId: string | null = null;
+        if (EPISODE_ENTITIES.includes(String(it.sourceEntityType))) {
+          const n: any = it.normalizedData ?? {};
+          const season = Number(n.season ?? n.seasonNumber);
+          const episode = Number(n.episode ?? n.episodeNumber);
+          const rawEpId = n.externalEpisodeId != null ? Number(n.externalEpisodeId) : null;
+          if (Number.isFinite(season) && Number.isFinite(episode)) {
+            episodeId =
+              (rawEpId
+                ? await this.matcher.resolveEpisodeByExternalIds(m.mediaId, { tvdb: rawEpId })
+                : null) ??
+              (await this.matcher.resolveEpisode(m.mediaId, season, episode)) ??
+              (rawEpId ? await this.matcher.recoverEpisodeByTvdbId(m.mediaId, rawEpId) : null);
+          }
+          if (!episodeId) continue; // show matched but episode missing → leave for manual review
+        }
+        const upd = await this.prisma.importItem.updateMany({
+          where: { id: it.id, status: { in: ['NEEDS_REVIEW', 'UNMATCHED'] } },
+          data: {
+            matchedMediaId: m.mediaId,
+            matchedEpisodeId: episodeId,
+            status: 'MATCHED',
+            confidenceScore: m.confidence,
+          },
+        });
+        resolved += upd.count;
+      }
+    }
+
+    await this.recountImportStatuses(importId);
+    return { examined, resolved, stillUnresolved: examined - resolved };
   }
 
   /** Recompute the Import row's status counters from the current ImportItem statuses. */
@@ -785,6 +927,12 @@ export class ImportService {
     items: any[],
     source: ListSource = 'TVTIME',
   ): Promise<number> {
+    // Legacy migration (runs on every TVTIME confirm): imports predating the
+    // favorites-routing fix created CustomLists with sourceKey favorite-series /
+    // favorite-movies — those are the user's favorites, not lists. Move their items
+    // into real favorites, then delete the pseudo-lists.
+    if (source === 'TVTIME') await this.migrateFavoritePseudoLists(userId, importId);
+
     const listItems = items.filter(
       (it) => it.sourceEntityType === 'LIST' && it.status === 'MATCHED',
     );
@@ -913,6 +1061,58 @@ export class ImportService {
       );
     }
     return created;
+  }
+
+  /**
+   * Legacy cleanup: imports predating the favorites-routing fix created CustomLists with
+   * sourceKey favorite-series / favorite-movies — those are the user's favorites, not
+   * lists. Migrate every item into a real Favorite row (deduped by mediaId), then delete
+   * the pseudo-lists (items cascade). Idempotent: once migrated, no pseudo-lists remain.
+   */
+  private async migrateFavoritePseudoLists(userId: string, importId: string): Promise<void> {
+    const pseudo = await this.prisma.customList.findMany({
+      where: {
+        userId,
+        source: 'TVTIME',
+        sourceKey: { in: ['favorite-series', 'favorite-movies'] },
+      },
+      include: { items: { select: { mediaId: true } } },
+    });
+    if (!pseudo.length) return;
+
+    const mediaIds = [
+      ...new Set(pseudo.flatMap((l) => l.items.map((i: any) => i.mediaId as string))),
+    ];
+    const existing = await this.prisma.favorite.findMany({
+      where: { userId, mediaId: { in: mediaIds } },
+      select: { mediaId: true },
+    });
+    const have = new Set(existing.map((f: any) => f.mediaId as string));
+    const rows: any[] = [];
+    const audit: any[] = [];
+    for (const mediaId of mediaIds) {
+      if (have.has(mediaId)) continue;
+      have.add(mediaId);
+      const rowId = randomUUID();
+      rows.push({ id: rowId, userId, mediaId });
+      audit.push({
+        id: randomUUID(),
+        importId,
+        targetTable: 'favorites',
+        targetRecordId: rowId,
+        action: 'created',
+      });
+    }
+    await this.prisma.$transaction(async (tx) => {
+      if (rows.length) {
+        await this.chunkedCreateMany(tx, 'favorite', rows, true);
+        await this.chunkedCreateMany(tx, 'importAppliedRecord', audit);
+      }
+      await tx.customList.deleteMany({ where: { id: { in: pseudo.map((l) => l.id) } } });
+    });
+    this.logger.log(
+      `Import ${importId}: migrated ${rows.length} favorite(s) from ${pseudo.length} legacy favorite-* pseudo-list(s) and deleted them`,
+    );
   }
 
   /** Apply ratings with a non-destructive conflict policy (never overwrite manual ratings). */

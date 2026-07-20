@@ -110,6 +110,8 @@ export interface NormalizedSearchItem {
   tvdbId?: number;
   type: MediaType;
   title: string;
+  /** Original-language title (TMDB original_name/original_title) — language-aware name checks. */
+  originalTitle?: string | null;
   posterUrl?: string | null;
   backdropUrl?: string | null;
   overview?: string | null;
@@ -156,6 +158,7 @@ interface TmdbTranslation {
 interface TmdbMovie {
   id: number;
   title?: string;
+  original_title?: string;
   overview?: string;
   poster_path?: string | null;
   backdrop_path?: string | null;
@@ -312,6 +315,7 @@ export class TmdbProvider {
         tmdbId: s.id,
         type: MediaType.SHOW,
         title: s.name || 'Untitled',
+        originalTitle: s.original_name ?? null,
         posterUrl: this.tmdb.img(s.poster_path, 'w342'),
         backdropUrl: this.tmdb.img(s.backdrop_path, 'w780'),
         overview: s.overview || null,
@@ -336,6 +340,7 @@ export class TmdbProvider {
         tmdbId: m.id,
         type: MediaType.MOVIE,
         title: m.title || 'Untitled',
+        originalTitle: m.original_title ?? null,
         posterUrl: this.tmdb.img(m.poster_path, 'w342'),
         backdropUrl: this.tmdb.img(m.backdrop_path, 'w780'),
         overview: m.overview || null,

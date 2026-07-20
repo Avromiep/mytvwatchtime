@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'expo-router';
 import {
+  ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
   Modal,
@@ -35,12 +36,13 @@ import {
   useImportItems,
   usePatchImportItem,
   useResolveAllForShow,
+  useResolveByName,
   useSearch,
   useUploadImport,
 } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
-import { showError } from '../lib/dialog';
+import { showError, showInfo, showSuccess } from '../lib/dialog';
 import { useTranslation } from 'react-i18next';
 
 export default function ImportScreen() {
@@ -320,6 +322,7 @@ function ReviewItems({
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const [entityFilter, setEntityFilter] = useState<string | undefined>(undefined);
   const q = useImportItems(importId, statusFilter, entityFilter);
+  const resolveByName = useResolveByName(importId);
   // Dedupe by id (defensive); the list is now a single page so pagination drift is gone.
   const seen = new Set<string>();
   const items = (q.data?.items ?? []).filter((it) => (seen.has(it.id) ? false : seen.add(it.id)));
@@ -330,6 +333,8 @@ function ReviewItems({
     { key: 'WATCHLIST_MOVIE', label: t('import:movies') },
     { key: 'WATCHED_MOVIE', label: t('import:watchedMovies') },
     { key: 'WATCHED_EPISODE', label: t('import:episodes') },
+    { key: 'FAVORITE_SHOW,FAVORITE_MOVIE', label: t('import:favorites') },
+    { key: 'LIST,LIST_ITEM', label: t('import:lists') },
     { key: 'EPISODE_RATING', label: t('import:episodeRatings') },
     { key: 'MOVIE_RATING', label: t('import:movieRatings') },
     { key: 'EPISODE_EMOTION', label: t('import:episodeEmotions') },
@@ -422,6 +427,48 @@ function ReviewItems({
           )
         }
       />
+      {(statusFilter === 'needs_review' || statusFilter === 'unmatched') && (
+        <Pressable
+          style={[styles.fab, { backgroundColor: tokens.primary }]}
+          disabled={resolveByName.isPending}
+          onPress={() =>
+            resolveByName.mutate(
+              { status: statusFilter, entity: entityFilter },
+              {
+                onSuccess: (r) =>
+                  r.resolved > 0
+                    ? showSuccess({
+                        title: t('import:resolveByName'),
+                        description: t('import:resolveByNameResult', {
+                          resolved: r.resolved,
+                          examined: r.examined,
+                        }),
+                      })
+                    : showInfo({
+                        title: t('import:resolveByName'),
+                        description: t('import:resolveByNameNone'),
+                      }),
+                onError: (e: any) =>
+                  showError({
+                    title: t('import:resolveByName'),
+                    description: e?.message ?? t('common:tryAgain'),
+                  }),
+              },
+            )
+          }
+        >
+          {resolveByName.isPending ? (
+            <ActivityIndicator color="#fff" size="small" />
+          ) : (
+            <>
+              <Ionicons name="sparkles" size={16} color="#fff" />
+              <T variant="caption" style={{ color: '#fff', fontWeight: '700' }}>
+                {t('import:resolveByName')}
+              </T>
+            </>
+          )}
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -480,6 +527,12 @@ function describeItem(
   if (isCharacterVote) {
     return `${title}  ·  ${t('import:characterVoteLabel')}`;
   }
+  if (entityType === 'LIST') {
+    // The list itself: show how many of its objects resolved (resolved/total).
+    const resolved = norm.resolvedCount;
+    const total = norm.itemCount;
+    return resolved != null && total != null ? `${title}  ·  ${resolved}/${total}` : title;
+  }
   return title;
 }
 
@@ -527,7 +580,10 @@ function ResolutionModal({
   // Hooks must run unconditionally (Rules of Hooks). Derive values defensively so that
   // `useSearch` stays disabled (empty query) when no item is active.
   const entityType = item ? String(item.sourceEntityType) : '';
-  const isMovie = /MOVIE/.test(entityType);
+  // LIST_ITEM (and list-staged favorites) carry their kind in normalizedData.mediaType —
+  // without it a movie list item would search shows (and resolve against one).
+  const normMediaType = String(item?.normalizedData?.mediaType ?? '').toLowerCase();
+  const isMovie = /MOVIE/.test(entityType) || normMediaType === 'movie';
   const searchType = isMovie ? MediaType.MOVIE : MediaType.SHOW;
   const trimmed = item ? query.trim() : '';
   const search = useSearch(trimmed, searchType);
@@ -815,4 +871,20 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
   },
   row: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm },
+  fab: {
+    position: 'absolute',
+    right: spacing.lg,
+    bottom: spacing.xl,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+  },
 });

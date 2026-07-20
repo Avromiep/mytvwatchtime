@@ -82,6 +82,36 @@ function toEpochDate(raw: string | undefined): Date | null {
 }
 
 /**
+ * Generic form of {@link parseListObjects}: returns the raw field map of every `map[...]`
+ * entry. Used for non-object blobs like the `collection` row's `lists` column (a dump of
+ * the user's lists with name/s_key/is_public/fanart fields).
+ */
+export function parseGoMaps(input: string | null | undefined): Record<string, string>[] {
+  const maps: Record<string, string>[] = [];
+  try {
+    const trimmed = (input ?? '').trim();
+    if (!trimmed || trimmed === '[]') return maps;
+
+    // Strip a single outer `[ ... ]`.
+    let s = trimmed;
+    if (s.startsWith('[') && s.endsWith(']')) s = s.slice(1, -1);
+
+    let i = 0;
+    const n = s.length;
+    while (i < n) {
+      const at = s.indexOf('map[', i);
+      if (at === -1) break;
+      const { fields, next } = parseMapAt(s, at + 4);
+      i = next;
+      if (Object.keys(fields).length > 0) maps.push(fields);
+    }
+  } catch {
+    // never throw — return what was parsed so far
+  }
+  return maps;
+}
+
+/**
  * Parse a TV Time `objects` cell into structured list objects.
  * Never throws: malformed objects are reported in `errors` and skipped.
  */

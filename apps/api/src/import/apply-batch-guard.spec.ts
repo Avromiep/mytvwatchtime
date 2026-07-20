@@ -14,6 +14,7 @@ describe('ImportService.applyBatch — cross-type guard', () => {
       },
       movie: { findMany: jest.fn().mockResolvedValue([]) },
       userMovieStatus: { findMany: jest.fn().mockResolvedValue([]) },
+      customList: { findMany: jest.fn().mockResolvedValue([]) },
       import: { update: jest.fn().mockResolvedValue({}) },
       importItem: { updateMany: jest.fn().mockResolvedValue({}) },
       $transaction: jest.fn(async (fn: any) => fn(prisma)),

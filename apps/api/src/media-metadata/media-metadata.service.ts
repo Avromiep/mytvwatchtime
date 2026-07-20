@@ -502,7 +502,7 @@ export class MediaMetadataService {
     return mediaId;
   }
 
-  async ensureShowFullTvdb(tvdbId: number, userId?: string): Promise<string> {
+  async ensureShowFullTvdb(tvdbId: number, userId?: string, opts?: { skipClassification?: boolean }): Promise<string> {
     const lang = currentLanguage();
     const data = await this.tvdb.getShow(tvdbId, lang); // pass locale → episodes get correct language
     const tvdbVal = String(tvdbId);
@@ -523,7 +523,10 @@ export class MediaMetadataService {
     await this.enrichAirtimes(mediaId, data.externals).catch((e) =>
       this.logger.debug(`TVmaze enrich skipped: ${(e as Error).message}`),
     );
-    await this.scheduleClassification(mediaId);
+    // Cast-only rehydrations (character-id backfill, import tvdb-rehydrate) skip the
+    // classification enqueue — the anime evidence (genres/origin/keywords) does not
+    // change from a same-provider cast refresh, and the enqueue storm saturates Jikan.
+    if (!opts?.skipClassification) await this.scheduleClassification(mediaId);
     return mediaId;
   }
 

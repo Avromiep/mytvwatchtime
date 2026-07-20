@@ -90,7 +90,11 @@ export function normTitle(s: string): string {
     .toLowerCase()
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, ' ')
+    // Unicode-aware: keep letters/numbers from EVERY script (Korean, Japanese, Arabic,
+    // Cyrillic…). An ASCII-only class normalizes every non-Latin title to the same ''
+    // — a catastrophic identity collision (bulk "by title" resolves matched dozens of
+    // unrelated Korean/Japanese items to one show).
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();
 }
 
