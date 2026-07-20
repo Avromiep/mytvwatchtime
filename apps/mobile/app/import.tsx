@@ -921,6 +921,11 @@ function ResolutionModal({
                         <T variant="body" numberOfLines={1}>
                           {r.title}
                         </T>
+                        {r.originalTitle && r.originalTitle !== r.title ? (
+                          <T variant="micro" muted numberOfLines={1}>
+                            {r.originalTitle}
+                          </T>
+                        ) : null}
                         <T variant="micro" muted>
                           {resultMeta(r, t)}
                         </T>

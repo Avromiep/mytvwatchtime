@@ -115,6 +115,18 @@ export class AdminController {
     };
   }
 
+  @Post('repair-non-english-base/run')
+  @RequireRoles('ADMIN')
+  runRepairNonEnglishBase(@Query('count') count?: string) {
+    const n = count ? Number(count) : undefined;
+    this.metadataBackfill.repairNonEnglishBase(n).catch((e) => {
+      console.error('[Non-English base repair] FAILED:', (e as Error)?.message ?? e);
+    });
+    return {
+      message: `Non-English base repair started (${n ?? 200} rows max). Check API logs for progress + results.`,
+    };
+  }
+
   @Post('tmdb-changes/run')
   @RequireRoles('ADMIN')
   runTmdbChanges(@Query('start') start?: string) {

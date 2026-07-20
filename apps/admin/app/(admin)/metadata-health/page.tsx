@@ -19,6 +19,7 @@ interface MetadataHealth {
   castMissingCharacterIds: number;
   movieDataOnShows: number;
   multiTvdbIds: number;
+  nonEnglishBase: number;
 }
 
 /** One-line guidance per stat: what it means and what to do about it. */
@@ -40,6 +41,8 @@ const STAT_HINTS: Record<string, string> = {
     'Movie statuses/history wrongly written on shows (import bug). The Repair button above purges these too.',
   multiTvdbIds:
     'Rows carrying more than one TVDB id — merge leftovers (harmless) or id poisoning from an old bug (one id belongs to a DIFFERENT show, mis-routing matches). Repair verifies each id via TMDB and detaches only the wrong ones. User history is never deleted.',
+  nonEnglishBase:
+    "Rows whose base title/overview was written in a non-English language (older contamination — that's why English users see foreign titles). Repair re-hydrates them with a proper English base and restores the 'en' override. No user data touched.",
 };
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -65,6 +68,9 @@ export default function MetadataHealthPage() {
   const [castResult, setCastResult] = useState<string | null>(null);
   const [repairingTvdbIds, setRepairingTvdbIds] = useState(false);
   const [tvdbIdResult, setTvdbIdResult] = useState<string | null>(null);
+  const [repairingEnBase, setRepairingEnBase] = useState(false);
+  const [enBaseResult, setEnBaseResult] = useState<string | null>(null);
+  const [enBaseCount, setEnBaseCount] = useState('200');
   const [batchCount, setBatchCount] = useState('200');
   const [batchRps, setBatchRps] = useState('');
   const [syncStart, setSyncStart] = useState('');
@@ -168,6 +174,20 @@ export default function MetadataHealthPage() {
       .finally(() => setRepairingTvdbIds(false));
   };
 
+  const runEnBaseRepair = () => {
+    setRepairingEnBase(true);
+    setEnBaseResult(null);
+    const n = Math.max(1, Number(enBaseCount) || 200);
+    api
+      .post(`/admin/repair-non-english-base/run?count=${n}`)
+      .then(() => {
+        setEnBaseResult(`Non-English base repair started (${n} rows). Stats refresh in 60s.`);
+        setTimeout(() => load(), 60000);
+      })
+      .catch(() => setEnBaseResult('Non-English base repair failed to start.'))
+      .finally(() => setRepairingEnBase(false));
+  };
+
   if (!canView) return <p className="p-6 text-sm text-zinc-500">Admins only.</p>;
 
   const pct = (n: number) => (stats && stats.total > 0 ? Math.round((n / stats.total) * 100) : 0);
@@ -247,6 +267,11 @@ export default function MetadataHealthPage() {
       {tvdbIdResult && (
         <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200">
           {tvdbIdResult}
+        </div>
+      )}
+      {enBaseResult && (
+        <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-800 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-200">
+          {enBaseResult}
         </div>
       )}
 
@@ -360,6 +385,32 @@ export default function MetadataHealthPage() {
                 >
                   {repairingTvdbIds ? 'Starting…' : 'Repair TVDB IDs'}
                 </button>
+              }
+            />
+            <MetricCard
+              label="Non-English Base"
+              value={stats.nonEnglishBase}
+              sub="rows missing a trusted English base"
+              hint={STAT_HINTS.nonEnglishBase}
+              highlight={stats.nonEnglishBase > 0}
+              action={
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={enBaseCount}
+                    onChange={(e) => setEnBaseCount(e.target.value)}
+                    className="w-20 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+                    title="Rows per run"
+                  />
+                  <button
+                    onClick={runEnBaseRepair}
+                    disabled={repairingEnBase}
+                    className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    {repairingEnBase ? 'Starting…' : 'Restore English Base'}
+                  </button>
+                </div>
               }
             />
           </div>

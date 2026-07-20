@@ -58,6 +58,66 @@ const animeShow = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+describe('MetadataBackfillService.repairNonEnglishBase', () => {
+  function make(candidates: any[]) {
+    const prisma: any = {
+      mediaItem: {
+        findMany: jest.fn(async () => candidates),
+        update: jest.fn(async () => ({})),
+      },
+    };
+    const meta = mockMeta();
+    const service = new MetadataBackfillService(
+      prisma,
+      meta,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    return { service, prisma, meta };
+  }
+
+  const row = (over: Record<string, any> = {}) => ({
+    id: 'm1',
+    title: 'Chirurgové',
+    type: 'SHOW',
+    externalIds: [{ provider: 'TMDB', value: '1416', providerEntityKind: 'SERIES' }],
+    ...over,
+  });
+
+  it('re-hydrates TMDB rows with a forced refresh stamp', async () => {
+    const { service, prisma, meta } = make([row()]);
+    const res = await service.repairNonEnglishBase();
+    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'm1' },
+      data: { metadataRefreshedAt: null },
+    });
+    expect(meta.ensureShowFull).toHaveBeenCalledWith(1416);
+    expect(res).toEqual(
+      expect.objectContaining({ processed: 1, succeeded: 1, failed: 0, sample: ['Chirurgové'] }),
+    );
+  });
+
+  it('falls back to TVDB for TVDB-only rows (movie path for movies)', async () => {
+    const { service, meta } = make([
+      row({
+        id: 'm2',
+        title: 'X',
+        type: 'MOVIE',
+        externalIds: [{ provider: 'THE_TVDB', value: '777', providerEntityKind: 'MOVIE' }],
+      }),
+      row({ id: 'm3', title: 'NoIds', externalIds: [] }),
+    ]);
+    const res = await service.repairNonEnglishBase();
+    expect(meta.ensureMovieFullTvdb).toHaveBeenCalledWith(777);
+    expect(res.succeeded).toBe(1);
+    expect(res.failed).toBe(1); // m3 has nothing to hydrate from
+  });
+});
+
 describe('MetadataBackfillService.repairTvdbIdConflicts', () => {
   function make(rows: any[], mappedById: Record<string, { show?: number; movie?: number } | null>) {
     const prisma: any = {

@@ -70,6 +70,7 @@ export class MetadataBackfillService {
       castMissingCharacterIds,
       movieDataOnShows,
       multiTvdbIds,
+      nonEnglishBase,
     ] = await Promise.all([
       this.prisma.mediaItem.count(),
       this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
@@ -141,6 +142,13 @@ export class MetadataBackfillService {
           GROUP BY media_id, provider_entity_kind
           HAVING count(*) > 1
         ) x`,
+      // Rows without a trusted ENGLISH base slot: base explicitly non-English, or the
+      // 'en' override is missing. Re-hydration with an English base heals them (and
+      // overwrites any wrong-language value in the 'en' slot).
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c FROM media_items m
+        WHERE m.title_locale IS DISTINCT FROM 'en'
+           OR m.titles->>'en' IS NULL`,
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     return {
@@ -162,6 +170,7 @@ export class MetadataBackfillService {
       castMissingCharacterIds: toNum(castMissingCharacterIds as any),
       movieDataOnShows: toNum(movieDataOnShows as any),
       multiTvdbIds: toNum(multiTvdbIds as any),
+      nonEnglishBase: toNum(nonEnglishBase as any),
     };
   }
 
@@ -1016,6 +1025,92 @@ export class MetadataBackfillService {
       return { processed: rows.length, mergedKept, conflictsFixed, idsDetached, ambiguous };
     } finally {
       this.tvdbIdFixRunning = false;
+    }
+  }
+
+  // ---- Non-English base titles ----
+  private enBaseFixRunning = false;
+
+  /**
+   * Restore a trusted ENGLISH base for rows whose base/override was written in the wrong
+   * language (older contaminations: title_locale != 'en', or a missing/wrong 'en' slot).
+   * Strategy: clear metadataRefreshedAt and run the standard hydration — persistShow/
+   * persistMovie rewrite the English base and the 'en' override from the provider.
+   * TMDB id wins when both exist (richer payloads); TVDB is the fallback for TVDB-only rows.
+   */
+  async repairNonEnglishBase(limit?: number): Promise<{
+    processed: number;
+    succeeded: number;
+    failed: number;
+    sample: string[];
+  }> {
+    const empty = { processed: 0, succeeded: 0, failed: 0, sample: [] as string[] };
+    if (this.enBaseFixRunning) {
+      this.logger.log('Non-English base repair already running — skipping');
+      return empty;
+    }
+    this.enBaseFixRunning = true;
+    try {
+      const candidates = await this.prisma.mediaItem.findMany({
+        where: {
+          OR: [{ titleLocale: { not: 'en' } }, { titleLocale: null }],
+          externalIds: { some: {} },
+        },
+        orderBy: { id: 'asc' },
+        take: Math.max(1, Math.min(limit ?? 200, 100000)),
+        select: {
+          id: true,
+          title: true,
+          type: true,
+          externalIds: { select: { provider: true, value: true, providerEntityKind: true } },
+        },
+      });
+
+      let succeeded = 0;
+      let failed = 0;
+      const sample: string[] = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const m = candidates[i];
+        try {
+          // Force a full re-hydration: the standard path rewrites the English base.
+          await this.prisma.mediaItem.update({
+            where: { id: m.id },
+            data: { metadataRefreshedAt: null },
+          });
+          const tmdbExt = m.externalIds.find(
+            (e) => e.provider === 'TMDB' && e.providerEntityKind !== 'EPISODE',
+          );
+          const tvdbExt = m.externalIds.find((e) => e.provider === 'THE_TVDB');
+          if (tmdbExt) {
+            if (m.type === 'SHOW') await this.meta.ensureShowFull(Number(tmdbExt.value));
+            else await this.meta.ensureMovieFull(Number(tmdbExt.value));
+          } else if (tvdbExt) {
+            if (m.type === 'SHOW') await this.meta.ensureShowFullTvdb(Number(tvdbExt.value));
+            else await this.meta.ensureMovieFullTvdb(Number(tvdbExt.value));
+          } else {
+            failed++; // nothing to hydrate from
+            continue;
+          }
+          succeeded++;
+          if (sample.length < 5) sample.push(m.title);
+        } catch (e) {
+          failed++;
+          this.logger.debug(
+            `non-English base repair failed for "${m.title}": ${(e as Error).message}`,
+          );
+        }
+        if ((i + 1) % 25 === 0) {
+          this.logger.log(
+            `Non-English base repair progress: ${i + 1}/${candidates.length} (${succeeded} ok, ${failed} fail)`,
+          );
+        }
+      }
+      this.logger.log(
+        `Non-English base repair: ${succeeded}/${candidates.length} re-hydrated with English base, ${failed} failed`,
+      );
+      return { processed: candidates.length, succeeded, failed, sample };
+    } finally {
+      this.enBaseFixRunning = false;
     }
   }
 
