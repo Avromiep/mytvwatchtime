@@ -375,7 +375,13 @@ export const useComment = (id: string, polling = false) =>
     refetchInterval: polling ? COMMENT_POLL_INTERVAL : false,
   });
 
-/** Infinite-scrolling replies for a comment. depth=2 also returns each direct child's first children. */
+/** Replies posted against an external (TMDB) review. Lazy: only fetched when expanded. */
+export const useExternalReviewReplies = (reviewId: string | null, enabled = true) =>
+  useQuery({
+    queryKey: ['externalReviewReplies', reviewId],
+    queryFn: () => api.get<CommentDto[]>(`/external-reviews/${reviewId}/replies`),
+    enabled: enabled && !!reviewId,
+  }); /** Infinite-scrolling replies for a comment. depth=2 also returns each direct child's first children. */
 export const useCommentReplies = (
   commentId: string,
   sort: CommentSortMode,
@@ -443,6 +449,7 @@ export const useCreateComment = () => {
       mediaId?: string;
       listId?: string;
       isSpoiler?: boolean;
+      externalReviewId?: string;
     }) => api.post<CommentDto>('/comments', dto),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ['comments'] });

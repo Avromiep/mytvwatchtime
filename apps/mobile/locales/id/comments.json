@@ -30,7 +30,7 @@
   "reachedEnd": "Anda telah mencapai akhir",
   "imageAttached": "Gambar terlampir",
   "addComment": "Tambahkan komentar (gunakan @ untuk menyebut)",
-  "viewReplies": "Lihat {{count}} {{unit}}",
+  "viewReplies": "Lihat balasan ({{count}})",
   "replySingular": "balasan",
   "replyPlural": "balasan",
   "commentSingular": "komentar",
@@ -76,5 +76,7 @@
   "viewSpoiler": "Ketuk untuk tetap melihat",
   "reportSpoiler": "Laporkan sebagai spoiler",
   "spoilerReported": "Spoiler dilaporkan",
-  "markAsSpoiler": "Tandai sebagai spoiler"
+  "markAsSpoiler": "Tandai sebagai spoiler",
+  "replyingToReview": "Membalas ulasan TMDB {{author}}",
+  "hideReplies": "Sembunyikan balasan"
 }

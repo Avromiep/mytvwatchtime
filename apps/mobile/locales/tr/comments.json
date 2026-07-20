@@ -30,7 +30,7 @@
   "reachedEnd": "Sona ulaştın",
   "imageAttached": "Görsel eklendi",
   "addComment": "Yorum ekle (etiketlemek için @ kullan)",
-  "viewReplies": "{{count}} {{unit}} görüntüle",
+  "viewReplies": "Yanıtları gör ({{count}})",
   "replySingular": "yanıt",
   "replyPlural": "yanıt",
   "commentSingular": "yorum",
@@ -76,5 +76,7 @@
   "viewSpoiler": "Yine de görmek için dokun",
   "reportSpoiler": "Spoiler olarak bildir",
   "spoilerReported": "Spoiler bildirildi",
-  "markAsSpoiler": "Spoiler olarak işaretle"
+  "markAsSpoiler": "Spoiler olarak işaretle",
+  "replyingToReview": "{{author}} adlı kişinin TMDB incelemesine yanıt",
+  "hideReplies": "Yanıtları gizle"
 }

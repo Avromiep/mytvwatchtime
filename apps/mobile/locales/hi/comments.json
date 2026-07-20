@@ -30,7 +30,7 @@
   "reachedEnd": "आप अंत तक पहुँच गए हैं",
   "imageAttached": "चित्र संलग्न है",
   "addComment": "टिप्पणी जोड़ें (उल्लेख के लिए @ का उपयोग करें)",
-  "viewReplies": "{{count}} {{unit}} देखें",
+  "viewReplies": "उत्तर देखें ({{count}})",
   "replySingular": "जवाब",
   "replyPlural": "जवाब",
   "commentSingular": "टिप्पणी",
@@ -76,5 +76,7 @@
   "viewSpoiler": "फिर भी देखने के लिए टैप करें",
   "reportSpoiler": "स्पॉइलर के रूप में रिपोर्ट करें",
   "spoilerReported": "स्पॉइलर रिपोर्ट किया गया",
-  "markAsSpoiler": "स्पॉइलर के रूप में चिह्नित करें"
+  "markAsSpoiler": "स्पॉइलर के रूप में चिह्नित करें",
+  "replyingToReview": "{{author}} की TMDB समीक्षा का उत्तर",
+  "hideReplies": "उत्तर छिपाएँ"
 }

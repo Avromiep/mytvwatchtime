@@ -107,6 +107,11 @@ export class SocialController {
     return this.comments.reportSpoiler(userId, id);
   }
 
+  @Get('external-reviews/:id/replies')
+  externalReviewReplies(@CurrentUser('id') userId: string, @Param('id') id: string) {
+    return this.comments.listExternalReviewReplies(userId, id);
+  }
+
   // ---- Block / Unblock ----
   @Post('users/:id/block')
   block(@CurrentUser('id') userId: string, @Param('id') targetId: string) {

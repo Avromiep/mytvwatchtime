@@ -622,4 +622,19 @@ describe('CommentsService.list — TMDB external reviews', () => {
 
     expect(res.externalReviews).toEqual([]);
   });
+
+  it('excludes review replies from the top-level feed (list + count)', async () => {
+    const { service, prisma } = makeService();
+
+    await service.list('u1', { threadType: 'SHOW', threadId: 't1' } as any);
+
+    expect(prisma.comment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ externalReviewId: null, parentId: null }),
+      }),
+    );
+    expect(prisma.comment.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({ externalReviewId: null }),
+    });
+  });
 });

@@ -140,7 +140,7 @@ export class ExternalReviewsService {
     }
   }
 
-  /** Read the stored page-1 set for a thread (newest first). */
+  /** Read the stored page-1 set for a thread (newest first), with user reply counts. */
   async listForThread(threadType: CommentThreadType, threadId: string) {
     if (threadType !== 'SHOW' && threadType !== 'MOVIE' && threadType !== 'EPISODE') return [];
     const rows = await this.prisma.externalReview.findMany({
@@ -148,6 +148,18 @@ export class ExternalReviewsService {
       orderBy: { reviewCreatedAt: 'desc' },
       take: 20,
     });
+    if (!rows.length) return [];
+    const replyCounts = await this.prisma.comment.groupBy({
+      by: ['externalReviewId'],
+      where: {
+        externalReviewId: { in: rows.map((r) => r.id) },
+        deletedByUser: false,
+        adminDeleted: false,
+        hidden: false,
+      },
+      _count: { _all: true },
+    });
+    const countById = new Map(replyCounts.map((r) => [r.externalReviewId, r._count._all]));
     return rows.map((r) => ({
       id: r.id,
       provider: r.provider,
@@ -158,6 +170,7 @@ export class ExternalReviewsService {
       content: r.content,
       url: r.url,
       createdAt: r.reviewCreatedAt,
+      repliesCount: countById.get(r.id) ?? 0,
     }));
   }
 

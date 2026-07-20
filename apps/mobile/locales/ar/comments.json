@@ -30,7 +30,7 @@
   "reachedEnd": "لقد وصلت إلى النهاية",
   "imageAttached": "تم إرفاق صورة",
   "addComment": "أضف تعليقًا (استخدم @ للإشارة)",
-  "viewReplies": "عرض {{count}} {{unit}}",
+  "viewReplies": "عرض الردود ({{count}})",
   "replySingular": "رد",
   "replyPlural": "ردود",
   "commentSingular": "تعليق",
@@ -76,5 +76,7 @@
   "viewSpoiler": "اضغط للعرض على أي حال",
   "reportSpoiler": "الإبلاغ كحرق",
   "spoilerReported": "تم الإبلاغ عن الحرق",
-  "markAsSpoiler": "وضع علامة كحرق"
+  "markAsSpoiler": "وضع علامة كحرق",
+  "replyingToReview": "الرد على مراجعة {{author}} على TMDB",
+  "hideReplies": "إخفاء الردود"
 }

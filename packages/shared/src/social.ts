@@ -87,6 +87,8 @@ export interface ExternalReviewDto {
   /** Canonical TMDB review URL (badge link target). */
   url: string;
   createdAt: string;
+  /** User replies posted against this review. */
+  repliesCount: number;
 }
 
 export interface CommentRepliesQuery extends PaginationQuery {
@@ -115,6 +117,8 @@ export interface CreateCommentDto {
   parentId?: string;
   /** Author-marked spoiler — body is censored for readers. */
   isSpoiler?: boolean;
+  /** Reply target: an external (TMDB) review id (alternative to parentId). */
+  externalReviewId?: string;
 }
 
 export interface UpdateCommentDto {

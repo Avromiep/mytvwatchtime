@@ -30,7 +30,7 @@
   "reachedEnd": "最後まで表示しました",
   "imageAttached": "画像を添付しました",
   "addComment": "コメントを追加（@でメンション）",
-  "viewReplies": "{{count}}{{unit}}を表示",
+  "viewReplies": "返信を見る（{{count}}）",
   "replySingular": "件の返信",
   "replyPlural": "件の返信",
   "commentSingular": "件のコメント",
@@ -76,5 +76,7 @@
   "viewSpoiler": "タップして表示",
   "reportSpoiler": "ネタバレとして報告",
   "spoilerReported": "ネタバレを報告しました",
-  "markAsSpoiler": "ネタバレとしてマーク"
+  "markAsSpoiler": "ネタバレとしてマーク",
+  "replyingToReview": "{{author}}さんのTMDBレビューに返信",
+  "hideReplies": "返信を隠す"
 }

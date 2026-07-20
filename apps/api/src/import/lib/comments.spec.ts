@@ -32,11 +32,21 @@ describe('tvtime comment owner resolution', () => {
     ]);
     expect(owner).toBe('10142511');
   });
-  it('ignores user_tv_show_data.csv (must be exact basename)', () => {
+  it('falls back to the majority user_id across per-user files (no identity file present)', () => {
     const owner = resolveArchiveOwner([
-      { filename: 'user_tv_show_data.csv', rows: [{ tv_show_id: '999', user_id: '999' }] },
+      { filename: 'user_tv_show_data.csv', rows: [{ tv_show_id: '1', user_id: '999' }] },
     ]);
-    expect(owner).toBeNull();
+    expect(owner).toBe('999');
+  });
+  it('picks the majority id when several appear', () => {
+    const owner = resolveArchiveOwner([
+      {
+        filename: 'followed_tv_show.csv',
+        rows: [{ user_id: '62321337' }, { user_id: '62321337' }, { user_id: '42' }],
+      },
+      { filename: 'ratings-live-votes.csv', rows: [{ user_id: '62321337' }, { user_id: '42' }] },
+    ]);
+    expect(owner).toBe('62321337');
   });
   it('returns null when no owner file is present', () => {
     expect(resolveArchiveOwner([{ filename: 'x.csv', rows: [{ id: '1' }] }])).toBeNull();
@@ -136,24 +146,28 @@ describe('tvtime comment normalization (comments-prod v2)', () => {
     expect(r.candidates).toHaveLength(0);
   });
 
-  it('skips a comment authored by another user', () => {
+  it('imports a comment authored by another user as a shadow candidate', () => {
     const r = normalizeComments(
       'comments-prod-comments.csv',
       [{ text: 'not mine', user_id: '99999', type: 'comment', comment_uuid: 'x' }],
       OWNER,
     );
-    expect(r.otherUsersSkipped).toBe(1);
-    expect(r.candidates).toHaveLength(0);
+    expect(r.otherUsersSkipped).toBe(0);
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0].authorIsOwner).toBe(false);
+    expect(r.candidates[0].sourceAuthorId).toBe('99999');
   });
 
-  it('skips a row with type=reply', () => {
+  it('imports a row with type=reply keeping its parent linkage', () => {
     const r = normalizeComments(
       'comments-prod-comments.csv',
-      [{ text: 'a reply', user_id: OWNER, type: 'reply', comment_uuid: 'x' }],
+      [{ text: 'a reply', user_id: OWNER, type: 'reply', comment_uuid: 'x', parent_uuid: 'p-1' }],
       OWNER,
     );
-    expect(r.repliesSkipped).toBe(1);
-    expect(r.candidates).toHaveLength(0);
+    expect(r.repliesSkipped).toBe(0);
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0].isReply).toBe(true);
+    expect(r.candidates[0].parentSourceCommentId).toBe('p-1');
   });
 
   it('skips an empty comment', () => {
@@ -340,29 +354,35 @@ describe('tvtime comment normalization (legacy episode_comment.csv)', () => {
     expect(r.candidates[0].externalEpisodeId).toBe(5495142);
   });
 
-  it('skips a comment with parent_comment_id set (reply)', () => {
+  it('imports a comment with parent_comment_id set (reply) keeping the parent key', () => {
     const r = normalizeComments(
       'episode_comment.csv',
       [top({ parent_comment_id: '3301320' })],
       OWNER,
     );
-    expect(r.repliesSkipped).toBe(1);
-    expect(r.candidates).toHaveLength(0);
+    expect(r.repliesSkipped).toBe(0);
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0].isReply).toBe(true);
+    expect(r.candidates[0].parentSourceCommentId).toBe('3301320');
   });
 
-  it('skips a comment with depth>0 (reply)', () => {
+  it('imports a comment with depth>0 (reply)', () => {
     const r = normalizeComments(
       'episode_comment.csv',
       [top({ depth: '1', parent_comment_id: '3301320' })],
       OWNER,
     );
-    expect(r.repliesSkipped).toBe(1);
-    expect(r.candidates).toHaveLength(0);
+    expect(r.repliesSkipped).toBe(0);
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0].isReply).toBe(true);
+    expect(r.candidates[0].depth).toBe(1);
   });
 
-  it('skips a comment authored by another user', () => {
+  it('imports a comment authored by another user (shadow candidate)', () => {
     const r = normalizeComments('episode_comment.csv', [top({ user_id: '12345' })], OWNER);
-    expect(r.otherUsersSkipped).toBe(1);
+    expect(r.otherUsersSkipped).toBe(0);
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0].authorIsOwner).toBe(false);
   });
 
   it('skips an empty comment in the legacy file', () => {
@@ -404,14 +424,16 @@ describe('tvtime comment normalization (legacy show_comment.csv)', () => {
     expect(r.candidates[0].sourceCommentId).toBe('1298772');
   });
 
-  it('skips a show-page reply (depth>0 / parent)', () => {
+  it('imports a show-page reply (depth>0 / parent) keeping the parent key', () => {
     const a = normalizeComments(
       'show_comment.csv',
       [row({ depth: '1', parent_comment_id: '1438037' })],
       OWNER,
     );
-    expect(a.repliesSkipped).toBe(1);
-    expect(a.candidates).toHaveLength(0);
+    expect(a.repliesSkipped).toBe(0);
+    expect(a.candidates).toHaveLength(1);
+    expect(a.candidates[0].isReply).toBe(true);
+    expect(a.candidates[0].parentSourceCommentId).toBe('1438037');
   });
 
   it('classifies show_comment_like.csv as activity (not a comment file)', () => {

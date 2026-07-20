@@ -30,7 +30,7 @@
   "reachedEnd": "已经到底了",
   "imageAttached": "已附加图片",
   "addComment": "添加评论（使用 @ 提及他人）",
-  "viewReplies": "查看 {{count}} {{unit}}",
+  "viewReplies": "查看回复（{{count}}）",
   "replySingular": "条回复",
   "replyPlural": "条回复",
   "commentSingular": "条评论",
@@ -76,5 +76,7 @@
   "viewSpoiler": "点按仍要查看",
   "reportSpoiler": "举报为剧透",
   "spoilerReported": "已举报剧透",
-  "markAsSpoiler": "标记为剧透"
+  "markAsSpoiler": "标记为剧透",
+  "replyingToReview": "回复 {{author}} 的 TMDB 评论",
+  "hideReplies": "隐藏回复"
 }

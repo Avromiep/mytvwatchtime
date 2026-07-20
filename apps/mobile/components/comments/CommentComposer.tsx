@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useTranslation } from 'react-i18next';
-import type { CommentDto } from '@tvwatch/shared';
+import type { CommentDto, ExternalReviewDto } from '@tvwatch/shared';
 import { TextField } from '../TextField';
 import { GiphyPicker } from '../GiphyPicker';
 import { MediaPickerModal, type AttachedList, type AttachedMedia } from './MediaPickerModal';
@@ -41,6 +41,10 @@ export interface CommentComposerProps {
   replyTarget?: CommentDto | null;
   /** Cancel replying to replyTarget (falls back to the thread root). */
   onCancelReply?: () => void;
+  /** The TMDB review being replied to (review acts as the parent post). */
+  reviewTarget?: ExternalReviewDto | null;
+  /** Dismiss the review reply anchor. */
+  onCancelReviewReply?: () => void;
 }
 
 export function CommentComposer({
@@ -51,6 +55,8 @@ export function CommentComposer({
   onSent,
   replyTarget = null,
   onCancelReply,
+  reviewTarget = null,
+  onCancelReviewReply,
 }: CommentComposerProps) {
   const { tokens, resolvedLocale } = useAppearance();
   const giphyLang = giphyLangFromLocale(resolvedLocale);
@@ -194,6 +200,7 @@ export function CommentComposer({
         mediaId: attachedMedia?.mediaId,
         listId: attachedList?.id,
         isSpoiler: spoiler || undefined,
+        externalReviewId: reviewTarget?.id,
       });
       setBody('');
       setInputH(null);
@@ -264,6 +271,26 @@ export function CommentComposer({
             </T>
             <Pressable
               onPress={onCancelReply}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={t('comments:cancelReply')}
+            >
+              <Ionicons name="close-circle" size={20} color={tokens.textMuted} />
+            </Pressable>
+          </View>
+        ) : null}
+        {reviewTarget ? (
+          <View style={[styles.previewBar, { backgroundColor: tokens.surfaceAlt }]}>
+            <Ionicons name="return-down-forward-outline" size={18} color={tokens.primary} />
+            <T
+              variant="micro"
+              style={{ color: tokens.primary, flex: 1, marginLeft: spacing.sm }}
+              numberOfLines={1}
+            >
+              {t('comments:replyingToReview', { author: reviewTarget.author })}
+            </T>
+            <Pressable
+              onPress={onCancelReviewReply}
               hitSlop={8}
               accessibilityRole="button"
               accessibilityLabel={t('comments:cancelReply')}
@@ -394,78 +421,90 @@ export function CommentComposer({
         ]}
       >
         <View style={[feedColumn.root, styles.composerRow]}>
-          <Pressable
-            onPress={pickImage}
-            disabled={imageCompressing || !!imageUri || !!selectedGif || hasCardAttachment}
-            hitSlop={8}
-            style={[styles.actionBtn, { marginRight: spacing.sm }]}
-            accessibilityRole="button"
-            accessibilityLabel={t('comments:imageAttached')}
-          >
-            <Ionicons
-              name={imageCompressing ? 'hourglass-outline' : 'image-outline'}
-              size={24}
-              color={imageUri || selectedGif || hasCardAttachment ? tokens.textDim : tokens.primary}
-            />
-          </Pressable>
-          <Pressable
-            onPress={openGifPicker}
-            disabled={
-              sending || imageCompressing || !!selectedGif || !!imageUri || hasCardAttachment
-            }
-            hitSlop={8}
-            style={[
-              styles.gifButton,
-              {
-                borderColor:
-                  selectedGif || imageUri || hasCardAttachment ? tokens.border : tokens.primary,
-              },
-              { marginRight: spacing.sm },
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel={t('comments:addGif')}
-          >
-            <T
-              variant="micro"
-              style={{
-                color:
-                  selectedGif || imageUri || hasCardAttachment ? tokens.textDim : tokens.primary,
-                fontWeight: '700',
-              }}
-            >
-              {t('comments:gif')}
-            </T>
-          </Pressable>
-          <Pressable
-            onPress={() => setMediaPickerOpen(true)}
-            disabled={
-              sending || imageCompressing || !!selectedGif || !!imageUri || hasCardAttachment
-            }
-            hitSlop={8}
-            style={[styles.actionBtn, { marginRight: spacing.sm }]}
-            accessibilityRole="button"
-            accessibilityLabel={t('comments:attachMedia')}
-          >
-            <Ionicons
-              name="film-outline"
-              size={24}
-              color={selectedGif || imageUri || hasCardAttachment ? tokens.textDim : tokens.primary}
-            />
-          </Pressable>
-          <Pressable
-            onPress={() => setSpoiler((v) => !v)}
-            hitSlop={8}
-            style={[styles.actionBtn, { marginRight: spacing.sm }]}
-            accessibilityRole="button"
-            accessibilityLabel={t('comments:markAsSpoiler')}
-            accessibilityState={{ selected: spoiler }}
-          >
-            <Ionicons
-              name={spoiler ? 'eye-off' : 'eye-off-outline'}
-              size={24}
-              color={spoiler ? tokens.orange : tokens.primary}
-            />
-          </Pressable>
+          {/* Attachment actions stacked 2×2 so the input gets the horizontal space. */}
+          <View style={styles.iconGrid}>
+            <View style={styles.iconGridRow}>
+              <Pressable
+                onPress={pickImage}
+                disabled={imageCompressing || !!imageUri || !!selectedGif || hasCardAttachment}
+                hitSlop={8}
+                style={styles.gridBtn}
+                accessibilityRole="button"
+                accessibilityLabel={t('comments:imageAttached')}
+              >
+                <Ionicons
+                  name={imageCompressing ? 'hourglass-outline' : 'image-outline'}
+                  size={22}
+                  color={
+                    imageUri || selectedGif || hasCardAttachment ? tokens.textDim : tokens.primary
+                  }
+                />
+              </Pressable>
+              <Pressable
+                onPress={openGifPicker}
+                disabled={
+                  sending || imageCompressing || !!selectedGif || !!imageUri || hasCardAttachment
+                }
+                hitSlop={8}
+                style={[
+                  styles.gifButton,
+                  {
+                    borderColor:
+                      selectedGif || imageUri || hasCardAttachment ? tokens.border : tokens.primary,
+                  },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={t('comments:addGif')}
+              >
+                <T
+                  variant="micro"
+                  style={{
+                    color:
+                      selectedGif || imageUri || hasCardAttachment
+                        ? tokens.textDim
+                        : tokens.primary,
+                    fontWeight: '700',
+                  }}
+                >
+                  {t('comments:gif')}
+                </T>
+              </Pressable>
+            </View>
+            <View style={styles.iconGridRow}>
+              <Pressable
+                onPress={() => setMediaPickerOpen(true)}
+                disabled={
+                  sending || imageCompressing || !!selectedGif || !!imageUri || hasCardAttachment
+                }
+                hitSlop={8}
+                style={styles.gridBtn}
+                accessibilityRole="button"
+                accessibilityLabel={t('comments:attachMedia')}
+              >
+                <Ionicons
+                  name="film-outline"
+                  size={22}
+                  color={
+                    selectedGif || imageUri || hasCardAttachment ? tokens.textDim : tokens.primary
+                  }
+                />
+              </Pressable>
+              <Pressable
+                onPress={() => setSpoiler((v) => !v)}
+                hitSlop={8}
+                style={styles.gridBtn}
+                accessibilityRole="button"
+                accessibilityLabel={t('comments:markAsSpoiler')}
+                accessibilityState={{ selected: spoiler }}
+              >
+                <Ionicons
+                  name={spoiler ? 'eye-off' : 'eye-off-outline'}
+                  size={22}
+                  color={spoiler ? tokens.orange : tokens.primary}
+                />
+              </Pressable>
+            </View>
+          </View>
           <TextField
             value={body}
             onChangeText={setBody}
@@ -515,7 +554,7 @@ export function CommentComposer({
   );
 }
 
-const INPUT_MIN_H = 44; // one row (padding 12×2 + ~20px text line)
+const INPUT_MIN_H = 64; // two rows by default (padding 12×2 + 2×~20px text lines)
 const INPUT_MAX_H = 132; // ~5 rows, then the input scrolls internally
 
 const styles = StyleSheet.create({
@@ -537,13 +576,26 @@ const styles = StyleSheet.create({
   },
   actionBtn: { height: INPUT_MIN_H, alignItems: 'center', justifyContent: 'center' },
   composerInput: { minHeight: INPUT_MIN_H, maxHeight: INPUT_MAX_H },
+  iconGrid: {
+    flexDirection: 'column',
+    justifyContent: 'center',
+    marginRight: spacing.sm,
+    gap: 2,
+  },
+  iconGridRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  gridBtn: {
+    width: 32,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   gifButton: {
     borderWidth: 1,
     borderRadius: radius.sm,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    minWidth: 44,
-    minHeight: 44,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    minWidth: 40,
+    height: 30,
     alignItems: 'center',
     justifyContent: 'center',
   },

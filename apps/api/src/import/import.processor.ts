@@ -2234,6 +2234,10 @@ export class ImportProcessor implements OnModuleInit {
         sourceCommentId: c.sourceCommentId,
         sourceKey,
         sourceAuthorId: c.sourceAuthorId,
+        authorIsOwner: c.authorIsOwner,
+        isReply: c.isReply,
+        parentSourceCommentId: c.parentSourceCommentId,
+        depth: c.depth,
         image: c.image ?? null, // { url, format } — gif stored by URL, png downloaded at apply
         targetType: c.targetType,
         showTitle: c.showTitle ?? null,

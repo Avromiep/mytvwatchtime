@@ -30,7 +30,7 @@
   "reachedEnd": "마지막입니다",
   "imageAttached": "이미지가 첨부되었습니다",
   "addComment": "댓글 추가(@로 멘션)",
-  "viewReplies": "{{count}}{{unit}} 보기",
+  "viewReplies": "답글 보기 ({{count}})",
   "replySingular": "개의 답글",
   "replyPlural": "개의 답글",
   "commentSingular": "개의 댓글",
@@ -76,5 +76,7 @@
   "viewSpoiler": "그래도 볼게요",
   "reportSpoiler": "스포일러로 신고",
   "spoilerReported": "스포일러가 신고됨",
-  "markAsSpoiler": "스포일러로 표시"
+  "markAsSpoiler": "스포일러로 표시",
+  "replyingToReview": "{{author}}님의 TMDB 리뷰에 답글",
+  "hideReplies": "답글 숨기기"
 }

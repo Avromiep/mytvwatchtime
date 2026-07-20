@@ -20,6 +20,14 @@ export interface NormalizedImportedComment {
   sourceRow: number;
   sourceCommentId: string | null;
   sourceAuthorId: string | null;
+  /** True when the author is the archive owner (vs a shadow-imported third party). */
+  authorIsOwner: boolean;
+  /** Reply linkage: the PARENT comment's source id (comment_uuid). Deferred when the
+   *  parent is not in the export — the apply links it once the parent arrives. */
+  isReply: boolean;
+  parentSourceCommentId: string | null;
+  /** Source thread depth (0 = top-level) when the export carries it. */
+  depth: number | null;
   text: string;
   textLength: number;
   spoiler: boolean;
@@ -151,7 +159,33 @@ export function resolveArchiveOwner(
       }
     }
   }
-  return null;
+  // Fallback: no identity file in the archive. Every data file in a GDPR export belongs
+  // to the SAME account, so the majority user_id across per-user files IS the owner —
+  // without it, comment attribution is impossible and no comments import at all.
+  const OWNER_HINT_FILES = [
+    'user_tv_show_data',
+    'followed_tv_show',
+    'tracking-prod-records',
+    'seen_episode',
+    'watched_on_episode',
+    'ratings-',
+    'emotions-',
+    'show_character_episode_vote',
+  ];
+  const counts = new Map<string, number>();
+  for (const f of files) {
+    const base = (f.filename.replace(/\\/g, '/').split('/').pop() ?? f.filename).toLowerCase();
+    if (!OWNER_HINT_FILES.some((h) => base.includes(h))) continue;
+    for (const r of f.rows) {
+      const id = tryId(r['user_id']);
+      if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+  }
+  let best: { id: string; n: number } | null = null;
+  for (const [id, n] of counts) {
+    if (!best || n > best.n) best = { id, n };
+  }
+  return best?.id ?? null;
 }
 
 /**
@@ -277,24 +311,24 @@ export function normalizeComments(
       return;
     }
 
-    // Replies (own row type or any parent indicator) — skip, never import.
-    if (isReplyByType || hasParent) {
-      result.repliesSkipped++;
-      return;
-    }
-
     // Not a recognized comment row AND not a recognized activity row → ambiguous; skip safely.
-    if (!isCommentType) {
+    if (!isCommentType && !isReplyByType && !hasParent) {
       result.invalid++;
       return;
     }
 
-    // Ownership: only the archive owner's authored comments.
-    const authorId = field(row, ['user_id']) ?? null;
-    if (ownerId == null || authorId !== ownerId) {
+    // Ownership: the archive owner's comments are imported under the real user; other
+    // authors become deterministic SHADOW users at apply time (nothing is dropped).
+    // Legacy files (episode_comment/show_comment) carry no user_id — they are single-user
+    // exports, so a missing author id means the owner.
+    // When the owner can't be resolved, the old scope can't be distinguished — skip safely.
+    const authorIdRaw = field(row, ['user_id']);
+    if (ownerId == null) {
       result.otherUsersSkipped++;
       return;
     }
+    const authorId = authorIdRaw ?? ownerId;
+    const authorIsOwner = authorId === ownerId;
 
     // Text validation. A comment is valid if it has text OR a visual attachment (image/gif).
     const rawText = field(row, ['text', 'message', 'comment', 'body']);
@@ -347,6 +381,10 @@ export function normalizeComments(
       sourceRow,
       sourceCommentId,
       sourceAuthorId: authorId,
+      authorIsOwner,
+      isReply: isReplyByType || hasParent,
+      parentSourceCommentId: parentVal ?? null,
+      depth: depth ?? (isReplyByType || hasParent ? 1 : 0),
       text,
       textLength: text.length,
       spoiler,

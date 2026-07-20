@@ -30,7 +30,7 @@
   "reachedEnd": "You've reached the end",
   "imageAttached": "Image attached",
   "addComment": "Add a comment (use @ to mention)",
-  "viewReplies": "View {{count}} {{unit}}",
+  "viewReplies": "View replies ({{count}})",
   "replySingular": "reply",
   "replyPlural": "replies",
   "commentSingular": "comment",
@@ -100,5 +100,7 @@
   "viewSpoiler": "Tap to view anyway",
   "reportSpoiler": "Report as spoiler",
   "spoilerReported": "Spoiler reported",
-  "markAsSpoiler": "Mark as spoiler"
+  "markAsSpoiler": "Mark as spoiler",
+  "replyingToReview": "Replying to {{author}}'s TMDB review",
+  "hideReplies": "Hide replies"
 }

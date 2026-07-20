@@ -313,6 +313,8 @@ model User {
   passwordHash  String?
   role          Role     @default(USER)
   isSuspended   Boolean  @default(false) @map("is_suspended")
+  // Synthetic identity for imported third-party comments (author not a real user).
+  isShadow      Boolean  @default(false) @map("is_shadow")
   emailVerified      Boolean  @default(false)
   mustChangePassword Boolean  @default(false) @map("must_change_password")
   createdAt          DateTime @default(now()) @map("created_at")
@@ -642,6 +644,7 @@ model ExternalReview {
 
   media   MediaItem? @relation(fields: [mediaId], references: [id], onDelete: Cascade)
   episode Episode?   @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  comments Comment[]
 
   @@unique([provider, externalId])
   @@index([mediaId])
@@ -1071,6 +1074,11 @@ model Comment {
   isSpoiler    Boolean          @default(false) @map("is_spoiler")
   // Spoiler-report tally (community flagging; isSpoiler flips at the threshold).
   spoilerCount Int              @default(0) @map("spoiler_count")
+  // Set when this comment replies to a provider review (TMDB review as parent).
+  externalReviewId String?      @map("external_review_id")
+  // Deferred parent identity (source_key of the parent's source comment). Set when an
+  // imported reply's parent is not in our DB yet — linked once the parent arrives.
+  parentSourceKey String?       @map("parent_source_key")
   language     String?
   source       ListSource?      @default(MANUAL) @map("source")
   sourceKey    String?          @map("source_key")
@@ -1089,6 +1097,7 @@ model Comment {
   likes     CommentLike[]
   reports   Report[]
   spoilerReports CommentSpoilerReport[]
+  externalReview ExternalReview? @relation(fields: [externalReviewId], references: [id], onDelete: SetNull)
   image     CommentImage?
 
   @@index([threadType, threadId])
@@ -1096,6 +1105,8 @@ model Comment {
   @@index([parentId])
   @@index([rootId])
   @@index([userId, source, sourceKey])
+  @@index([parentSourceKey])
+  @@index([externalReviewId])
   @@map("comments")
 }
 

@@ -98,6 +98,11 @@ export class CreateCommentDto {
   @IsOptional()
   @IsBoolean()
   isSpoiler?: boolean;
+
+  @ApiPropertyOptional({ description: 'Reply target: an external (TMDB) review id.' })
+  @IsOptional()
+  @IsString()
+  externalReviewId?: string;
 }
 
 export class UpdateCommentDto {

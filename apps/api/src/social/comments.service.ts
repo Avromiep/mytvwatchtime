@@ -52,6 +52,9 @@ export class CommentsService {
       threadType: q.threadType,
       threadId: q.threadId,
       parentId: null,
+      // Review replies behave like comment replies: they live INSIDE the review card,
+      // never as top-level posts in the main feed (list + count stay clean).
+      externalReviewId: null,
       hidden: false,
       adminDeleted: false,
       ...(blockedIds.length ? { userId: { notIn: blockedIds } } : {}),
@@ -178,11 +181,22 @@ export class CommentsService {
     if (dto.gifUrl && !isAllowedGiphyUrl(dto.gifUrl)) {
       throw new BadRequestException('Invalid GIF URL');
     }
+    if (dto.externalReviewId && dto.parentId) {
+      throw new BadRequestException('A reply can target either a comment or a review, not both');
+    }
+    if (dto.externalReviewId) {
+      const review = await this.prisma.externalReview.findUnique({
+        where: { id: dto.externalReviewId },
+        select: { id: true },
+      });
+      if (!review) throw new BadRequestException('Unknown review');
+    }
 
     const comment = await this.prisma.comment.create({
       data: {
         userId,
         parentId: dto.parentId,
+        externalReviewId: dto.externalReviewId ?? null,
         depth: parent ? (parent.depth ?? 0) + 1 : 0,
         rootId: parent ? (parent.rootId ?? parent.id) : null,
         threadType: dto.threadType,
@@ -640,7 +654,38 @@ export class CommentsService {
     return new Set(rows.map((r) => r.commentId));
   }
 
-  /** Map a Prisma comment row (with user + image includes) to the public DTO. */
+  /** Replies posted against an external (TMDB) review (chronological, capped). */
+  async listExternalReviewReplies(userId: string, externalReviewId: string) {
+    const rows = await this.prisma.comment.findMany({
+      where: { externalReviewId, deletedByUser: false, adminDeleted: false, hidden: false },
+      orderBy: { createdAt: 'asc' },
+      take: 50,
+      include: { user: { include: { profile: true } }, image: true },
+    });
+    const counts = await this.authorCounts([...new Set(rows.map((r) => r.userId))]);
+    const liked = await this.likedIds(
+      userId,
+      rows.map((r) => r.id),
+    );
+    const spoilerReported = await this.spoilerReportedIds(
+      userId,
+      rows.map((r) => r.id),
+    );
+    const mediaMap = await this.mediaRefs(rows.map((r) => r.mediaId).filter(Boolean) as string[]);
+    const listMap = await this.listRefs(rows.map((r) => r.listId).filter(Boolean) as string[]);
+    return rows.map((r) =>
+      this.toDto(
+        r,
+        counts.get(r.userId)!,
+        liked.has(r.id),
+        {
+          media: r.mediaId ? mediaMap.get(r.mediaId) : null,
+          list: r.listId ? listMap.get(r.listId) : null,
+        },
+        spoilerReported.has(r.id),
+      ),
+    );
+  } /** Map a Prisma comment row (with user + image includes) to the public DTO. */
   private toDto(
     r: any,
     counts: any,

@@ -30,7 +30,7 @@
   "reachedEnd": "Du hast das Ende erreicht",
   "imageAttached": "Bild angehängt",
   "addComment": "Kommentar hinzufügen (@ für Erwähnungen verwenden)",
-  "viewReplies": "{{count}} {{unit}} anzeigen",
+  "viewReplies": "Antworten anzeigen ({{count}})",
   "replySingular": "Antwort",
   "replyPlural": "Antworten",
   "commentSingular": "Kommentar",
@@ -76,5 +76,7 @@
   "viewSpoiler": "Tippen, um trotzdem zu sehen",
   "reportSpoiler": "Als Spoiler melden",
   "spoilerReported": "Spoiler gemeldet",
-  "markAsSpoiler": "Als Spoiler markieren"
+  "markAsSpoiler": "Als Spoiler markieren",
+  "replyingToReview": "Antwort auf die TMDB-Rezension von {{author}}",
+  "hideReplies": "Antworten ausblenden"
 }

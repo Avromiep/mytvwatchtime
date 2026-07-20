@@ -59,8 +59,15 @@ describe('tvtime import pipeline (fixtures, no DB)', () => {
     it('maps verified ids to the right star values', () => {
       const files = loadAll();
       const supported: any[] = [];
-      for (const f of files) supported.push(...normalizeRatings(f.filename, f.rows).candidates.filter((c) => c.supported));
-      const byId = new Map(supported.filter((c) => c.targetType === 'episode').map((c) => [c.sourceRatingId, c.normalizedRating]));
+      for (const f of files)
+        supported.push(
+          ...normalizeRatings(f.filename, f.rows).candidates.filter((c) => c.supported),
+        );
+      const byId = new Map(
+        supported
+          .filter((c) => c.targetType === 'episode')
+          .map((c) => [c.sourceRatingId, c.normalizedRating]),
+      );
       expect(byId.get(1)).toBe(1);
       expect(byId.get(27)).toBe(2);
       expect(byId.get(28)).toBe(3);
@@ -97,7 +104,9 @@ describe('tvtime import pipeline (fixtures, no DB)', () => {
 
       const { unique } = dedupeEmotions(supported);
       // Two distinct emotions for episode 1000001 (35=BORED, 39=TENSE) must both survive.
-      const ep1 = unique.filter((c) => c.targetType === 'episode' && (c as any).externalEpisodeId === 1000001);
+      const ep1 = unique.filter(
+        (c) => c.targetType === 'episode' && (c as any).externalEpisodeId === 1000001,
+      );
       expect(ep1.length).toBe(2);
     });
   });
@@ -123,30 +132,42 @@ describe('tvtime import pipeline (fixtures, no DB)', () => {
         rowsDetected += res.rowsDetected;
         candidates.push(...res.candidates);
       }
-      // Top-level authored comments:
+      // Imported comments (owner top-level + replies + other-user shadows):
       //  - comments-prod-comments-v1.csv: 1 comment (Safe synthetic top-level comment one)
       //  - comments-prod-comments.csv (v2): 1 comment (parent0002) + embedded reply counted
-      //  - episode_comment.csv: 1 top-level (3000213); 1 reply (depth1, 3301835); 1 other-user (99999)
-      expect(topLevel).toBe(3);
-      // replies: embedded reply in v2 (1) + episode_comment reply row (1)
-      expect(replies).toBe(2);
-      // other-user: episode_comment row by 99999
-      expect(otherUsers).toBe(1);
+      //  - episode_comment.csv: 1 top-level (3000213) + 1 reply (depth1, 3301835) + 1 other-user (99999)
+      expect(topLevel).toBe(5);
+      // replies skipped: only the embedded blob reply in v2 (row replies are now imported)
+      expect(replies).toBe(1);
+      // other-user rows are imported as shadow candidates, not skipped
+      expect(otherUsers).toBe(0);
       // activity: v1 like+report+user-read (3) + episode_comment_like (1) + v2 like (1)
       expect(activity).toBeGreaterThanOrEqual(5);
       expect(invalid).toBe(0);
-      expect(candidates.length).toBe(3);
+      expect(candidates.length).toBe(5);
 
-      // Dedup: all three have distinct source ids → no duplicates.
+      // Dedup: all five have distinct source ids → no duplicates.
       const { unique, duplicates } = dedupeComments(candidates);
-      expect(unique.length).toBe(3);
+      expect(unique.length).toBe(5);
       expect(duplicates).toBe(0);
+      // The reply keeps its parent linkage; the other-user comment is a shadow candidate.
+      const reply = candidates.find((c: any) => c.isReply);
+      expect(reply?.parentSourceCommentId).toBe('3301320');
+      const shadow = candidates.find((c: any) => !c.authorIsOwner);
+      expect(shadow?.sourceAuthorId).toBe('99999');
     });
 
     it('a single malformed optional row does not fail the whole pipeline', () => {
       // A ratings file with one garbage row still yields the valid ones.
       const res = normalizeRatings('ratings-prod-episode_votes.csv', [
-        { episode_id: '1', series_name: 'X', season_number: '1', episode_number: '1', user_id: '1', vote_key: '1-1-3' },
+        {
+          episode_id: '1',
+          series_name: 'X',
+          season_number: '1',
+          episode_number: '1',
+          user_id: '1',
+          vote_key: '1-1-3',
+        },
         { episode_id: 'bad', vote_key: 'not-a-key' },
         { series_name: 'Y', vote_key: '2-1-GARBAGE' },
       ]);
@@ -163,7 +184,13 @@ describe('tvtime import pipeline (fixtures, no DB)', () => {
       const ratings = { detected: 0, unsupported: 0, dup: 0 };
       const emotions = { detected: 0, unsupported: 0, dup: 0 };
       const comments = {
-        rowsDetected: 0, topLevel: 0, replies: 0, activity: 0, otherUsers: 0, invalid: 0, dup: 0,
+        rowsDetected: 0,
+        topLevel: 0,
+        replies: 0,
+        activity: 0,
+        otherUsers: 0,
+        invalid: 0,
+        dup: 0,
       };
 
       const rCandidates: any[] = [];
@@ -214,12 +241,26 @@ describe('tvtime import pipeline (fixtures, no DB)', () => {
         commentsSkippedInvalid: comments.invalid,
       };
       const requiredKeys = [
-        'ratingsDetected', 'ratingsImported', 'ratingsUpdated', 'ratingsSkippedUnsupported',
-        'ratingsSkippedUnresolved', 'ratingDuplicatesIgnored', 'emotionsDetected', 'emotionsImported',
-        'emotionsSkippedUnsupported', 'emotionsSkippedUnresolved', 'emotionDuplicatesIgnored',
-        'commentRowsDetected', 'topLevelCommentsDetected', 'commentsImported', 'commentRepliesSkipped',
-        'commentActivityRowsSkipped', 'commentsByOtherUsersSkipped', 'commentsSkippedUnresolved',
-        'commentDuplicatesIgnored', 'commentsSkippedInvalid',
+        'ratingsDetected',
+        'ratingsImported',
+        'ratingsUpdated',
+        'ratingsSkippedUnsupported',
+        'ratingsSkippedUnresolved',
+        'ratingDuplicatesIgnored',
+        'emotionsDetected',
+        'emotionsImported',
+        'emotionsSkippedUnsupported',
+        'emotionsSkippedUnresolved',
+        'emotionDuplicatesIgnored',
+        'commentRowsDetected',
+        'topLevelCommentsDetected',
+        'commentsImported',
+        'commentRepliesSkipped',
+        'commentActivityRowsSkipped',
+        'commentsByOtherUsersSkipped',
+        'commentsSkippedUnresolved',
+        'commentDuplicatesIgnored',
+        'commentsSkippedInvalid',
       ];
       for (const k of requiredKeys) {
         expect(result).toHaveProperty(k);

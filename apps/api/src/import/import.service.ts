@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, ListSource } from '@prisma/client';
 import { COMMENT_SPOILER_THRESHOLD, MediaType } from '@tvwatch/shared';
+import { shadowEmail, shadowUsername } from './lib/shadow-user';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingService } from '../common/setting.service';
 import { CommentImageProcessor } from '../comment-images/comment-image.processor';
@@ -1488,9 +1489,49 @@ export class ImportService {
     }
 
     if (toCreate.length) {
+      // Guard against concurrent cast rewrites: a queued tvdb-rehydrate (or the anime
+      // cron) REWRITES media_cast, deleting rows the castMap resolved moments ago —
+      // a stale castId then violates the FK and fails the whole apply. Re-validate
+      // inside the transaction (and once more on an FK error); vanished castIds fall
+      // back to PENDING_MATCH so a later confirm re-resolves them post-rehydration.
+      const validateCastIds = async (tx: any, rows: any[]) => {
+        const ids = [...new Set(rows.map((r) => r.castId))];
+        const found = await tx.mediaCast.findMany({
+          where: { id: { in: ids } },
+          select: { id: true },
+        });
+        return new Set(found.map((f: any) => f.id) as string[]);
+      };
       await this.prisma.$transaction(
         async (tx) => {
-          await this.chunkedCreateMany(tx, 'characterVote', toCreate, true);
+          const dropStale = (valid: Set<string>) => {
+            const droppedRows = toCreate.filter((r) => !valid.has(r.castId));
+            if (!droppedRows.length) return;
+            const droppedItemIds = new Set(
+              audit.filter((a) => !valid.has(a.targetRecordId)).map((a) => a.importItemId),
+            );
+            for (let i = toCreate.length - 1; i >= 0; i--) {
+              if (!valid.has(toCreate[i].castId)) toCreate.splice(i, 1);
+            }
+            for (let i = audit.length - 1; i >= 0; i--) {
+              if (!valid.has(audit[i].targetRecordId)) audit.splice(i, 1);
+            }
+            for (let i = appliedIds.length - 1; i >= 0; i--) {
+              if (droppedItemIds.has(appliedIds[i])) appliedIds.splice(i, 1);
+            }
+            pendingMatchIds.push(...droppedItemIds);
+            unresolved += droppedItemIds.size;
+            created -= droppedItemIds.size;
+          };
+          dropStale(await validateCastIds(tx, toCreate));
+          try {
+            await this.chunkedCreateMany(tx, 'characterVote', toCreate, true);
+          } catch (e: any) {
+            if (e?.code !== 'P2003') throw e;
+            // Backstop: a cast delete landed between the check and the insert.
+            dropStale(await validateCastIds(tx, toCreate));
+            await this.chunkedCreateMany(tx, 'characterVote', toCreate, true);
+          }
           await this.chunkedCreateMany(tx, 'importAppliedRecord', audit);
           if (appliedIds.length) {
             await tx.importItem.updateMany({
@@ -1542,6 +1583,11 @@ export class ImportService {
    * notifications are sent and the `comment.created` event (badges) is NOT emitted. Only
    * comments not already imported (same source + sourceKey) are created; manual comments
    * (source=null) are never touched. Historical createdAt is preserved.
+   *
+   * Scope (full thread import): owner-authored AND third-party comments, top-level AND
+   * replies. Third-party authors get deterministic shadow accounts (isShadow). A reply
+   * whose parent is missing keeps `parentSourceKey` and links when the parent arrives
+   * (see reconcileCommentParents — also covers parents imported later by OTHER users).
    */
   private async applyComments(
     userId: string,
@@ -1558,85 +1604,174 @@ export class ImportService {
 
     let created = 0;
     let skipped = 0;
+    const normOf = (it: any) => it.normalizedData ?? {};
 
+    // ---- Authors: owner vs deterministic shadow accounts (batched). ----
+    const externalAuthors = [
+      ...new Set(
+        commentItems
+          .filter((it) => !normOf(it).authorIsOwner && normOf(it).sourceAuthorId)
+          .map((it) => String(normOf(it).sourceAuthorId)),
+      ),
+    ];
+    const shadowByExternal = new Map<string, string>();
+    for (const ext of externalAuthors) {
+      shadowByExternal.set(ext, await this.getOrCreateShadowUser(source, ext));
+    }
+    const authorOf = (norm: any): string =>
+      norm.authorIsOwner || !norm.sourceAuthorId
+        ? userId
+        : shadowByExternal.get(String(norm.sourceAuthorId))!;
+
+    // ---- Dedupe per (author, source, sourceKey) — globally stable for shadow authors. ----
     const keys = [
-      ...new Set(commentItems.map((it: any) => it.normalizedData?.sourceKey).filter(Boolean)),
+      ...new Set(commentItems.map((it: any) => normOf(it).sourceKey).filter(Boolean)),
     ] as string[];
     const existing = keys.length
       ? await this.prisma.comment.findMany({
-          where: { userId, source, sourceKey: { in: keys } },
-          select: { sourceKey: true },
+          where: {
+            userId: { in: [userId, ...shadowByExternal.values()] },
+            source,
+            sourceKey: { in: keys },
+          },
+          select: { userId: true, sourceKey: true },
         })
       : [];
-    const have = new Set(existing.map((c: any) => c.sourceKey));
+    const have = new Set(existing.map((c: any) => `${c.userId}|${c.sourceKey}`));
+
+    // ---- Parents: in-batch creations + DB comments by (source, sourceKey). ----
+    // The raw parent reference (parent comment uuid) maps to the parent's staged sourceKey
+    // domain — CSV parents are always `tvtime|{uuid}` (Trakt has no replies).
+    const parentRefKey = (norm: any): string | null =>
+      norm.parentSourceCommentId ? `tvtime|${norm.parentSourceCommentId}` : null;
+    const parentKeys = [
+      ...new Set(commentItems.map((it: any) => parentRefKey(normOf(it))).filter(Boolean)),
+    ] as string[];
+    const dbParents = parentKeys.length
+      ? await this.prisma.comment.findMany({
+          where: { source, sourceKey: { in: parentKeys } },
+          select: { id: true, sourceKey: true, depth: true, rootId: true },
+        })
+      : [];
+    const parentByKey = new Map(dbParents.map((p: any) => [p.sourceKey as string, p]));
+    const inBatchKeys = new Set(
+      commentItems.map((it: any) => normOf(it).sourceKey).filter(Boolean) as string[],
+    );
 
     const rows: any[] = [];
     const audit: any[] = [];
     const appliedIds: string[] = [];
     // Static images (png/jpg) to download + attach AFTER the comment transaction.
     const imageAttachments: { commentId: string; url: string; format: string }[] = [];
+    const createdParents: {
+      id: string;
+      sourceKey: string;
+      depth: number;
+      rootId: string | null;
+    }[] = [];
+    const createdByKey = new Map<string, { id: string; depth: number; rootId: string | null }>();
+    const replyCountByParent = new Map<string, number>();
 
-    for (const it of commentItems) {
-      const norm: any = it.normalizedData ?? {};
-      const sourceKey: string | undefined = norm.sourceKey;
-      const body: string = norm.text ?? '';
-      const image: { url: string; format: string } | null = norm.image ?? null;
-      // A comment needs text OR an image/gif to be importable.
-      if (!body.trim() && !image) {
-        skipped++;
+    // Top-level first, then replies in passes so in-batch parents exist before children.
+    let pending = [...commentItems];
+    for (let pass = 0; pass < 8 && pending.length; pass++) {
+      const next: any[] = [];
+      for (const it of pending) {
+        const norm = normOf(it);
+        const sourceKey: string | undefined = norm.sourceKey;
+        const body: string = norm.text ?? '';
+        const image: { url: string; format: string } | null = norm.image ?? null;
+        if (!body.trim() && !image) {
+          skipped++;
+          appliedIds.push(it.id);
+          continue;
+        }
+        const authorId = authorOf(norm);
+        if (sourceKey && have.has(`${authorId}|${sourceKey}`)) {
+          skipped++;
+          appliedIds.push(it.id);
+          continue;
+        }
+        const threadType =
+          it.sourceEntityType === 'EPISODE_COMMENT'
+            ? 'EPISODE'
+            : it.sourceEntityType === 'MOVIE_COMMENT'
+              ? 'MOVIE'
+              : 'SHOW';
+        const threadId: string | null =
+          threadType === 'EPISODE' ? it.matchedEpisodeId : it.matchedMediaId;
+        if (!threadId) {
+          skipped++;
+          appliedIds.push(it.id);
+          continue;
+        }
+
+        // Parent linkage (replies): in-batch first, then DB; unknown → stray (linked later).
+        const parentKey: string | null = parentRefKey(norm);
+        let parent: { id: string; depth: number; rootId: string | null } | null = null;
+        if (parentKey) {
+          parent = createdByKey.get(parentKey) ?? parentByKey.get(parentKey) ?? null;
+          if (!parent && inBatchKeys.has(parentKey)) {
+            next.push(it); // the parent is in this batch but not created yet — next pass
+            continue;
+          }
+        }
+
+        const id = randomUUID();
+        const depth = parent ? parent.depth + 1 : 0;
+        const rootId = parent ? (parent.rootId ?? parent.id) : null;
+        rows.push({
+          id,
+          userId: authorId,
+          parentId: parent?.id ?? null,
+          depth,
+          rootId,
+          parentSourceKey: parent ? null : parentKey,
+          threadType,
+          threadId,
+          body,
+          // GIFs are stored by URL (tenor/etc.); static images are downloaded + processed below.
+          gifUrl: image && image.format === 'gif' ? image.url : null,
+          isSpoiler:
+            !!norm.spoiler || (Number(norm.spoilerCount) || 0) >= COMMENT_SPOILER_THRESHOLD,
+          spoilerCount: Number(norm.spoilerCount) || 0,
+          language: norm.language ?? null,
+          source,
+          sourceKey: sourceKey ?? null,
+          createdAt: norm.sourceCreatedAt ? new Date(norm.sourceCreatedAt) : new Date(),
+          updatedAt: norm.sourceUpdatedAt ? new Date(norm.sourceUpdatedAt) : new Date(),
+        });
+        if (parent) {
+          replyCountByParent.set(parent.id, (replyCountByParent.get(parent.id) ?? 0) + 1);
+        }
+        if (image && image.format !== 'gif') {
+          imageAttachments.push({ commentId: id, url: image.url, format: image.format || 'png' });
+        }
+        if (sourceKey) {
+          have.add(`${authorId}|${sourceKey}`);
+          createdParents.push({ id, sourceKey, depth, rootId });
+          createdByKey.set(sourceKey, { id, depth, rootId });
+        }
+        audit.push({
+          id: randomUUID(),
+          importId,
+          importItemId: it.id,
+          targetTable: 'comments',
+          targetRecordId: id,
+          action: 'created',
+        });
         appliedIds.push(it.id);
-        continue;
+        created++;
       }
-      if (sourceKey && have.has(sourceKey)) {
-        skipped++;
-        appliedIds.push(it.id);
-        continue;
-      }
-      const threadType =
-        it.sourceEntityType === 'EPISODE_COMMENT'
-          ? 'EPISODE'
-          : it.sourceEntityType === 'MOVIE_COMMENT'
-            ? 'MOVIE'
-            : 'SHOW';
-      const threadId: string | null =
-        threadType === 'EPISODE' ? it.matchedEpisodeId : it.matchedMediaId;
-      if (!threadId) {
-        skipped++;
-        appliedIds.push(it.id);
-        continue;
-      }
-      if (sourceKey) have.add(sourceKey);
-      const id = randomUUID();
-      rows.push({
-        id,
-        userId,
-        parentId: null,
-        threadType,
-        threadId,
-        body,
-        // GIFs are stored by URL (tenor/etc.); static images are downloaded + processed below.
-        gifUrl: image && image.format === 'gif' ? image.url : null,
-        isSpoiler: !!norm.spoiler || (Number(norm.spoilerCount) || 0) >= COMMENT_SPOILER_THRESHOLD,
-        spoilerCount: Number(norm.spoilerCount) || 0,
-        language: norm.language ?? null,
-        source,
-        sourceKey: sourceKey ?? null,
-        createdAt: norm.sourceCreatedAt ? new Date(norm.sourceCreatedAt) : new Date(),
-        updatedAt: norm.sourceUpdatedAt ? new Date(norm.sourceUpdatedAt) : new Date(),
-      });
-      if (image && image.format !== 'gif') {
-        imageAttachments.push({ commentId: id, url: image.url, format: image.format || 'png' });
-      }
-      audit.push({
-        id: randomUUID(),
-        importId,
-        importItemId: it.id,
-        targetTable: 'comments',
-        targetRecordId: id,
-        action: 'created',
-      });
+      pending = next;
+    }
+    // Leftovers (parent cycles) — import as strays so nothing is lost.
+    for (const it of pending) {
+      this.logger.warn(
+        `Import ${importId}: comment reply skipped — parent cycle detected (row ${it.rowNumber})`,
+      );
+      skipped++;
       appliedIds.push(it.id);
-      created++;
     }
 
     if (rows.length) {
@@ -1649,6 +1784,13 @@ export class ImportService {
               where: { id: { in: appliedIds } },
               data: { status: 'APPLIED' },
             });
+          // Parents' reply tallies (batched increments).
+          for (const [parentId, count] of replyCountByParent) {
+            await tx.comment.update({
+              where: { id: parentId },
+              data: { repliesCount: { increment: count } },
+            });
+          }
         },
         { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
       );
@@ -1658,6 +1800,9 @@ export class ImportService {
         data: { status: 'APPLIED' },
       });
     }
+
+    // Link older strays whose parents just arrived (incl. parents imported by OTHER users).
+    await this.reconcileCommentParents(createdParents);
 
     // Attach static images (png/jpg): download + store in MinIO via the comment-image pipeline,
     // SKIPPING moderation (the image already existed on the user's public TV Time account).
@@ -1672,6 +1817,72 @@ export class ImportService {
       data: { commentsImported: { increment: created } },
     });
     return { created, skipped };
+  }
+
+  /**
+   * Deterministic shadow account for a third-party comment author (shared across imports:
+   * the same external id always maps to the same user). Race-safe on the unique email.
+   */
+  private async getOrCreateShadowUser(source: string, externalAuthorId: string): Promise<string> {
+    const email = shadowEmail(source, externalAuthorId);
+    const existing = await this.prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (existing) return existing.id;
+    const base = shadowUsername(`${source}:${externalAuthorId}`);
+    for (let i = 0; i < 5; i++) {
+      try {
+        const u = await this.prisma.user.create({
+          data: {
+            email,
+            username: i === 0 ? base : `${base}${i + 1}`,
+            isShadow: true,
+            emailVerified: false,
+          },
+          select: { id: true },
+        });
+        return u.id;
+      } catch (e: any) {
+        if (e?.code === 'P2002') {
+          const byEmail = await this.prisma.user.findUnique({
+            where: { email },
+            select: { id: true },
+          });
+          if (byEmail) return byEmail.id; // concurrent import won the race
+          continue; // username collision — retry with a numeric suffix
+        }
+        throw e;
+      }
+    }
+    const u = await this.prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (!u) throw new Error(`shadow user creation failed for ${email}`);
+    return u.id;
+  }
+
+  /**
+   * Link stray replies whose parents just arrived: a reply imported before its parent
+   * kept `parentSourceKey` (the parent's source comment id) — attach it now and bump the
+   * parent's tally. Runs after every comments apply, so a parent imported later (even by
+   * a DIFFERENT user) completes threads retroactively.
+   * Note: grandchildren of a linked stray keep their stored depth (rare, cosmetic).
+   */
+  private async reconcileCommentParents(
+    createdParents: { id: string; sourceKey: string; depth: number; rootId: string | null }[],
+  ): Promise<void> {
+    for (const p of createdParents) {
+      const strays = await this.prisma.comment.findMany({
+        where: { parentSourceKey: p.sourceKey, parentId: null },
+        select: { id: true },
+      });
+      if (!strays.length) continue;
+      const rootId = p.rootId ?? p.id;
+      await this.prisma.comment.updateMany({
+        where: { id: { in: strays.map((s) => s.id) } },
+        data: { parentId: p.id, depth: p.depth + 1, rootId },
+      });
+      await this.prisma.comment.update({
+        where: { id: p.id },
+        data: { repliesCount: { increment: strays.length } },
+      });
+    }
   }
 
   // ---------------- cancel / rollback / delete ----------------

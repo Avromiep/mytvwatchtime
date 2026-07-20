@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Pressable, View } from 'react-native';
 import { router } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import type { CommentDto } from '@tvwatch/shared';
+import type { CommentDto, ExternalReviewDto } from '@tvwatch/shared';
 import { Header } from '../Header';
 import { EmptyState, Screen, Spinner, T } from '../primitives';
 import { SortBar } from './SortBar';
@@ -37,6 +37,8 @@ export function CommentsFeed({
 
   const [sort, setSort] = useState<CommentSortMode>('LATEST');
   const [editing, setEditing] = useState<CommentDto | null>(null);
+  // TMDB review currently being replied to (review acts as the parent post).
+  const [reviewReply, setReviewReply] = useState<ExternalReviewDto | null>(null);
 
   const { data: me } = useMe();
   const currentUserId = me?.id;
@@ -137,7 +139,7 @@ export function CommentsFeed({
                         {t('comments:tmdbReviews')}
                       </T>
                       {externalReviews.map((r) => (
-                        <ExternalReviewCard key={r.id} review={r} />
+                        <ExternalReviewCard key={r.id} review={r} onReply={setReviewReply} />
                       ))}
                     </View>
                   )}
@@ -161,6 +163,9 @@ export function CommentsFeed({
           threadId={threadId}
           parentId={null}
           placeholder={t('comments:addComment')}
+          reviewTarget={reviewReply}
+          onCancelReviewReply={() => setReviewReply(null)}
+          onSent={() => setReviewReply(null)}
         />
         <CommentEditDialog comment={editing} onClose={() => setEditing(null)} />
       </Screen>
