@@ -58,6 +58,80 @@ const animeShow = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+describe('MetadataBackfillService — backfill anime routing (isAnimeMedia)', () => {
+  function make(candidate: any) {
+    const prisma: any = {
+      mediaItem: {
+        findMany: jest.fn(async () => [candidate]),
+        count: jest.fn(async () => 0),
+      },
+      episode: { count: jest.fn(async () => 0) },
+    };
+    const service = new MetadataBackfillService(
+      prisma,
+      mockMeta(),
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    return { service, prisma };
+  }
+
+  const candidate = (over: Record<string, any> = {}) => ({
+    id: 'm1',
+    title: 'Re:Zero',
+    type: 'SHOW',
+    metadataRefreshedAt: null,
+    externalIds: [
+      { provider: 'TMDB', value: '65942' },
+      { provider: 'THE_TVDB', value: '305089' },
+    ],
+    genres: [],
+    show: { keywords: null },
+    movie: null,
+    contentClassification: 'GENERAL',
+    ...over,
+  });
+
+  it('classified-ANIME rows go to the anime repair, never TMDB', async () => {
+    const { service } = make(candidate({ contentClassification: 'ANIME' }));
+    const animeFix = jest
+      .spyOn(service as any, 'fixAnimeShowFromTvdb')
+      .mockResolvedValue({ fixed: true, remapped: 0 } as any);
+    const meta = (service as any).meta;
+
+    await service.backfillBatch(1);
+
+    expect(animeFix).toHaveBeenCalledWith('m1');
+    expect(meta.ensureShowFull).not.toHaveBeenCalled();
+  });
+
+  it('anime-keyword rows go to the anime repair even with the GENERAL classification', async () => {
+    const { service } = make(candidate({ show: { keywords: ['anime', 'isekai'] } }));
+    const animeFix = jest
+      .spyOn(service as any, 'fixAnimeShowFromTvdb')
+      .mockResolvedValue({ fixed: true, remapped: 0 } as any);
+
+    await service.backfillBatch(1);
+
+    expect(animeFix).toHaveBeenCalledWith('m1');
+  });
+
+  it('plain rows keep the TMDB-first path', async () => {
+    const { service } = make(candidate());
+    const animeFix = jest.spyOn(service as any, 'fixAnimeShowFromTvdb');
+    const meta = (service as any).meta;
+
+    await service.backfillBatch(1);
+
+    expect(animeFix).not.toHaveBeenCalled();
+    expect(meta.ensureShowFull).toHaveBeenCalledWith(65942);
+  });
+});
+
 describe('MetadataBackfillService.repairNonEnglishBase', () => {
   function make(candidates: any[]) {
     const prisma: any = {
@@ -803,5 +877,115 @@ describe('MetadataBackfillService', () => {
       expect(res.skipped).toBe(1);
       expect(prisma.show.delete).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('MetadataBackfillService — repair progress tracking', () => {
+  function make() {
+    return new MetadataBackfillService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+  }
+
+  it('reports a running job and merges partial updates', () => {
+    const service = make();
+    (service as any).trackRepair('english-base', {
+      running: true,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      finishedAt: null,
+    });
+    (service as any).trackRepair('english-base', { total: 10 });
+    (service as any).trackRepair('english-base', {
+      processed: 4,
+      succeeded: 3,
+      failed: 1,
+      current: 'Chirurgové',
+    });
+
+    expect(service.getRepairProgress()).toEqual({
+      'english-base': expect.objectContaining({
+        running: true,
+        processed: 4,
+        total: 10,
+        succeeded: 3,
+        failed: 1,
+        current: 'Chirurgové',
+      }),
+    });
+  });
+
+  it('keeps recently-finished jobs visible, prunes after 60s', () => {
+    const service = make();
+    (service as any).trackRepair('character-ids', {
+      running: false,
+      processed: 5,
+      total: 5,
+      succeeded: 5,
+      failed: 0,
+      finishedAt: new Date(),
+    });
+    (service as any).trackRepair('anime-rehydrate', {
+      running: false,
+      processed: 9,
+      total: 9,
+      succeeded: 9,
+      failed: 0,
+      finishedAt: new Date(Date.now() - 61_000),
+    });
+
+    const progress = service.getRepairProgress();
+    expect(progress['character-ids']).toEqual(expect.objectContaining({ running: false }));
+    expect(progress['anime-rehydrate']).toBeUndefined();
+  });
+
+  it('a real repair run leaves a finished progress entry', async () => {
+    const prisma: any = {
+      mediaItem: {
+        findMany: jest.fn(async () => [
+          {
+            id: 'm1',
+            title: 'Chirurgové',
+            type: 'SHOW',
+            externalIds: [{ provider: 'TMDB', value: '1416', providerEntityKind: 'SERIES' }],
+            genres: [],
+          },
+        ]),
+        update: jest.fn(async () => ({})),
+      },
+    };
+    const service = new MetadataBackfillService(
+      prisma,
+      mockMeta(),
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await service.repairNonEnglishBase();
+
+    const progress = service.getRepairProgress();
+    expect(progress['english-base']).toEqual(
+      expect.objectContaining({
+        running: false,
+        processed: 1,
+        total: 1,
+        succeeded: 1,
+        failed: 0,
+        finishedAt: expect.any(Date),
+      }),
+    );
   });
 });

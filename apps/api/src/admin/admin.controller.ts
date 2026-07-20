@@ -52,6 +52,13 @@ export class AdminController {
     return this.metadataBackfill.getHealthStats();
   }
 
+  /** Live progress of every running (or recently finished) metadata repair job. */
+  @Get('metadata-health/repair-progress')
+  @RequireRoles('ADMIN')
+  getRepairProgress() {
+    return this.metadataBackfill.getRepairProgress();
+  }
+
   @Post('metadata-backfill/run')
   @RequireRoles('ADMIN')
   runMetadataBackfill(@Query('count') count?: string, @Query('rps') rps?: string) {

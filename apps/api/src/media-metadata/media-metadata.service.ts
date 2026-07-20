@@ -881,7 +881,6 @@ export class MediaMetadataService {
               overviews: true,
               posterUrls: true,
               backdropUrls: true,
-              titleLocale: true,
               type: true,
             },
           })
@@ -920,7 +919,10 @@ export class MediaMetadataService {
         popularity: data.popularity ?? 0,
         trailerUrl: data.trailerUrl,
         metadataRefreshedAt: new Date(),
-        titleLocale: enData ? 'en' : (prev?.titleLocale ?? lang),
+        // The marker describes the base JUST WRITTEN (base = enData ?? data in `lang`).
+        // Never inherit prev.titleLocale — a stale non-en marker would survive an
+        // English re-hydration and the row would stay "non-English base" forever.
+        titleLocale: enData ? 'en' : lang,
         titles,
         overviews,
         posterUrls: mergeLocalized(
@@ -1049,7 +1051,6 @@ export class MediaMetadataService {
               overviews: true,
               posterUrls: true,
               backdropUrls: true,
-              titleLocale: true,
               type: true,
             },
           })
@@ -1086,7 +1087,10 @@ export class MediaMetadataService {
         popularity: data.popularity ?? 0,
         trailerUrl: data.trailerUrl,
         metadataRefreshedAt: new Date(),
-        titleLocale: enData ? 'en' : (prev?.titleLocale ?? lang),
+        // The marker describes the base JUST WRITTEN (base = enData ?? data in `lang`).
+        // Never inherit prev.titleLocale — a stale non-en marker would survive an
+        // English re-hydration and the row would stay "non-English base" forever.
+        titleLocale: enData ? 'en' : lang,
         titles,
         overviews,
         posterUrls: mergeLocalized(

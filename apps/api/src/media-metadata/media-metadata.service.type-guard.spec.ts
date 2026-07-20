@@ -114,6 +114,7 @@ function fakeTx(over: Record<string, any> = {}) {
     season: { findMany: async () => [], upsert: async () => ({ id: 'se-1' }) },
     episode: { upsert: async () => ({ id: 'ep-1' }) },
     episodeExternalId: { upsert: async () => ({}) },
+    movie: { findUnique: async () => null, upsert: async () => ({}) },
   };
   return { tx, calls };
 }
@@ -138,6 +139,23 @@ function makeService(tx: any, externalFindFirst: jest.Mock, tvdbGetShow?: jest.M
     { get: async () => null, set: async () => undefined, del: async () => undefined } as any,
   );
   return svc;
+}
+
+function makeTmdbService(tx: any, getShow: jest.Mock, externalFindFirst?: jest.Mock) {
+  const prisma = {
+    $transaction: async (fn: any) => fn(tx),
+    mediaItem: { findUnique: async () => ({ metadataRefreshedAt: new Date() }) },
+    externalId: { findFirst: externalFindFirst ?? (async () => null) },
+  };
+  return new MediaMetadataService(
+    prisma as any,
+    { enabled: true, getShow } as any, // tmdb provider
+    {} as any, // tvdb
+    {} as any, // tvmaze
+    {} as any, // config
+    { enqueueClassifyCandidate: async () => undefined } as any,
+    { get: async () => null, set: async () => undefined, del: async () => undefined } as any,
+  );
 }
 
 describe('MediaMetadataService — cross-type protections', () => {
@@ -215,23 +233,6 @@ describe('MediaMetadataService — cross-type protections', () => {
 });
 
 describe('MediaMetadataService — single-call TMDB hydration', () => {
-  function makeTmdbService(tx: any, getShow: jest.Mock) {
-    const prisma = {
-      $transaction: async (fn: any) => fn(tx),
-      mediaItem: { findUnique: async () => ({ metadataRefreshedAt: new Date() }) },
-      externalId: { findFirst: async () => null },
-    };
-    return new MediaMetadataService(
-      prisma as any,
-      { enabled: true, getShow } as any, // tmdb provider
-      {} as any, // tvdb
-      {} as any, // tvmaze
-      {} as any, // config
-      { enqueueClassifyCandidate: async () => undefined } as any,
-      { get: async () => null, set: async () => undefined, del: async () => undefined } as any,
-    );
-  }
-
   it('en request: ONE English call, no second fetch', async () => {
     const { tx, calls } = fakeTx();
     const getShow = jest.fn(async () => makeShow([{ name: 'Animation' }]));
@@ -262,5 +263,124 @@ describe('MediaMetadataService — single-call TMDB hydration', () => {
     expect(calls.mediaItemCreate[0].data.overviews).toMatchObject({ it: 'panoramica' });
     // Show-level keywords persisted for the classifier.
     expect(calls.showUpsert[0].create.keywords).toEqual(['anime']);
+  });
+});
+
+describe('MediaMetadataService — titleLocale marker', () => {
+  // The marker must describe the base JUST WRITTEN — never inherit a stale one.
+  // Regression: persistShow/persistMovie used `prev?.titleLocale ?? lang`, so an English
+  // re-hydration (enData === undefined on the TMDB path) kept a non-en marker forever and
+  // the "Non-English base" health stat never dropped after a successful repair.
+
+  const staleShowPrev = {
+    type: 'SHOW',
+    titles: null,
+    overviews: null,
+    posterUrls: null,
+    backdropUrls: null,
+    titleLocale: 'it', // stale marker from an old contaminated write
+  };
+  const staleShowExternal = {
+    mediaId: 'show-1',
+    media: { id: 'show-1', type: 'SHOW', metadataRefreshedAt: null },
+  };
+
+  it('English TMDB re-hydration flips a stale non-en marker to en', async () => {
+    const { tx, calls } = fakeTx({ prev: staleShowPrev });
+    const getShow = jest.fn(async () => makeShow([{ name: 'Animation' }]));
+    const svc = makeTmdbService(
+      tx,
+      getShow,
+      jest.fn(async () => staleShowExternal),
+    );
+
+    await runInLanguage('en', () => svc.ensureShowFull(65942));
+
+    expect(calls.mediaItemUpdate).toHaveLength(1);
+    expect(calls.mediaItemUpdate[0].data.titleLocale).toBe('en');
+  });
+
+  it('non-en TMDB request still marks en (base is always the English payload)', async () => {
+    const { tx, calls } = fakeTx({ prev: staleShowPrev });
+    const getShow = jest.fn(async (_id: number, lang?: string) =>
+      lang === 'it'
+        ? { ...makeShow([{ name: 'Animation' }]), seasons: [] }
+        : makeShow([{ name: 'Animation' }]),
+    );
+    const svc = makeTmdbService(
+      tx,
+      getShow,
+      jest.fn(async () => staleShowExternal),
+    );
+
+    await runInLanguage('it', () => svc.ensureShowFull(65942));
+
+    // First update = base write (persistShow); a second one may follow from
+    // applyLocaleOverrides — it must never touch the marker.
+    expect(calls.mediaItemUpdate[0].data.titleLocale).toBe('en');
+    for (const u of calls.mediaItemUpdate.slice(1)) {
+      expect(u.data.titleLocale).toBeUndefined();
+    }
+  });
+
+  it('non-en TVDB hydration marks en via the English enData payload', async () => {
+    const { tx, calls } = fakeTx({ prev: staleShowPrev });
+    const findFirst = jest.fn(async () => staleShowExternal);
+    const svc = makeService(tx, findFirst);
+
+    await runInLanguage('it', () => svc.ensureShowFullTvdb(280103));
+
+    expect(calls.mediaItemUpdate).toHaveLength(1);
+    expect(calls.mediaItemUpdate[0].data.titleLocale).toBe('en');
+  });
+
+  it('TVDB movie hydrated in a non-en context (single localized payload) marks the real locale', async () => {
+    const { tx, calls } = fakeTx(); // no prev → create path
+    const prisma = {
+      $transaction: async (fn: any) => fn(tx),
+      mediaItem: { findUnique: async () => null },
+      externalId: { findFirst: async () => null },
+    };
+    const tvdb = {
+      enabled: true,
+      getMovie: jest.fn(async () => ({
+        type: MediaType.MOVIE,
+        tmdbId: 0,
+        title: 'Sonic Boom',
+        overview: null,
+        posterUrl: null,
+        backdropUrl: null,
+        releaseDate: '2013-06-19',
+        releaseYear: 2013,
+        runtimeMinutes: 104,
+        country: 'IT',
+        language: 'it',
+        rating: 7,
+        popularity: 10,
+        trailerUrl: null,
+        genres: [{ name: 'Animazione' }],
+        externals: [{ provider: ExternalProvider.THE_TVDB, value: '12345' }],
+        keywords: [],
+        cast: [],
+        providers: [],
+        translations: { en: { title: 'Sonic Boom', overview: 'English overview' } },
+      })),
+    };
+    const svc = new MediaMetadataService(
+      prisma as any,
+      {} as any, // tmdb
+      tvdb as any,
+      {} as any, // tvmaze
+      {} as any, // config
+      { enqueueClassifyCandidate: async () => undefined } as any,
+      { get: async () => null, set: async () => undefined, del: async () => undefined } as any,
+    );
+
+    await runInLanguage('it', () => svc.ensureMovieFullTvdb(12345));
+
+    // No separate English payload → the base really IS Italian → marker stays truthful,
+    // so the row remains eligible for the English-base repair.
+    expect(calls.mediaItemCreate).toHaveLength(1);
+    expect(calls.mediaItemCreate[0].data.titleLocale).toBe('it');
   });
 });

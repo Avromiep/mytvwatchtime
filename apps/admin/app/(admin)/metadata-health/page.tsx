@@ -22,6 +22,24 @@ interface MetadataHealth {
   nonEnglishBase: number;
 }
 
+/** Live progress of one background repair job (from /admin/metadata-health/repair-progress). */
+interface RepairProgress {
+  running: boolean;
+  processed: number;
+  total: number;
+  succeeded: number;
+  failed: number;
+  current?: string;
+  finishedAt?: string;
+}
+
+const REPAIR_LABELS: Record<string, string> = {
+  'character-ids': 'Character IDs backfill',
+  'anime-rehydrate': 'Anime → TVDB rehydration',
+  'tvdb-id-conflicts': 'TVDB ID conflict repair',
+  'english-base': 'English base restore',
+};
+
 /** One-line guidance per stat: what it means and what to do about it. */
 const STAT_HINTS: Record<string, string> = {
   total: 'All media rows in the local catalog (shows + movies).',
@@ -71,6 +89,8 @@ export default function MetadataHealthPage() {
   const [repairingEnBase, setRepairingEnBase] = useState(false);
   const [enBaseResult, setEnBaseResult] = useState<string | null>(null);
   const [enBaseCount, setEnBaseCount] = useState('200');
+  const [castCount, setCastCount] = useState('500');
+  const [repairs, setRepairs] = useState<Record<string, RepairProgress>>({});
   const [batchCount, setBatchCount] = useState('200');
   const [batchRps, setBatchRps] = useState('');
   const [syncStart, setSyncStart] = useState('');
@@ -87,6 +107,19 @@ export default function MetadataHealthPage() {
 
   useEffect(() => {
     if (canView) load();
+  }, [canView]);
+
+  // Live repair progress — poll every 3s while the page is open.
+  useEffect(() => {
+    if (!canView) return;
+    const loadRepairs = () =>
+      api
+        .get('/admin/metadata-health/repair-progress')
+        .then((r) => setRepairs(r.data))
+        .catch(() => undefined);
+    loadRepairs();
+    const id = setInterval(loadRepairs, 3000);
+    return () => clearInterval(id);
   }, [canView]);
 
   const runBackfill = () => {
@@ -151,10 +184,11 @@ export default function MetadataHealthPage() {
   const runCastBackfill = () => {
     setBackfillingCast(true);
     setCastResult(null);
+    const n = Math.max(1, Number(castCount) || 500);
     api
-      .post('/admin/cast-character-ids/run')
+      .post(`/admin/cast-character-ids/run?count=${n}`)
       .then(() => {
-        setCastResult('Cast character-id backfill started in background. Stats refresh in 30s.');
+        setCastResult(`Cast character-id backfill started (${n} shows). Stats refresh in 30s.`);
         setTimeout(() => load(), 30000);
       })
       .catch(() => setCastResult('Cast backfill failed to start.'))
@@ -275,6 +309,45 @@ export default function MetadataHealthPage() {
         </div>
       )}
 
+      {/* Live repair progress (polls every 3s; finished jobs stay visible ~60s) */}
+      {Object.keys(repairs).length > 0 && (
+        <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
+          <h2 className="mb-3 font-medium">Repair progress</h2>
+          <div className="space-y-3">
+            {Object.entries(repairs).map(([job, p]) => {
+              const pctDone =
+                p.total > 0 ? Math.min(100, Math.round((p.processed / p.total) * 100)) : 0;
+              return (
+                <div key={job}>
+                  <div className="flex items-center justify-between gap-2 text-sm">
+                    <span className="font-medium">
+                      {REPAIR_LABELS[job] ?? job}
+                      {!p.running && (
+                        <span className="ml-2 text-xs font-normal text-green-600 dark:text-green-400">
+                          done
+                        </span>
+                      )}
+                    </span>
+                    <span className="shrink-0 text-xs text-zinc-400">
+                      {p.processed}/{p.total} · {p.succeeded} ok / {p.failed} fail
+                    </span>
+                  </div>
+                  <div className="mt-1 h-2 w-full overflow-hidden rounded bg-zinc-200 dark:bg-zinc-700">
+                    <div
+                      className={`h-2 rounded transition-all ${p.running ? 'bg-blue-600' : 'bg-green-600'}`}
+                      style={{ width: `${p.total > 0 ? pctDone : p.running ? 5 : 100}%` }}
+                    />
+                  </div>
+                  {p.running && p.current && (
+                    <p className="mt-0.5 truncate text-xs text-zinc-400">{p.current}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {loading || !stats ? (
         <p className="text-sm text-zinc-500">Loading…</p>
       ) : (
@@ -362,13 +435,23 @@ export default function MetadataHealthPage() {
               hint={STAT_HINTS.castMissingCharacterIds}
               highlight={stats.castMissingCharacterIds > 0}
               action={
-                <button
-                  onClick={runCastBackfill}
-                  disabled={backfillingCast}
-                  className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
-                >
-                  {backfillingCast ? 'Starting…' : 'Backfill Character IDs'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={castCount}
+                    onChange={(e) => setCastCount(e.target.value)}
+                    className="w-20 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+                    title="Shows per run"
+                  />
+                  <button
+                    onClick={runCastBackfill}
+                    disabled={backfillingCast}
+                    className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    {backfillingCast ? 'Starting…' : 'Backfill Character IDs'}
+                  </button>
+                </div>
               }
             />
             <MetricCard

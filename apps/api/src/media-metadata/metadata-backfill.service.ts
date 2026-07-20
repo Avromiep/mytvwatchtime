@@ -31,6 +31,57 @@ export class MetadataBackfillService {
   private backfillRunning = false;
   /** Prevents concurrent anime→TVDB rehydration batches. */
   private animeFixRunning = false;
+
+  // ---- Live repair progress (admin Metadata Health page) ----
+  private readonly repairProgress = new Map<
+    string,
+    {
+      running: boolean;
+      processed: number;
+      total: number;
+      succeeded: number;
+      failed: number;
+      current?: string;
+      finishedAt?: Date;
+    }
+  >();
+
+  private trackRepair(
+    job: string,
+    patch: Partial<{
+      running: boolean;
+      processed: number;
+      total: number;
+      succeeded: number;
+      failed: number;
+      current: string;
+      finishedAt: Date | null;
+    }>,
+  ) {
+    const prev = this.repairProgress.get(job) ?? {
+      running: false,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+    };
+    this.repairProgress.set(job, {
+      ...prev,
+      ...patch,
+      ...(patch.finishedAt === null ? { finishedAt: undefined } : {}),
+    } as any);
+  }
+
+  /** Live progress snapshot for every repair job (running or recently finished). */
+  getRepairProgress() {
+    const now = Date.now();
+    const out: Record<string, any> = {};
+    for (const [job, p] of this.repairProgress) {
+      // Recently-finished jobs stay visible for 60s so the UI shows the completion.
+      if (p.running || !p.finishedAt || now - p.finishedAt.getTime() < 60_000) out[job] = p;
+    }
+    return out;
+  }
   /** Prevents concurrent type-mismatch repair batches. */
   private typeRepairRunning = false;
   /** Prevents concurrent cast character-id backfills. */
@@ -203,7 +254,12 @@ export class MetadataBackfillService {
         },
         orderBy: { createdAt: 'asc' }, // oldest first
         take: limit,
-        include: { externalIds: true, genres: { include: { genre: true } } },
+        include: {
+          externalIds: true,
+          genres: { include: { genre: true } },
+          show: { select: { keywords: true } },
+          movie: { select: { keywords: true } },
+        },
       });
 
       let succeeded = 0;
@@ -216,9 +272,8 @@ export class MetadataBackfillService {
             m.id,
             m.externalIds as unknown as { provider: ExternalProvider; value: string }[],
             m.type,
-            // Genre identity is locale-tolerant: slug OR lowercased name (localized genre
-            // rows exist from non-en hydrations).
-            m.genres.flatMap((g) => [g.genre.slug, g.genre.name.toLowerCase()]),
+            // Anime routing uses the app's real signals (classification / keyword / genre).
+            this.isAnimeMedia(m),
           );
           succeeded++;
           if (sample.length < 5) sample.push(m.title);
@@ -247,6 +302,27 @@ export class MetadataBackfillService {
   }
 
   /**
+   * The app's REAL anime signals (shared by all hydration routing): the classifier's
+   * persisted verdict, the persisted TMDB `anime` keyword (id 210024 — decisive), and
+   * the Animation genre (weakest fallback). NOT a genre guess.
+   */
+  isAnimeMedia(m: {
+    contentClassification?: string | null;
+    show?: { keywords?: unknown } | null;
+    movie?: { keywords?: unknown } | null;
+    genres?: { genre: { slug: string; name: string } }[];
+  }): boolean {
+    if (m.contentClassification === 'ANIME') return true;
+    const kw = ((m.show?.keywords ?? m.movie?.keywords ?? []) as string[]).map((k) =>
+      String(k).toLowerCase(),
+    );
+    if (kw.includes('anime')) return true;
+    return (m.genres ?? []).some(
+      (g) => g.genre.slug === 'animation' || g.genre.name.toLowerCase() === 'animation',
+    );
+  }
+
+  /**
    * Hydrate a single media item by its best available provider, then enqueue anime classification.
    *
    * CRITICAL: if the media ALREADY has episodes/structure AND has a TVDB id, it was hydrated
@@ -255,20 +331,38 @@ export class MetadataBackfillService {
    *   - media with no existing structure (never-hydrated stubs)
    *   - media with no TVDB id (TMDB is the only source)
    *
-   * Animation-genre shows with a TVDB id are TVDB-authoritative: they re-hydrate from TVDB
-   * even when their current structure came from TMDB (the bulk fix is owned by
-   * rehydrateAnimeFromTvdb / the anime_tvdb_rehydrate cron).
+   * Anime (classification verdict / anime keyword / Animation genre) is TVDB-authoritative
+   * everywhere: always the anime repair (resolves the TVDB id when missing, force-hydrates
+   * from TVDB, remaps structure) — TMDB only as a last resort when no TVDB id can be resolved.
    */
   private async hydrateOne(
     mediaId: string,
     externals: { provider: ExternalProvider; value: string }[],
     type: string,
-    genreKeys: string[] = [],
+    isAnime: boolean = false,
   ) {
     const tmdb = externals.find((e) => e.provider === ExternalProvider.TMDB);
     const tvdb = externals.find((e) => e.provider === ExternalProvider.THE_TVDB);
     const isShow = type === 'SHOW';
-    const hasAnimation = genreKeys.includes('animation');
+
+    if (isShow && isAnime) {
+      // Anime → always the anime repair: resolves the TVDB id in trust order when missing,
+      // force-hydrates from TVDB, remaps structure/user data. If it can't resolve an id,
+      // TMDB below is the unavoidable last resort.
+      const { fixed } = await this.fixAnimeShowFromTvdb(mediaId).catch(() => ({
+        fixed: false,
+        remapped: 0,
+      }));
+      if (fixed) {
+        await this.meta.scheduleClassification(mediaId).catch(() => undefined);
+        return;
+      }
+      if (tvdb) {
+        await this.meta.ensureShowFullTvdb(Number(tvdb.value)).catch(() => undefined);
+        await this.meta.scheduleClassification(mediaId).catch(() => undefined);
+        return;
+      }
+    }
 
     // Detect existing structure: shows with ≥1 episode, movies with overview.
     const hasStructure = isShow
@@ -277,15 +371,7 @@ export class MetadataBackfillService {
           where: { id: mediaId, type: 'MOVIE', overview: { not: null } },
         })) > 0;
 
-    if (isShow && hasAnimation && tvdb) {
-      // Animation show with a TVDB id → TVDB, even if currently TMDB-structured (the fix
-      // also remaps user watch data onto the TVDB structure).
-      const { fixed } = await this.fixAnimeShowFromTvdb(mediaId).catch(() => ({
-        fixed: false,
-        remapped: 0,
-      }));
-      if (!fixed) await this.meta.ensureShowFullTvdb(Number(tvdb.value)).catch(() => undefined);
-    } else if (hasStructure && tvdb) {
+    if (hasStructure && tvdb) {
       // Already has TVDB-sourced structure → keep TVDB. NEVER override with TMDB.
       if (isShow) await this.meta.ensureShowFullTvdb(Number(tvdb.value)).catch(() => undefined);
       else await this.meta.ensureMovieFullTvdb(Number(tvdb.value)).catch(() => undefined);
@@ -348,6 +434,14 @@ export class MetadataBackfillService {
       return empty;
     }
     this.animeFixRunning = true;
+    this.trackRepair('anime-rehydrate', {
+      running: true,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      finishedAt: null,
+    });
     try {
       const candidates = await this.prisma.mediaItem.findMany({
         where: {
@@ -380,6 +474,8 @@ export class MetadataBackfillService {
         select: { id: true, title: true },
       });
 
+      this.trackRepair('anime-rehydrate', { total: candidates.length });
+
       let succeeded = 0;
       let failed = 0;
       let rateLimited = 0;
@@ -388,6 +484,12 @@ export class MetadataBackfillService {
       const sample: string[] = [];
       for (let i = 0; i < candidates.length; i++) {
         const m = candidates[i];
+        this.trackRepair('anime-rehydrate', {
+          processed: i + 1,
+          succeeded,
+          failed,
+          current: m.title,
+        });
         try {
           const { fixed, remapped: moved } = await this.fixAnimeShowFromTvdb(m.id);
           if (!fixed) {
@@ -416,6 +518,13 @@ export class MetadataBackfillService {
           );
         }
       }
+      this.trackRepair('anime-rehydrate', {
+        running: false,
+        processed: candidates.length,
+        succeeded,
+        failed,
+        finishedAt: new Date(),
+      });
       this.logger.log(
         `Anime TVDB rehydration: ${succeeded}/${candidates.length} rehydrated, ${failed} failed, ${rateLimited} rate-limited, ${noTvdbId} skipped (no TVDB id / already repaired), ${remapped} episodes remapped`,
       );
@@ -843,6 +952,14 @@ export class MetadataBackfillService {
       return empty;
     }
     this.charIdFixRunning = true;
+    this.trackRepair('character-ids', {
+      running: true,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      finishedAt: null,
+    });
     try {
       const candidates = await this.prisma.mediaItem.findMany({
         where: {
@@ -864,12 +981,20 @@ export class MetadataBackfillService {
         },
       });
 
+      this.trackRepair('character-ids', { total: candidates.length });
+
       let succeeded = 0;
       let failed = 0;
       let rateLimited = 0;
       const sample: string[] = [];
       for (let i = 0; i < candidates.length; i++) {
         const m = candidates[i];
+        this.trackRepair('character-ids', {
+          processed: i + 1,
+          succeeded,
+          failed,
+          current: m.title,
+        });
         try {
           // Bypass the 24h isStale gate — the cast rewrite only happens on a full refresh.
           await this.prisma.mediaItem.update({
@@ -900,6 +1025,13 @@ export class MetadataBackfillService {
           );
         }
       }
+      this.trackRepair('character-ids', {
+        running: false,
+        processed: candidates.length,
+        succeeded,
+        failed,
+        finishedAt: new Date(),
+      });
       this.logger.log(
         `Character-id backfill: ${succeeded}/${candidates.length} rehydrated, ${failed} failed, ${rateLimited} rate-limited`,
       );
@@ -949,6 +1081,14 @@ export class MetadataBackfillService {
       return empty;
     }
     this.tvdbIdFixRunning = true;
+    this.trackRepair('tvdb-id-conflicts', {
+      running: true,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      finishedAt: null,
+    });
     try {
       const rows = await this.prisma.$queryRaw<
         {
@@ -973,12 +1113,20 @@ export class MetadataBackfillService {
         ORDER BY m.title
         LIMIT ${Math.max(1, Math.min(limit ?? 500, 100000))}
       `;
+      this.trackRepair('tvdb-id-conflicts', { total: rows.length });
 
       let mergedKept = 0;
       let conflictsFixed = 0;
       let idsDetached = 0;
       const ambiguous: any[] = [];
-      for (const row of rows) {
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        this.trackRepair('tvdb-id-conflicts', {
+          processed: i + 1,
+          succeeded: conflictsFixed,
+          failed: ambiguous.length,
+          current: row.title,
+        });
         try {
           const mapped: Record<string, number | null> = {};
           for (const id of row.ids) {
@@ -1020,6 +1168,13 @@ export class MetadataBackfillService {
           );
         }
       }
+      this.trackRepair('tvdb-id-conflicts', {
+        running: false,
+        processed: rows.length,
+        succeeded: conflictsFixed,
+        failed: ambiguous.length,
+        finishedAt: new Date(),
+      });
       this.logger.log(
         `TVDB-id conflict repair: ${rows.length} rows checked — ${mergedKept} merge-leftover kept, ${conflictsFixed} conflicts fixed (${idsDetached} ids detached), ${ambiguous.length} ambiguous`,
       );
@@ -1051,6 +1206,14 @@ export class MetadataBackfillService {
       return empty;
     }
     this.enBaseFixRunning = true;
+    this.trackRepair('english-base', {
+      running: true,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      finishedAt: null,
+    });
     try {
       const candidates = await this.prisma.mediaItem.findMany({
         where: {
@@ -1071,26 +1234,20 @@ export class MetadataBackfillService {
         },
       });
 
-      // Anime routing — the app's REAL signals, not a genre guess:
-      // 1) the classifier's persisted verdict (Kitsu/Jikan/TMDB-keyword matched),
-      // 2) the TMDB `anime` keyword (id 210024 — decisive, persisted by hydration),
-      // 3) the Animation genre as the weakest fallback.
-      const isAnime = (m: (typeof candidates)[number]) => {
-        if (m.contentClassification === 'ANIME') return true;
-        const kw = ((m.show?.keywords ?? m.movie?.keywords ?? []) as string[]).map((k) =>
-          String(k).toLowerCase(),
-        );
-        if (kw.includes('anime')) return true;
-        return m.genres.some(
-          (g) => g.genre.slug === 'animation' || g.genre.name.toLowerCase() === 'animation',
-        );
-      };
+      this.trackRepair('english-base', { total: candidates.length });
 
+      // Anime routing — the app's REAL signals (shared `isAnimeMedia`), not a genre guess.
       let succeeded = 0;
       let failed = 0;
       const sample: string[] = [];
       for (let i = 0; i < candidates.length; i++) {
         const m = candidates[i];
+        this.trackRepair('english-base', {
+          processed: i + 1,
+          succeeded,
+          failed,
+          current: m.title,
+        });
         try {
           // Force a full re-hydration: the standard path rewrites the English base.
           await this.prisma.mediaItem.update({
@@ -1104,7 +1261,7 @@ export class MetadataBackfillService {
           // Source rules: ANIME (classifier verdict / anime keyword / Animation genre) is
           // TVDB-authoritative (TMDB anime structures are wrong; it never refreshes from
           // TMDB). Everything else is TMDB-first, TVDB fallback for TVDB-only rows.
-          if (isAnime(m)) {
+          if (this.isAnimeMedia(m)) {
             if (tvdbExt) {
               await this.meta.ensureShowFullTvdb(Number(tvdbExt.value));
             } else {
@@ -1136,6 +1293,13 @@ export class MetadataBackfillService {
           );
         }
       }
+      this.trackRepair('english-base', {
+        running: false,
+        processed: candidates.length,
+        succeeded,
+        failed,
+        finishedAt: new Date(),
+      });
       this.logger.log(
         `Non-English base repair: ${succeeded}/${candidates.length} re-hydrated with English base, ${failed} failed`,
       );

@@ -4,6 +4,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingService } from '../common/setting.service';
 import { RedisService } from '../common/redis/redis.service';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
+import { MetadataBackfillService } from '../media-metadata/metadata-backfill.service';
 import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
 import { ProviderConfigService } from '../media-metadata/providers/shared/provider-config.service';
 import { AnnouncementService, resolveAction } from '../notifications/announcement.service';
@@ -31,6 +32,7 @@ export class AdminService {
     private readonly contact: ContactService,
     private readonly providerConfig: ProviderConfigService,
     private readonly redis: RedisService,
+    private readonly metadataBackfill?: MetadataBackfillService,
   ) {}
 
   // ---------------- Provider status (multi-provider metrics console) ----------------
@@ -518,6 +520,23 @@ export class AdminService {
         if (item.mediaType === 'SHOW') {
           mediaId = await this.meta.ensureShowFull(item.tmdbId);
           apiCalls += 3;
+          // Anime rule: an anime show must NEVER stay TMDB-structured. The show is now
+          // hydrated (genres/keywords persisted), so check the REAL signals (classification
+          // verdict / anime keyword / Animation genre) and hand it to the anime repair —
+          // it resolves the TVDB id, force-hydrates from TVDB, and remaps the structure.
+          if (this.metadataBackfill) {
+            const row = await this.prisma.mediaItem.findUnique({
+              where: { id: mediaId },
+              select: {
+                contentClassification: true,
+                show: { select: { keywords: true } },
+                genres: { select: { genre: { select: { slug: true, name: true } } } },
+              },
+            });
+            if (row && this.metadataBackfill.isAnimeMedia(row)) {
+              await this.metadataBackfill.fixAnimeShowFromTvdb(mediaId).catch(() => undefined);
+            }
+          }
         } else {
           mediaId = await this.meta.ensureMovieFull(item.tmdbId);
           apiCalls += 1;
