@@ -18,6 +18,7 @@ interface MetadataHealth {
   structuralTypeMismatch: number;
   castMissingCharacterIds: number;
   movieDataOnShows: number;
+  multiTvdbIds: number;
 }
 
 /** One-line guidance per stat: what it means and what to do about it. */
@@ -37,6 +38,8 @@ const STAT_HINTS: Record<string, string> = {
     'Shows whose cast lacks TVDB character ids — needed to resolve imported character votes. Backfill rehydrates them from TVDB.',
   movieDataOnShows:
     'Movie statuses/history wrongly written on shows (import bug). The Repair button above purges these too.',
+  multiTvdbIds:
+    'Rows carrying more than one TVDB id — merge leftovers (harmless) or id poisoning from an old bug (one id belongs to a DIFFERENT show, mis-routing matches). Repair verifies each id via TMDB and detaches only the wrong ones. User history is never deleted.',
 };
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -60,6 +63,8 @@ export default function MetadataHealthPage() {
   const [repairResult, setRepairResult] = useState<string | null>(null);
   const [backfillingCast, setBackfillingCast] = useState(false);
   const [castResult, setCastResult] = useState<string | null>(null);
+  const [repairingTvdbIds, setRepairingTvdbIds] = useState(false);
+  const [tvdbIdResult, setTvdbIdResult] = useState<string | null>(null);
   const [batchCount, setBatchCount] = useState('200');
   const [batchRps, setBatchRps] = useState('');
   const [syncStart, setSyncStart] = useState('');
@@ -150,6 +155,19 @@ export default function MetadataHealthPage() {
       .finally(() => setBackfillingCast(false));
   };
 
+  const runTvdbIdRepair = () => {
+    setRepairingTvdbIds(true);
+    setTvdbIdResult(null);
+    api
+      .post('/admin/repair-tvdb-id-conflicts/run')
+      .then(() => {
+        setTvdbIdResult('TVDB id-conflict repair started in background. Stats refresh in 60s.');
+        setTimeout(() => load(), 60000);
+      })
+      .catch(() => setTvdbIdResult('TVDB id-conflict repair failed to start.'))
+      .finally(() => setRepairingTvdbIds(false));
+  };
+
   if (!canView) return <p className="p-6 text-sm text-zinc-500">Admins only.</p>;
 
   const pct = (n: number) => (stats && stats.total > 0 ? Math.round((n / stats.total) * 100) : 0);
@@ -224,6 +242,11 @@ export default function MetadataHealthPage() {
       {castResult && (
         <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-800 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-200">
           {castResult}
+        </div>
+      )}
+      {tvdbIdResult && (
+        <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200">
+          {tvdbIdResult}
         </div>
       )}
 
@@ -320,6 +343,22 @@ export default function MetadataHealthPage() {
                   className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
                 >
                   {backfillingCast ? 'Starting…' : 'Backfill Character IDs'}
+                </button>
+              }
+            />
+            <MetricCard
+              label="Multiple TVDB IDs"
+              value={stats.multiTvdbIds}
+              sub="rows with conflicting TVDB ids"
+              hint={STAT_HINTS.multiTvdbIds}
+              highlight={stats.multiTvdbIds > 0}
+              action={
+                <button
+                  onClick={runTvdbIdRepair}
+                  disabled={repairingTvdbIds}
+                  className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                >
+                  {repairingTvdbIds ? 'Starting…' : 'Repair TVDB IDs'}
                 </button>
               }
             />

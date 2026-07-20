@@ -115,6 +115,22 @@ export class ImportProcessor implements OnModuleInit {
     });
   }
 
+  /** Row-backed status counters for the review summary (extras included). */
+  private async statusCounts(importId: string) {
+    const groups = await this.prisma.importItem.groupBy({
+      by: ['status'],
+      where: { importId },
+      _count: { _all: true },
+    });
+    const c: Record<string, number> = {};
+    for (const g of groups) c[g.status] = g._count._all;
+    return {
+      matchedCount: c['MATCHED'] ?? 0,
+      unmatchedCount: c['UNMATCHED'] ?? 0,
+      needsReviewCount: c['NEEDS_REVIEW'] ?? 0,
+    };
+  }
+
   // Monotonic 0-99 progress per import (100 is set by the terminal stage writes). The guard
   // skips DB writes unless the rounded percent advances, so loops can call this per item.
   private lastProgress = new Map<string, number>();
@@ -598,16 +614,17 @@ export class ImportProcessor implements OnModuleInit {
       );
       await this.reportProgress(importId, 95);
 
+      // Status counters come from the staged ROWS (main loop + lists + all extras) —
+      // not from the main match loop alone, or the first recount would "jump" by the
+      // extras count. duplicates/invalid stay processing counters (no row equivalent).
       await this.setStatus(importId, 'READY_FOR_REVIEW', {
         totalFiles: files.length,
         totalRows,
         progress: 100,
-        matchedCount: matched,
-        unmatchedCount: unmatched,
+        ...(await this.statusCounts(importId)),
         duplicateCount: duplicates,
         conflictCount: 0,
         invalidCount: invalid,
-        needsReviewCount: needsReview,
         ...extraCounts,
       });
     } catch (e) {
@@ -1201,8 +1218,7 @@ export class ImportProcessor implements OnModuleInit {
         totalFiles: parsed.length,
         totalRows,
         progress: 100,
-        matchedCount: matched,
-        unmatchedCount: unmatched,
+        ...(await this.statusCounts(importId)),
         duplicateCount: 0,
         conflictCount: 0,
         invalidCount:
@@ -1212,7 +1228,6 @@ export class ImportProcessor implements OnModuleInit {
           watchlistSkipped +
           favoritesSkipped +
           listsSkipped,
-        needsReviewCount: needsReview,
         ratingsDetected: ratingsRes.detected,
         ratingsSkippedUnsupported: ratingsRes.unsupported,
         ratingsSkippedUnresolved: ratingsUnresolved,
@@ -1750,8 +1765,7 @@ export class ImportProcessor implements OnModuleInit {
         totalFiles: parsed.length,
         totalRows,
         progress: 100,
-        matchedCount: matched,
-        unmatchedCount: unmatched,
+        ...(await this.statusCounts(importId)),
         duplicateCount: 0,
         conflictCount: 0,
         invalidCount:
@@ -1761,7 +1775,6 @@ export class ImportProcessor implements OnModuleInit {
           favoritesSkipped +
           listsSkipped +
           watchlistCsvSkipped,
-        needsReviewCount: needsReview,
         ratingsDetected: ratingsRes.detected,
         ratingsSkippedUnsupported: ratingsRes.unsupported,
         ratingsSkippedUnresolved: ratingsUnresolved,

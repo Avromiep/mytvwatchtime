@@ -95,6 +95,26 @@ export class AdminController {
     };
   }
 
+  @Post('repair-tvdb-id-conflicts/run')
+  @RequireRoles('ADMIN')
+  runRepairTvdbIdConflicts(@Query('count') count?: string) {
+    const n = count ? Number(count) : undefined;
+    this.metadataBackfill
+      .repairTvdbIdConflicts(n)
+      .then((res) =>
+        console.log(
+          `[TVDB id conflicts] DONE: ${res.conflictsFixed} fixed (${res.idsDetached} ids detached), ${res.mergedKept} merge-leftover kept, ${res.ambiguous.length} ambiguous`,
+          res.ambiguous.length ? JSON.stringify(res.ambiguous) : '',
+        ),
+      )
+      .catch((e) => {
+        console.error('[TVDB id conflicts] FAILED:', (e as Error)?.message ?? e);
+      });
+    return {
+      message: `TVDB id-conflict repair started (${n ?? 500} rows max). Check API logs for the report.`,
+    };
+  }
+
   @Post('tmdb-changes/run')
   @RequireRoles('ADMIN')
   runTmdbChanges(@Query('start') start?: string) {

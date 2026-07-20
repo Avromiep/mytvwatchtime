@@ -37,7 +37,10 @@ export class MetadataBackfillService {
   private charIdFixRunning = false;
   /** In-flight per-show repairs — concurrent callers (detail + episodes requests arriving
    *  together, or a view racing the cron) share ONE repair instead of double-hydrating. */
-  private readonly animeFixInflight = new Map<string, Promise<{ fixed: boolean; remapped: number }>>();
+  private readonly animeFixInflight = new Map<
+    string,
+    Promise<{ fixed: boolean; remapped: number }>
+  >();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -66,6 +69,7 @@ export class MetadataBackfillService {
       structuralTypeMismatch,
       castMissingCharacterIds,
       movieDataOnShows,
+      multiTvdbIds,
     ] = await Promise.all([
       this.prisma.mediaItem.count(),
       this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
@@ -128,6 +132,15 @@ export class MetadataBackfillService {
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT (SELECT count(*)::bigint FROM user_movie_status u JOIN media_items m ON m.id = u.media_id WHERE m.type='SHOW')
              + (SELECT count(*)::bigint FROM watch_history h JOIN media_items m ON m.id = h.media_id WHERE m.type='SHOW' AND h.media_type='MOVIE') AS c`,
+      // Rows carrying MORE THAN ONE TVDB id (same entity kind): merge leftovers (benign)
+      // or id-poisoning (one id belongs to a different show — the old title-attach bug).
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c FROM (
+          SELECT media_id FROM external_ids
+          WHERE provider='THE_TVDB'
+          GROUP BY media_id, provider_entity_kind
+          HAVING count(*) > 1
+        ) x`,
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     return {
@@ -148,12 +161,16 @@ export class MetadataBackfillService {
       structuralTypeMismatch: toNum(structuralTypeMismatch as any),
       castMissingCharacterIds: toNum(castMissingCharacterIds as any),
       movieDataOnShows: toNum(movieDataOnShows as any),
+      multiTvdbIds: toNum(multiTvdbIds as any),
     };
   }
 
   /** One batch: hydrate up to `count` media that is GENUINELY incomplete (missing data).
    *  Complete media (has episodes + overview) is NEVER selected — no point re-hydrating it. */
-  async backfillBatch(count?: number, maxRps?: number): Promise<{ processed: number; succeeded: number; failed: number; sample: string[] }> {
+  async backfillBatch(
+    count?: number,
+    maxRps?: number,
+  ): Promise<{ processed: number; succeeded: number; failed: number; sample: string[] }> {
     if (this.backfillRunning) {
       this.logger.log('Backfill already running — skipping');
       return { processed: 0, succeeded: 0, failed: 0, sample: [] };
@@ -161,52 +178,59 @@ export class MetadataBackfillService {
     this.backfillRunning = true;
     const limit = Math.max(1, Math.min(count ?? this.defaultBatchSize, 100000));
     const delayMs = maxRps && maxRps > 0 ? Math.round(60000 / maxRps) : 0;
-    if (delayMs > 0) this.logger.log(`Backfill throttled to ~${maxRps} items/min (${delayMs}ms delay between items)`);
+    if (delayMs > 0)
+      this.logger.log(
+        `Backfill throttled to ~${maxRps} items/min (${delayMs}ms delay between items)`,
+      );
     try {
-    const candidates = await this.prisma.mediaItem.findMany({
-      where: {
-        OR: [
-          { metadataRefreshedAt: null }, // never hydrated (stub)
-          { type: 'SHOW', show: { seasons: { none: {} } } }, // show with zero seasons
-          { overview: null }, // missing overview (show or movie)
-        ],
-      },
-      orderBy: { createdAt: 'asc' }, // oldest first
-      take: limit,
-      include: { externalIds: true, genres: { include: { genre: true } } },
-    });
+      const candidates = await this.prisma.mediaItem.findMany({
+        where: {
+          OR: [
+            { metadataRefreshedAt: null }, // never hydrated (stub)
+            { type: 'SHOW', show: { seasons: { none: {} } } }, // show with zero seasons
+            { overview: null }, // missing overview (show or movie)
+          ],
+        },
+        orderBy: { createdAt: 'asc' }, // oldest first
+        take: limit,
+        include: { externalIds: true, genres: { include: { genre: true } } },
+      });
 
-    let succeeded = 0;
-    let failed = 0;
-    const sample: string[] = [];
-    for (let i = 0; i < candidates.length; i++) {
-      const m = candidates[i];
-      try {
-        await this.hydrateOne(
-          m.id,
-          m.externalIds as unknown as { provider: ExternalProvider; value: string }[],
-          m.type,
-          // Genre identity is locale-tolerant: slug OR lowercased name (localized genre
-          // rows exist from non-en hydrations).
-          m.genres.flatMap((g) => [g.genre.slug, g.genre.name.toLowerCase()]),
-        );
-        succeeded++;
-        if (sample.length < 5) sample.push(m.title);
-      } catch (e) {
-        failed++;
-        this.logger.debug(`backfill failed for ${m.title}: ${(e as Error).message}`);
+      let succeeded = 0;
+      let failed = 0;
+      const sample: string[] = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const m = candidates[i];
+        try {
+          await this.hydrateOne(
+            m.id,
+            m.externalIds as unknown as { provider: ExternalProvider; value: string }[],
+            m.type,
+            // Genre identity is locale-tolerant: slug OR lowercased name (localized genre
+            // rows exist from non-en hydrations).
+            m.genres.flatMap((g) => [g.genre.slug, g.genre.name.toLowerCase()]),
+          );
+          succeeded++;
+          if (sample.length < 5) sample.push(m.title);
+        } catch (e) {
+          failed++;
+          this.logger.debug(`backfill failed for ${m.title}: ${(e as Error).message}`);
+        }
+        // Progress log every 50 items so the admin can see it's working.
+        if ((i + 1) % 50 === 0) {
+          this.logger.log(
+            `Backfill progress: ${i + 1}/${candidates.length} (${succeeded} ok, ${failed} fail)`,
+          );
+        }
+        // Throttle: wait between items so normal user requests aren't starved.
+        if (delayMs > 0 && i < candidates.length - 1) {
+          await new Promise((r) => setTimeout(r, delayMs));
+        }
       }
-      // Progress log every 50 items so the admin can see it's working.
-      if ((i + 1) % 50 === 0) {
-        this.logger.log(`Backfill progress: ${i + 1}/${candidates.length} (${succeeded} ok, ${failed} fail)`);
-      }
-      // Throttle: wait between items so normal user requests aren't starved.
-      if (delayMs > 0 && i < candidates.length - 1) {
-        await new Promise((r) => setTimeout(r, delayMs));
-      }
-    }
-    this.logger.log(`Metadata backfill batch: ${succeeded}/${candidates.length} succeeded, ${failed} failed`);
-    return { processed: candidates.length, succeeded, failed, sample };
+      this.logger.log(
+        `Metadata backfill batch: ${succeeded}/${candidates.length} succeeded, ${failed} failed`,
+      );
+      return { processed: candidates.length, succeeded, failed, sample };
     } finally {
       this.backfillRunning = false;
     }
@@ -239,12 +263,17 @@ export class MetadataBackfillService {
     // Detect existing structure: shows with ≥1 episode, movies with overview.
     const hasStructure = isShow
       ? (await this.prisma.episode.count({ where: { season: { show: { mediaId } } }, take: 1 })) > 0
-      : (await this.prisma.mediaItem.count({ where: { id: mediaId, type: 'MOVIE', overview: { not: null } } })) > 0;
+      : (await this.prisma.mediaItem.count({
+          where: { id: mediaId, type: 'MOVIE', overview: { not: null } },
+        })) > 0;
 
     if (isShow && hasAnimation && tvdb) {
       // Animation show with a TVDB id → TVDB, even if currently TMDB-structured (the fix
       // also remaps user watch data onto the TVDB structure).
-      const { fixed } = await this.fixAnimeShowFromTvdb(mediaId).catch(() => ({ fixed: false, remapped: 0 }));
+      const { fixed } = await this.fixAnimeShowFromTvdb(mediaId).catch(() => ({
+        fixed: false,
+        remapped: 0,
+      }));
       if (!fixed) await this.meta.ensureShowFullTvdb(Number(tvdb.value)).catch(() => undefined);
     } else if (hasStructure && tvdb) {
       // Already has TVDB-sourced structure → keep TVDB. NEVER override with TMDB.
@@ -314,7 +343,11 @@ export class MetadataBackfillService {
         where: {
           type: 'SHOW',
           genres: {
-            some: { genre: { OR: [{ slug: 'animation' }, { name: { equals: 'Animation', mode: 'insensitive' } }] } },
+            some: {
+              genre: {
+                OR: [{ slug: 'animation' }, { name: { equals: 'Animation', mode: 'insensitive' } }],
+              },
+            },
           },
           // At least one stale TMDB-only episode row. Fresh TVDB rows may coexist after a
           // partial switch (e.g. an earlier detail-view hydration) — those shows still
@@ -357,20 +390,34 @@ export class MetadataBackfillService {
         } catch (e) {
           if (this.isRateLimitError(e)) {
             rateLimited++;
-            this.logger.warn(`Anime TVDB rehydration rate-limited after ${i} items — deferring the rest`);
+            this.logger.warn(
+              `Anime TVDB rehydration rate-limited after ${i} items — deferring the rest`,
+            );
             break;
           }
           failed++;
-          this.logger.debug(`anime tvdb rehydration failed for ${m.title}: ${(e as Error).message}`);
+          this.logger.debug(
+            `anime tvdb rehydration failed for ${m.title}: ${(e as Error).message}`,
+          );
         }
         if ((i + 1) % 25 === 0) {
-          this.logger.log(`Anime TVDB rehydration progress: ${i + 1}/${candidates.length} (${succeeded} ok, ${failed} fail, ${noTvdbId} no-tvdb-id)`);
+          this.logger.log(
+            `Anime TVDB rehydration progress: ${i + 1}/${candidates.length} (${succeeded} ok, ${failed} fail, ${noTvdbId} no-tvdb-id)`,
+          );
         }
       }
       this.logger.log(
         `Anime TVDB rehydration: ${succeeded}/${candidates.length} rehydrated, ${failed} failed, ${rateLimited} rate-limited, ${noTvdbId} skipped (no TVDB id / already repaired), ${remapped} episodes remapped`,
       );
-      return { processed: candidates.length, succeeded, failed, rateLimited, noTvdbId, remapped, sample };
+      return {
+        processed: candidates.length,
+        succeeded,
+        failed,
+        rateLimited,
+        noTvdbId,
+        remapped,
+        sample,
+      };
     } finally {
       this.animeFixRunning = false;
     }
@@ -389,12 +436,16 @@ export class MetadataBackfillService {
   async fixAnimeShowFromTvdb(mediaId: string): Promise<{ fixed: boolean; remapped: number }> {
     const existing = this.animeFixInflight.get(mediaId);
     if (existing) return existing;
-    const p = this.doFixAnimeShowFromTvdb(mediaId).finally(() => this.animeFixInflight.delete(mediaId));
+    const p = this.doFixAnimeShowFromTvdb(mediaId).finally(() =>
+      this.animeFixInflight.delete(mediaId),
+    );
     this.animeFixInflight.set(mediaId, p);
     return p;
   }
 
-  private async doFixAnimeShowFromTvdb(mediaId: string): Promise<{ fixed: boolean; remapped: number }> {
+  private async doFixAnimeShowFromTvdb(
+    mediaId: string,
+  ): Promise<{ fixed: boolean; remapped: number }> {
     const notFixed = { fixed: false, remapped: 0 };
     if (!this.tvdb.enabled) return notFixed;
 
@@ -432,7 +483,10 @@ export class MetadataBackfillService {
 
     // Bypass the 24h isStale gate inside ensureShowFullTvdb — this is a forced provider
     // switch, not a routine refresh.
-    await this.prisma.mediaItem.update({ where: { id: mediaId }, data: { metadataRefreshedAt: null } });
+    await this.prisma.mediaItem.update({
+      where: { id: mediaId },
+      data: { metadataRefreshedAt: null },
+    });
     await this.meta.ensureShowFullTvdb(tvdbId);
     const remap = await this.structureRemap.remapShow(mediaId);
     // Remember the kept-unmapped count so kept rows alone never re-arm this repair.
@@ -533,7 +587,12 @@ export class MetadataBackfillService {
    * structure alive instead of losing data), then the contaminated row is rehydrated
    * from its OWN provider to restore its base metadata.
    */
-  async repairTypeMismatches(): Promise<{ processed: number; repaired: number; skipped: number; failed: number }> {
+  async repairTypeMismatches(): Promise<{
+    processed: number;
+    repaired: number;
+    skipped: number;
+    failed: number;
+  }> {
     const empty = { processed: 0, repaired: 0, skipped: 0, failed: 0 };
     if (this.typeRepairRunning) {
       this.logger.log('Type mismatch repair already running — skipping');
@@ -546,7 +605,9 @@ export class MetadataBackfillService {
       // status/history on a show can never be legitimate — and hide shows under My Movies.
       const [statusDel, historyDel] = await this.prisma.$transaction([
         this.prisma.userMovieStatus.deleteMany({ where: { media: { type: 'SHOW' } } }),
-        this.prisma.watchHistory.deleteMany({ where: { mediaType: 'MOVIE', media: { type: 'SHOW' } } }),
+        this.prisma.watchHistory.deleteMany({
+          where: { mediaType: 'MOVIE', media: { type: 'SHOW' } },
+        }),
       ]);
       if (statusDel.count + historyDel.count > 0) {
         this.logger.log(
@@ -584,7 +645,9 @@ export class MetadataBackfillService {
           else skipped++;
         } catch (e) {
           failed++;
-          this.logger.warn(`type mismatch repair failed for ${m.title} (${m.id}): ${(e as Error).message}`);
+          this.logger.warn(
+            `type mismatch repair failed for ${m.title} (${m.id}): ${(e as Error).message}`,
+          );
         }
       }
       this.logger.log(
@@ -601,7 +664,11 @@ export class MetadataBackfillService {
     mediaId: string,
     type: string,
     title: string,
-    externalIds: { provider: ExternalProvider; providerEntityKind: ProviderEntityKind; value: string }[],
+    externalIds: {
+      provider: ExternalProvider;
+      providerEntityKind: ProviderEntityKind;
+      value: string;
+    }[],
   ): Promise<boolean> {
     const isMovieRow = type === MediaType.MOVIE;
     // The cross-type entity's identity: the external id whose KIND matches the stray
@@ -609,18 +676,28 @@ export class MetadataBackfillService {
     const strayKind = isMovieRow ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
     const ownKind = isMovieRow ? ProviderEntityKind.MOVIE : ProviderEntityKind.SERIES;
     const strayExt =
-      externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB && e.providerEntityKind === strayKind) ??
-      externalIds.find((e) => e.provider === ExternalProvider.TMDB && e.providerEntityKind === strayKind);
+      externalIds.find(
+        (e) => e.provider === ExternalProvider.THE_TVDB && e.providerEntityKind === strayKind,
+      ) ??
+      externalIds.find(
+        (e) => e.provider === ExternalProvider.TMDB && e.providerEntityKind === strayKind,
+      );
     const ownExt =
-      externalIds.find((e) => e.provider === ExternalProvider.TMDB && e.providerEntityKind === ownKind) ??
-      externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB && e.providerEntityKind === ownKind);
+      externalIds.find(
+        (e) => e.provider === ExternalProvider.TMDB && e.providerEntityKind === ownKind,
+      ) ??
+      externalIds.find(
+        (e) => e.provider === ExternalProvider.THE_TVDB && e.providerEntityKind === ownKind,
+      );
 
     if (!strayExt) {
       // No identity to rebuild the cross-type entity from: remove the stray structural
       // row only when it carries NO episodes with user data.
       if (isMovieRow && (await this.strayShowHasUserData(mediaId))) return false;
       await this.deleteStrayStructure(mediaId, isMovieRow);
-      this.logger.log(`type mismatch: removed stray structure on ${title} (${mediaId}) — no cross-type id`);
+      this.logger.log(
+        `type mismatch: removed stray structure on ${title} (${mediaId}) — no cross-type id`,
+      );
       return true;
     }
 
@@ -663,17 +740,24 @@ export class MetadataBackfillService {
 
       // 4. Remove the now-empty stray structure, then restore the row's own base metadata.
       await this.deleteStrayStructure(mediaId, isMovieRow);
-      await this.prisma.mediaItem.update({ where: { id: mediaId }, data: { metadataRefreshedAt: null } });
+      await this.prisma.mediaItem.update({
+        where: { id: mediaId },
+        data: { metadataRefreshedAt: null },
+      });
       if (ownExt) {
         if (isMovieRow) {
-          if (ownExt.provider === ExternalProvider.TMDB) await this.meta.ensureMovieFull(Number(ownExt.value));
+          if (ownExt.provider === ExternalProvider.TMDB)
+            await this.meta.ensureMovieFull(Number(ownExt.value));
           else await this.meta.ensureMovieFullTvdb(Number(ownExt.value));
         } else {
-          if (ownExt.provider === ExternalProvider.TMDB) await this.meta.ensureShowFull(Number(ownExt.value));
+          if (ownExt.provider === ExternalProvider.TMDB)
+            await this.meta.ensureShowFull(Number(ownExt.value));
           else await this.meta.ensureShowFullTvdb(Number(ownExt.value));
         }
       }
-      this.logger.log(`type mismatch: split ${title} (${mediaId}) — cross-type entity is ${newEntityId}`);
+      this.logger.log(
+        `type mismatch: split ${title} (${mediaId}) — cross-type entity is ${newEntityId}`,
+      );
       return true;
     } catch (e) {
       // Restore the detached id so the next run can resolve the cross-type entity again.
@@ -762,7 +846,11 @@ export class MetadataBackfillService {
         select: {
           id: true,
           title: true,
-          externalIds: { where: { provider: ExternalProvider.THE_TVDB }, take: 1, select: { value: true } },
+          externalIds: {
+            where: { provider: ExternalProvider.THE_TVDB },
+            take: 1,
+            select: { value: true },
+          },
         },
       });
 
@@ -774,23 +862,32 @@ export class MetadataBackfillService {
         const m = candidates[i];
         try {
           // Bypass the 24h isStale gate — the cast rewrite only happens on a full refresh.
-          await this.prisma.mediaItem.update({ where: { id: m.id }, data: { metadataRefreshedAt: null } });
+          await this.prisma.mediaItem.update({
+            where: { id: m.id },
+            data: { metadataRefreshedAt: null },
+          });
           // skipClassification: this is a cast-only refresh — re-enqueueing anime
           // classification for every backfilled show saturates Kitsu/Jikan for nothing.
-          await this.meta.ensureShowFullTvdb(Number(m.externalIds[0].value), undefined, { skipClassification: true });
+          await this.meta.ensureShowFullTvdb(Number(m.externalIds[0].value), undefined, {
+            skipClassification: true,
+          });
           succeeded++;
           if (sample.length < 5) sample.push(m.title);
         } catch (e) {
           if (this.isRateLimitError(e)) {
             rateLimited++;
-            this.logger.warn(`Character-id backfill rate-limited after ${i} shows — deferring the rest`);
+            this.logger.warn(
+              `Character-id backfill rate-limited after ${i} shows — deferring the rest`,
+            );
             break;
           }
           failed++;
           this.logger.debug(`character-id backfill failed for ${m.title}: ${(e as Error).message}`);
         }
         if ((i + 1) % 25 === 0) {
-          this.logger.log(`Character-id backfill progress: ${i + 1}/${candidates.length} (${succeeded} ok, ${failed} fail)`);
+          this.logger.log(
+            `Character-id backfill progress: ${i + 1}/${candidates.length} (${succeeded} ok, ${failed} fail)`,
+          );
         }
       }
       this.logger.log(
@@ -799,6 +896,126 @@ export class MetadataBackfillService {
       return { processed: candidates.length, succeeded, failed, rateLimited, sample };
     } finally {
       this.charIdFixRunning = false;
+    }
+  }
+
+  // ---- TVDB id conflicts (multi-id rows) ----
+  private tvdbIdFixRunning = false;
+
+  /**
+   * Repair rows carrying MORE THAN ONE TVDB id (same entity kind). Two cases:
+   *  - Merge leftovers: every id maps to the SAME TMDB entity → benign, kept as-is.
+   *  - Id poisoning (the old title-attach bug): ids map to DIFFERENT TMDB entities →
+   *    the id matching the row's own TMDB id stays, the others are DETACHED.
+   * Rows where no decisive id can be picked are reported as ambiguous (never guessed).
+   * NON-DESTRUCTIVE for user data: detaching an external id never deletes history —
+   * it only stops future lookups from resolving to the wrong row.
+   */
+  async repairTvdbIdConflicts(limit?: number): Promise<{
+    processed: number;
+    mergedKept: number;
+    conflictsFixed: number;
+    idsDetached: number;
+    ambiguous: {
+      mediaId: string;
+      title: string;
+      ids: string[];
+      mapped: Record<string, number | null>;
+    }[];
+  }> {
+    const empty = {
+      processed: 0,
+      mergedKept: 0,
+      conflictsFixed: 0,
+      idsDetached: 0,
+      ambiguous: [] as any[],
+    };
+    if (this.tvdbIdFixRunning) {
+      this.logger.log('TVDB-id conflict repair already running — skipping');
+      return empty;
+    }
+    if (!this.tmdbProvider.enabled) {
+      this.logger.warn('TMDB not configured — skipping TVDB-id conflict repair');
+      return empty;
+    }
+    this.tvdbIdFixRunning = true;
+    try {
+      const rows = await this.prisma.$queryRaw<
+        {
+          mediaId: string;
+          title: string;
+          type: string;
+          kind: string;
+          ids: string[];
+          tmdb: string | null;
+        }[]
+      >`
+        SELECT e.media_id AS "mediaId", m.title, m.type, e.provider_entity_kind AS kind,
+               array_agg(e.value) AS ids,
+               (SELECT value FROM external_ids t
+                WHERE t.media_id = e.media_id AND t.provider = 'TMDB' AND t.provider_entity_kind = e.provider_entity_kind
+                LIMIT 1) AS tmdb
+        FROM external_ids e
+        JOIN media_items m ON m.id = e.media_id
+        WHERE e.provider = 'THE_TVDB'
+        GROUP BY e.media_id, m.title, m.type, e.provider_entity_kind
+        HAVING count(*) > 1
+        ORDER BY m.title
+        LIMIT ${Math.max(1, Math.min(limit ?? 500, 100000))}
+      `;
+
+      let mergedKept = 0;
+      let conflictsFixed = 0;
+      let idsDetached = 0;
+      const ambiguous: any[] = [];
+      for (const row of rows) {
+        try {
+          const mapped: Record<string, number | null> = {};
+          for (const id of row.ids) {
+            const found = await this.tmdbProvider.findByExternalId(id, 'tvdb_id').catch(() => null);
+            // Whatever the id maps to (a poisoned id may even map cross-type).
+            mapped[id] = found?.show?.tmdbId ?? found?.movie?.tmdbId ?? null;
+          }
+          const distinct = [
+            ...new Set(Object.values(mapped).filter((v): v is number => v != null)),
+          ];
+          if (distinct.length <= 1) {
+            mergedKept++; // merge leftovers (or unverifiable-but-uniform) — benign
+            continue;
+          }
+          // Poison: pick the id whose mapped TMDB entity equals the row's own TMDB id.
+          const rowTmdb = row.tmdb ? Number(row.tmdb) : null;
+          const keep = rowTmdb != null ? row.ids.find((id) => mapped[id] === rowTmdb) : undefined;
+          if (!keep) {
+            ambiguous.push({ mediaId: row.mediaId, title: row.title, ids: row.ids, mapped });
+            continue;
+          }
+          const bad = row.ids.filter((id) => id !== keep);
+          await this.prisma.externalId.deleteMany({
+            where: {
+              mediaId: row.mediaId,
+              provider: 'THE_TVDB',
+              providerEntityKind: row.kind as any,
+              value: { in: bad },
+            },
+          });
+          conflictsFixed++;
+          idsDetached += bad.length;
+          this.logger.log(
+            `TVDB-id conflict repaired for "${row.title}" (${row.mediaId}): kept ${keep}, detached ${bad.join(', ')}`,
+          );
+        } catch (e) {
+          this.logger.warn(
+            `TVDB-id conflict check failed for "${row.title}": ${(e as Error).message}`,
+          );
+        }
+      }
+      this.logger.log(
+        `TVDB-id conflict repair: ${rows.length} rows checked — ${mergedKept} merge-leftover kept, ${conflictsFixed} conflicts fixed (${idsDetached} ids detached), ${ambiguous.length} ambiguous`,
+      );
+      return { processed: rows.length, mergedKept, conflictsFixed, idsDetached, ambiguous };
+    } finally {
+      this.tvdbIdFixRunning = false;
     }
   }
 
@@ -832,17 +1049,26 @@ export class MetadataBackfillService {
 
     // Start date: explicit param (one-off), else last sync (Redis), else 14 days ago.
     const lastRunStr = await this.redis.get<string>('TMDB_CHANGES_LAST_RUN');
-    const startDate_ = startDate && /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? new Date(`${startDate}T00:00:00Z`) : lastRunStr ? new Date(lastRunStr) : new Date(Date.now() - 1000 * 60 * 60 * 24 * 14);
+    const startDate_ =
+      startDate && /^\d{4}-\d{2}-\d{2}$/.test(startDate)
+        ? new Date(`${startDate}T00:00:00Z`)
+        : lastRunStr
+          ? new Date(lastRunStr)
+          : new Date(Date.now() - 1000 * 60 * 60 * 24 * 14);
     const endDate = new Date();
     const fmt = (d: Date) => d.toISOString().slice(0, 10);
 
-    this.logger.log(`TMDB changes sync: ${fmt(startDate_)} → ${fmt(endDate)}${startDate ? ' (custom range)' : ''}`);
+    this.logger.log(
+      `TMDB changes sync: ${fmt(startDate_)} → ${fmt(endDate)}${startDate ? ' (custom range)' : ''}`,
+    );
 
     // Fetch ALL changed IDs from TMDB (fully paginated).
     const tvIds = await this.fetchChangedIds('tv', fmt(startDate_), fmt(endDate));
     const movieIds = await this.fetchChangedIds('movie', fmt(startDate_), fmt(endDate));
     const allIds = [...tvIds, ...movieIds];
-    this.logger.log(`TMDB changes: ${tvIds.length} TV + ${movieIds.length} movie = ${allIds.length} total changed IDs`);
+    this.logger.log(
+      `TMDB changes: ${tvIds.length} TV + ${movieIds.length} movie = ${allIds.length} total changed IDs`,
+    );
 
     // Store the end date so the next run starts from here — EXCEPT for custom-range
     // one-offs, which must never disturb the daily progression.
@@ -854,13 +1080,21 @@ export class MetadataBackfillService {
       return { tvChanged: 0, movieChanged: 0, matched: 0, hydrated: 0, failed: 0, skippedAnime: 0 };
 
     // Match against our DB in chunks (PostgreSQL has a 32767 bind-variable limit).
-    const matched: { mediaId: string; value: string; media: { type: string; externalIds: any[] } }[] = [];
+    const matched: {
+      mediaId: string;
+      value: string;
+      media: { type: string; externalIds: any[] };
+    }[] = [];
     const CHUNK = 5000;
     for (let i = 0; i < allIds.length; i += CHUNK) {
       const chunk = allIds.slice(i, i + CHUNK).map(String);
       const rows = await this.prisma.externalId.findMany({
         where: { provider: ExternalProvider.TMDB, value: { in: chunk } },
-        select: { mediaId: true, value: true, media: { select: { type: true, externalIds: true } } },
+        select: {
+          mediaId: true,
+          value: true,
+          media: { select: { type: true, externalIds: true } },
+        },
       });
       matched.push(...(rows as any[]));
     }
@@ -876,7 +1110,11 @@ export class MetadataBackfillService {
       where: {
         type: 'SHOW',
         genres: {
-          some: { genre: { OR: [{ slug: 'animation' }, { name: { equals: 'Animation', mode: 'insensitive' } }] } },
+          some: {
+            genre: {
+              OR: [{ slug: 'animation' }, { name: { equals: 'Animation', mode: 'insensitive' } }],
+            },
+          },
         },
       },
       select: { id: true },
@@ -903,7 +1141,9 @@ export class MetadataBackfillService {
         hydrated++;
       } catch (e) {
         failed++;
-        this.logger.debug(`TMDB changes re-hydration failed for ${m.value}: ${(e as Error).message}`);
+        this.logger.debug(
+          `TMDB changes re-hydration failed for ${m.value}: ${(e as Error).message}`,
+        );
       }
       // Progress log every 500 items so the admin can see it's working.
       if ((i + 1) % 500 === 0) {
@@ -950,24 +1190,33 @@ export class MetadataBackfillService {
   }
 
   /** Fetch ALL changed TMDB IDs for a media type (fully paginated, no arbitrary cap). */
-  private async fetchChangedIds(type: 'tv' | 'movie', startDate: string, endDate: string): Promise<number[]> {
+  private async fetchChangedIds(
+    type: 'tv' | 'movie',
+    startDate: string,
+    endDate: string,
+  ): Promise<number[]> {
     const ids: number[] = [];
     let page = 1;
     let totalPages = 1;
     while (page <= totalPages) {
       try {
-        const res = await this.tmdb.get<any>(`/${type}/changes`, { start_date: startDate, end_date: endDate, page });
+        const res = await this.tmdb.get<any>(`/${type}/changes`, {
+          start_date: startDate,
+          end_date: endDate,
+          page,
+        });
         const results = Array.isArray(res?.results) ? res.results : [];
         if (results.length === 0) break;
         ids.push(...results.map((r: any) => Number(r.id)).filter(Number.isFinite));
         totalPages = res?.total_pages ?? 1;
         page++;
       } catch (e) {
-        this.logger.debug(`TMDB changes fetch failed (page ${page}, ${type}): ${(e as Error).message}`);
+        this.logger.debug(
+          `TMDB changes fetch failed (page ${page}, ${type}): ${(e as Error).message}`,
+        );
         break;
       }
     }
     return ids;
   }
-
 }

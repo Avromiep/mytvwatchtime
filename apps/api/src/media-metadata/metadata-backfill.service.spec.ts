@@ -58,6 +58,90 @@ const animeShow = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+describe('MetadataBackfillService.repairTvdbIdConflicts', () => {
+  function make(rows: any[], mappedById: Record<string, { show?: number; movie?: number } | null>) {
+    const prisma: any = {
+      $queryRaw: jest.fn(async () => rows),
+      externalId: { deleteMany: jest.fn(async () => ({ count: 1 })) },
+    };
+    const tmdbProvider = {
+      enabled: true,
+      findByExternalId: jest.fn(async (id: string) => {
+        const m = mappedById[id];
+        if (!m) return null;
+        return {
+          show: m.show ? { tmdbId: m.show } : null,
+          movie: m.movie ? { tmdbId: m.movie } : null,
+          episode: null,
+        };
+      }),
+    };
+    const service = new MetadataBackfillService(
+      prisma,
+      mockMeta(),
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      tmdbProvider as any,
+      {} as any,
+    );
+    return { service, prisma };
+  }
+
+  const row = (over: Record<string, any> = {}) => ({
+    mediaId: 'm1',
+    title: 'Some Show',
+    type: 'SHOW',
+    kind: 'SERIES',
+    ids: ['111', '222'],
+    tmdb: '60989',
+    ...over,
+  });
+
+  it('keeps merge leftovers (all ids map to the SAME TMDB show) — no deletes', async () => {
+    const { service, prisma } = make([row()], {
+      '111': { show: 60989 },
+      '222': { show: 60989 },
+    });
+    const res = await service.repairTvdbIdConflicts();
+    expect(res).toEqual(
+      expect.objectContaining({ processed: 1, mergedKept: 1, conflictsFixed: 0, idsDetached: 0 }),
+    );
+    expect(prisma.externalId.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('detaches only the poisoned id (keeps the one matching the row TMDB id)', async () => {
+    const { service, prisma } = make([row()], {
+      '111': { show: 60989 }, // matches row TMDB
+      '222': { show: 62705 }, // poison — a different show
+    });
+    const res = await service.repairTvdbIdConflicts();
+    expect(res).toEqual(
+      expect.objectContaining({ processed: 1, conflictsFixed: 1, idsDetached: 1, mergedKept: 0 }),
+    );
+    expect(prisma.externalId.deleteMany).toHaveBeenCalledWith({
+      where: {
+        mediaId: 'm1',
+        provider: 'THE_TVDB',
+        providerEntityKind: 'SERIES',
+        value: { in: ['222'] },
+      },
+    });
+  });
+
+  it('reports ambiguous rows without touching them (no decisive id)', async () => {
+    const { service, prisma } = make([row({ tmdb: '99999' })], {
+      '111': { show: 60989 },
+      '222': { show: 62705 },
+    });
+    const res = await service.repairTvdbIdConflicts();
+    expect(res.ambiguous).toHaveLength(1);
+    expect(res.conflictsFixed).toBe(0);
+    expect(prisma.externalId.deleteMany).not.toHaveBeenCalled();
+  });
+});
+
 describe('MetadataBackfillService', () => {
   let prisma: ReturnType<typeof mockPrisma>;
   let meta: ReturnType<typeof mockMeta>;
@@ -446,8 +530,12 @@ describe('MetadataBackfillService', () => {
         data: { metadataRefreshedAt: null },
       });
       expect(meta.ensureShowFullTvdb).toHaveBeenCalledTimes(2);
-      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(73255, undefined, { skipClassification: true });
-      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(73996, undefined, { skipClassification: true });
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(73255, undefined, {
+        skipClassification: true,
+      });
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(73996, undefined, {
+        skipClassification: true,
+      });
       expect(res).toMatchObject({ processed: 2, succeeded: 2, failed: 0, rateLimited: 0 });
     });
 

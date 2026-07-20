@@ -540,7 +540,10 @@ export class ImportService {
     return { examined, resolved, stillUnresolved: examined - resolved };
   }
 
-  /** Recompute the Import row's status counters from the current ImportItem statuses. */
+  /** Recompute the Import row's status counters from the current ImportItem statuses.
+   *  ONLY row-backed counters (matched/unmatched/needsReview) — duplicates, invalid and
+   *  conflict are processing counters with NO row equivalent (skipped rows are never
+   *  staged), so recounting them from statuses would wipe them to zero. */
   private async recountImportStatuses(importId: string) {
     const groups = await this.prisma.importItem.groupBy({
       by: ['status'],
@@ -555,9 +558,6 @@ export class ImportService {
         matchedCount: counts['MATCHED'] ?? 0,
         unmatchedCount: counts['UNMATCHED'] ?? 0,
         needsReviewCount: counts['NEEDS_REVIEW'] ?? 0,
-        duplicateCount: counts['DUPLICATE'] ?? 0,
-        invalidCount: counts['INVALID'] ?? 0,
-        conflictCount: counts['CONFLICT'] ?? 0,
       },
     });
   }
