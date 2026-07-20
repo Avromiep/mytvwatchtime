@@ -19,7 +19,11 @@ export function useCommentActions(opts: { onEdit: (c: CommentDto) => void }) {
   const qc = useQueryClient();
   const del = useDeleteComment();
 
-  const doReport = async (targetType: 'COMMENT' | 'IMAGE' | 'USER', targetId: string, reason: string) => {
+  const doReport = async (
+    targetType: 'COMMENT' | 'IMAGE' | 'USER',
+    targetId: string,
+    reason: string,
+  ) => {
     try {
       const endpoint =
         targetType === 'COMMENT'
@@ -31,6 +35,21 @@ export function useCommentActions(opts: { onEdit: (c: CommentDto) => void }) {
       showSuccess({ title: t('comments:reported'), description: t('comments:reportedDesc') });
     } catch {
       showError({ title: t('comments:failedToReport'), description: t('common:pleaseTryAgain') });
+    }
+  };
+
+  /** Community spoiler flag (idempotent; flips the comment to spoiler at 5 flags). */
+  const doReportSpoiler = async (commentId: string) => {
+    try {
+      await api.post(`/comments/${commentId}/spoiler-report`, {});
+      showSuccess({ title: t('comments:spoilerReported') });
+      qc.invalidateQueries({ queryKey: ['comments'] });
+      qc.invalidateQueries({ queryKey: ['commentReplies'] });
+    } catch (e: any) {
+      showError({
+        title: t('comments:failedToReport'),
+        description: e?.message ?? t('common:pleaseTryAgain'),
+      });
     }
   };
 
@@ -76,26 +95,56 @@ export function useCommentActions(opts: { onEdit: (c: CommentDto) => void }) {
         try {
           await del.mutateAsync(comment.id);
         } catch (e: any) {
-          showError({ title: t('comments:failedToDelete'), description: e?.message ?? t('common:pleaseTryAgain') });
+          showError({
+            title: t('comments:failedToDelete'),
+            description: e?.message ?? t('common:pleaseTryAgain'),
+          });
         }
       },
     });
   };
 
   const openOverflow = (comment: CommentDto, isOwner: boolean) => {
-    const buttons: { label: string; variant: 'primary' | 'secondary' | 'danger' | 'ghost'; onPress?: () => void }[] = [];
+    const buttons: {
+      label: string;
+      variant: 'primary' | 'secondary' | 'danger' | 'ghost';
+      onPress?: () => void;
+    }[] = [];
     if (comment.deletedByUser) {
       buttons.push({ label: t('common:cancel'), variant: 'ghost' });
       showDialog({ title: comment.author?.username ?? t('comments:deleted'), buttons });
       return;
     }
     if (isOwner) {
-      buttons.push({ label: t('comments:editComment'), variant: 'secondary', onPress: () => opts.onEdit(comment) });
-      buttons.push({ label: t('comments:deleteComment'), variant: 'danger', onPress: () => confirmDelete(comment) });
+      buttons.push({
+        label: t('comments:editComment'),
+        variant: 'secondary',
+        onPress: () => opts.onEdit(comment),
+      });
+      buttons.push({
+        label: t('comments:deleteComment'),
+        variant: 'danger',
+        onPress: () => confirmDelete(comment),
+      });
     } else {
-      buttons.push({ label: t('comments:reportComment'), variant: 'secondary', onPress: () => showReportOptions('COMMENT', comment.id) });
+      buttons.push({
+        label: t('comments:reportComment'),
+        variant: 'secondary',
+        onPress: () => showReportOptions('COMMENT', comment.id),
+      });
+      if (!comment.isSpoiler && !comment.spoilerReportedByMe) {
+        buttons.push({
+          label: t('comments:reportSpoiler'),
+          variant: 'secondary',
+          onPress: () => doReportSpoiler(comment.id),
+        });
+      }
       if (comment.image?.status === 'ready') {
-        buttons.push({ label: t('comments:reportImage'), variant: 'secondary', onPress: () => showReportOptions('IMAGE', comment.image!.id) });
+        buttons.push({
+          label: t('comments:reportImage'),
+          variant: 'secondary',
+          onPress: () => showReportOptions('IMAGE', comment.image!.id),
+        });
       }
       buttons.push({
         label: t('comments:blockUser', { username: comment.author?.username }),

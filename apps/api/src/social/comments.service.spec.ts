@@ -42,6 +42,7 @@ function mockPrisma(commentRow: any = makeComment()) {
     },
     commentImage: { findUnique: jest.fn().mockResolvedValue(null) },
     commentLike: { findMany: jest.fn().mockResolvedValue([]) },
+    commentSpoilerReport: { findMany: jest.fn().mockResolvedValue([]) },
     follow: { count: jest.fn().mockResolvedValue(0), groupBy: jest.fn().mockResolvedValue([]) },
     $queryRaw: jest.fn().mockResolvedValue([]),
   };
@@ -425,18 +426,16 @@ describe('CommentsService.listMine', () => {
       makeComment({ id: 'c1', userId: 'u1', threadType: 'SHOW', threadId: 'm1', body: 'hi' }),
     );
     prisma.mediaItem = {
-      findMany: jest
-        .fn()
-        .mockResolvedValue([
-          {
-            id: 'm1',
-            type: 'SHOW',
-            title: 'My Show',
-            titles: null,
-            show: { yearStart: 2021 },
-            movie: null,
-          },
-        ]),
+      findMany: jest.fn().mockResolvedValue([
+        {
+          id: 'm1',
+          type: 'SHOW',
+          title: 'My Show',
+          titles: null,
+          show: { yearStart: 2021 },
+          movie: null,
+        },
+      ]),
     };
     prisma.episode = { findMany: jest.fn().mockResolvedValue([]) };
     const res = await service.listMine('u1', 1, 20);
@@ -501,5 +500,126 @@ describe('CommentsService.listMine', () => {
         take: 10,
       }),
     );
+  });
+});
+
+describe('CommentsService.reportSpoiler', () => {
+  function makeSpoilerService(comment: any) {
+    const prisma: any = {
+      comment: {
+        findUnique: jest.fn().mockResolvedValue(comment),
+        update: jest.fn(async (args: any) => ({
+          ...comment,
+          spoilerCount: comment.spoilerCount + 1,
+          isSpoiler: !!args.data.isSpoiler || comment.isSpoiler,
+        })),
+      },
+      commentSpoilerReport: {
+        createMany: jest.fn(async () => ({ count: 1 })),
+      },
+    };
+    const service = new CommentsService(prisma, { emit: jest.fn() } as any, {} as any, {} as any);
+    return { service, prisma };
+  }
+
+  it('increments the tally and flips isSpoiler at the threshold (5)', async () => {
+    const comment: any = makeComment({ id: 'c1', userId: 'other' });
+    comment.spoilerCount = 4;
+    comment.isSpoiler = false;
+    const { service, prisma } = makeSpoilerService(comment);
+
+    const res = await service.reportSpoiler('u1', 'c1');
+
+    expect(prisma.commentSpoilerReport.createMany).toHaveBeenCalledWith({
+      data: [{ commentId: 'c1', userId: 'u1' }],
+      skipDuplicates: true,
+    });
+    expect(prisma.comment.update).toHaveBeenCalledWith({
+      where: { id: 'c1' },
+      data: { spoilerCount: { increment: 1 }, isSpoiler: true },
+    });
+    expect(res).toEqual({ reported: true, spoilerCount: 5, isSpoiler: true });
+  });
+
+  it('does NOT flip isSpoiler below the threshold', async () => {
+    const comment: any = makeComment({ id: 'c1', userId: 'other' });
+    comment.spoilerCount = 2;
+    comment.isSpoiler = false;
+    const { service, prisma } = makeSpoilerService(comment);
+
+    const res = await service.reportSpoiler('u1', 'c1');
+
+    expect(prisma.comment.update).toHaveBeenCalledWith({
+      where: { id: 'c1' },
+      data: { spoilerCount: { increment: 1 } },
+    });
+    expect(res.isSpoiler).toBe(false);
+  });
+
+  it('is idempotent per user (second report is a no-op)', async () => {
+    const comment: any = makeComment({ id: 'c1', userId: 'other' });
+    comment.spoilerCount = 4;
+    comment.isSpoiler = false;
+    const { service, prisma } = makeSpoilerService(comment);
+    prisma.commentSpoilerReport.createMany.mockResolvedValue({ count: 0 });
+
+    const res = await service.reportSpoiler('u1', 'c1');
+
+    expect(prisma.comment.update).not.toHaveBeenCalled();
+    expect(res).toEqual({ reported: true, spoilerCount: 4, isSpoiler: false });
+  });
+
+  it('rejects self-reports (authors mark spoilers at creation)', async () => {
+    const comment: any = makeComment({ id: 'c1', userId: 'u1' });
+    comment.spoilerCount = 0;
+    const { service } = makeSpoilerService(comment);
+
+    await expect(service.reportSpoiler('u1', 'c1')).rejects.toThrow(BadRequestException);
+  });
+});
+
+describe('CommentsService.list — TMDB external reviews', () => {
+  it('merges stored TMDB reviews into page 1 and triggers the lazy sync', async () => {
+    const prisma: any = mockPrisma();
+    const events: any = { emit: jest.fn() };
+    const notifications: any = { createForUser: jest.fn().mockResolvedValue(undefined) };
+    const commentImages: any = mockCommentImages();
+    const externalReviews: any = {
+      ensureFreshForThread: jest.fn().mockResolvedValue(undefined),
+      listForThread: jest.fn().mockResolvedValue([
+        {
+          id: 'er1',
+          provider: 'TMDB',
+          author: 'MovieGuys',
+          content: 'x',
+          url: 'https://www.themoviedb.org/review/er1',
+          createdAt: new Date(),
+        },
+      ]),
+    };
+    const service = new CommentsService(
+      prisma,
+      events,
+      notifications,
+      commentImages,
+      externalReviews,
+    );
+
+    const res = await service.list('u1', { threadType: 'SHOW', threadId: 'm1' } as any);
+
+    expect(externalReviews.ensureFreshForThread).toHaveBeenCalledWith('SHOW', 'm1');
+    expect(externalReviews.listForThread).toHaveBeenCalledWith('SHOW', 'm1');
+    expect(res.externalReviews).toHaveLength(1);
+    expect(res.externalReviews[0]).toEqual(
+      expect.objectContaining({ provider: 'TMDB', author: 'MovieGuys' }),
+    );
+  });
+
+  it('returns an empty externalReviews array without the service (graceful degradation)', async () => {
+    const { service } = makeService();
+
+    const res = await service.list('u1', { threadType: 'SHOW', threadId: 't1' } as any);
+
+    expect(res.externalReviews).toEqual([]);
   });
 });

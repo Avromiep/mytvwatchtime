@@ -1,4 +1,15 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -6,7 +17,13 @@ import { FeatureFlagService } from '../common/feature-flag.service';
 import { CommentsService } from './comments.service';
 import { SocialService } from './social.service';
 import { ModerationService } from './moderation.service';
-import { CommentQueryDto, CreateCommentDto, RepliesQueryDto, ReportCommentDto, UpdateCommentDto } from './dto/comment.dto';
+import {
+  CommentQueryDto,
+  CreateCommentDto,
+  RepliesQueryDto,
+  ReportCommentDto,
+  UpdateCommentDto,
+} from './dto/comment.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 
 @ApiTags('social')
@@ -43,12 +60,17 @@ export class SocialController {
 
   @Post('comments')
   async createComment(@CurrentUser('id') userId: string, @Body() dto: CreateCommentDto) {
-    if (!(await this.flags.isEnabled('comments_enabled'))) throw new BadRequestException('Comments are temporarily disabled');
+    if (!(await this.flags.isEnabled('comments_enabled')))
+      throw new BadRequestException('Comments are temporarily disabled');
     return this.comments.create(userId, dto);
   }
 
   @Patch('comments/:id')
-  updateComment(@CurrentUser('id') userId: string, @Param('id') id: string, @Body() dto: UpdateCommentDto) {
+  updateComment(
+    @CurrentUser('id') userId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateCommentDto,
+  ) {
     return this.comments.update(userId, id, dto);
   }
 
@@ -68,8 +90,21 @@ export class SocialController {
   }
 
   @Post('comments/:id/report')
-  reportComment(@CurrentUser('id') userId: string, @Param('id') id: string, @Body() dto: ReportCommentDto) {
-    return this.moderation.report(userId, { targetType: 'COMMENT', targetId: id, reason: dto.reason });
+  reportComment(
+    @CurrentUser('id') userId: string,
+    @Param('id') id: string,
+    @Body() dto: ReportCommentDto,
+  ) {
+    return this.moderation.report(userId, {
+      targetType: 'COMMENT',
+      targetId: id,
+      reason: dto.reason,
+    });
+  }
+
+  @Post('comments/:id/spoiler-report')
+  reportSpoiler(@CurrentUser('id') userId: string, @Param('id') id: string) {
+    return this.comments.reportSpoiler(userId, id);
   }
 
   // ---- Block / Unblock ----
@@ -95,12 +130,20 @@ export class SocialController {
 
   // ---- Report User ----
   @Post('users/:id/report')
-  reportUser(@CurrentUser('id') userId: string, @Param('id') targetId: string, @Body() dto: ReportCommentDto) {
+  reportUser(
+    @CurrentUser('id') userId: string,
+    @Param('id') targetId: string,
+    @Body() dto: ReportCommentDto,
+  ) {
     return this.moderation.report(userId, { targetType: 'USER', targetId, reason: dto.reason });
   }
 
   @Post('images/:id/report')
-  reportImage(@CurrentUser('id') userId: string, @Param('id') targetId: string, @Body() dto: ReportCommentDto) {
+  reportImage(
+    @CurrentUser('id') userId: string,
+    @Param('id') targetId: string,
+    @Body() dto: ReportCommentDto,
+  ) {
     return this.moderation.report(userId, { targetType: 'IMAGE', targetId, reason: dto.reason });
   }
 

@@ -68,5 +68,13 @@
   "viewFullThread": "전체 스레드 보기",
   "myCommentsTitle": "내 댓글",
   "myCommentsEmpty": "아직 댓글이 없습니다",
-  "myCommentsEmptyDesc": "프로그램, 영화, 에피소드, 그룹에 남긴 내 댓글이 여기에 표시됩니다."
+  "myCommentsEmptyDesc": "프로그램, 영화, 에피소드, 그룹에 남긴 내 댓글이 여기에 표시됩니다.",
+  "tmdbReviews": "TMDB 리뷰",
+  "showMore": "더 보기",
+  "showLess": "접기",
+  "spoilerWarning": "스포일러 경고",
+  "viewSpoiler": "그래도 볼게요",
+  "reportSpoiler": "스포일러로 신고",
+  "spoilerReported": "스포일러가 신고됨",
+  "markAsSpoiler": "스포일러로 표시"
 }

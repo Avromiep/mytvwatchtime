@@ -37,6 +37,7 @@ import type {
   ReactionVoteSectionDto,
   CharacterVoteSectionDto,
   WatchNextItemDto,
+  ExternalReviewDto,
 } from '@tvwatch/shared';
 import { applyVoteChange, MediaType } from '@tvwatch/shared';
 import { api } from './client';
@@ -353,7 +354,11 @@ export const useCommentsFeed = (p: {
   return useInfiniteQuery({
     queryKey: qk.comments(p),
     queryFn: ({ pageParam }) =>
-      api.get<Paginated<CommentDto>>('/comments', { ...rest, page: pageParam as number, pageSize }),
+      api.get<Paginated<CommentDto> & { externalReviews?: ExternalReviewDto[] }>('/comments', {
+        ...rest,
+        page: pageParam as number,
+        pageSize,
+      }),
     initialPageParam: 1,
     getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
     enabled: !!p.threadId,
@@ -437,6 +442,7 @@ export const useCreateComment = () => {
       mediaType?: string;
       mediaId?: string;
       listId?: string;
+      isSpoiler?: boolean;
     }) => api.post<CommentDto>('/comments', dto),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ['comments'] });

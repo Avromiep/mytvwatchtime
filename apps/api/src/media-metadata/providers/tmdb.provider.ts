@@ -80,6 +80,8 @@ export interface NormalizedShow {
   keywords?: string[];
   /** All locale translations from the appended TMDB translations payload. Key = ISO 639-1. */
   translations?: Record<string, { title?: string; overview?: string }>;
+  /** TMDB user reviews (page 1) from the appended reviews payload. */
+  reviews?: NormalizedReview[];
 }
 export interface NormalizedMovie {
   type: MediaType.MOVIE;
@@ -104,7 +106,38 @@ export interface NormalizedMovie {
   keywords?: string[];
   /** All locale translations from the provider (bulk-cached). Key = app locale code. */
   translations?: Record<string, { title?: string; overview?: string }>;
+  /** TMDB user reviews (page 1) from the appended reviews payload. */
+  reviews?: NormalizedReview[];
 }
+
+interface TmdbReview {
+  author?: string;
+  author_details?: {
+    name?: string;
+    username?: string;
+    avatar_path?: string | null;
+    rating?: number | null;
+  };
+  content?: string;
+  created_at?: string;
+  id?: string;
+  updated_at?: string;
+  url?: string;
+}
+export interface NormalizedReview {
+  externalId: string;
+  author: string;
+  username: string | null;
+  avatarUrl: string | null;
+  /** TMDB 1..10 author rating (null when the review has none). */
+  rating: number | null;
+  content: string;
+  /** Canonical TMDB review URL (badge link target). */
+  url: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
 export interface NormalizedSearchItem {
   tmdbId: number;
   tvdbId?: number;
@@ -160,6 +193,7 @@ interface TmdbMovie {
   title?: string;
   original_title?: string;
   overview?: string;
+  reviews?: { results?: TmdbReview[] };
   poster_path?: string | null;
   backdrop_path?: string | null;
   release_date?: string;
@@ -442,14 +476,14 @@ export class TmdbProvider {
 
   async getShow(id: number, language?: string): Promise<NormalizedShow> {
     // ONE call: base + externals + credits + providers + videos + keywords + translations
-    // + up to 14 seasons appended (TMDB append_to_response allows 20 sub-requests in the
-    // same namespace). Seasons beyond the window (or an unappendable season) fall back to
+    // + reviews + up to 13 seasons appended (TMDB append_to_response caps at 20
+    // sub-requests). Seasons beyond the window (or an unappendable season) fall back to
     // the individual season endpoint below — same behavior as before, just fewer calls.
-    const seasonAppends = Array.from({ length: 14 }, (_, i) => `season/${i}`).join(',');
+    const seasonAppends = Array.from({ length: 13 }, (_, i) => `season/${i}`).join(',');
     const s = await this.tmdb.get<TmdbShow & Record<string, any>>(
       `/tv/${id}`,
       {
-        append_to_response: `external_ids,credits,watch/providers,videos,keywords,translations,${seasonAppends}`,
+        append_to_response: `external_ids,credits,watch/providers,videos,keywords,translations,reviews,${seasonAppends}`,
       },
       language,
     );
@@ -507,13 +541,17 @@ export class TmdbProvider {
       originCountries: s.origin_country ?? [],
       keywords: (s.keywords?.results ?? []).map((k) => k.name).filter((n): n is string => !!n),
       translations: this.translationsOf(s.translations),
+      reviews: this.reviewsOf(s.reviews),
     };
   }
 
   async getMovie(id: number, language?: string): Promise<NormalizedMovie> {
     const m = await this.tmdb.get<TmdbMovie>(
       `/movie/${id}`,
-      { append_to_response: 'external_ids,credits,watch/providers,videos,keywords,translations' },
+      {
+        append_to_response:
+          'external_ids,credits,watch/providers,videos,keywords,translations,reviews',
+      },
       language,
     );
     return {
@@ -543,7 +581,57 @@ export class TmdbProvider {
       // Movie keywords use a different payload shape than TV keywords (`keywords` vs `results`).
       keywords: (m.keywords?.keywords ?? []).map((k) => k.name).filter((n): n is string => !!n),
       translations: this.translationsOf(m.translations),
+      reviews: this.reviewsOf(m.reviews),
     };
+  }
+
+  /** Appended reviews payload (page 1) → normalized provider reviews. */
+  private reviewsOf(r?: { results?: TmdbReview[] }): NormalizedReview[] {
+    return (r?.results ?? [])
+      .filter((rev) => rev.id && rev.content)
+      .map((rev) => ({
+        externalId: rev.id!,
+        author:
+          rev.author || rev.author_details?.name || rev.author_details?.username || 'TMDB user',
+        username: rev.author_details?.username || null,
+        avatarUrl: this.avatarOf(rev.author_details?.avatar_path),
+        rating: rev.author_details?.rating ?? null,
+        content: rev.content!,
+        url: rev.url || `https://www.themoviedb.org/review/${rev.id}`,
+        createdAt: rev.created_at ?? null,
+        updatedAt: rev.updated_at ?? null,
+      }));
+  }
+
+  /** TMDB avatar paths are image paths, full URLs, or the '/https://…' gravatar quirk. */
+  private avatarOf(path?: string | null): string | null {
+    if (!path) return null;
+    if (path.startsWith('/https://') || path.startsWith('/http://')) return path.slice(1);
+    if (path.startsWith('http')) return path;
+    return this.tmdb.img(path, 'w185');
+  }
+
+  /** Standalone reviews fetch (lazy sync for media hydrated before reviews existed). */
+  async getShowReviews(id: number): Promise<NormalizedReview[]> {
+    const res = await this.tmdb.get<{ results?: TmdbReview[] }>(`/tv/${id}/reviews`);
+    return this.reviewsOf(res);
+  }
+
+  async getMovieReviews(id: number): Promise<NormalizedReview[]> {
+    const res = await this.tmdb.get<{ results?: TmdbReview[] }>(`/movie/${id}/reviews`);
+    return this.reviewsOf(res);
+  }
+
+  /** Episode reviews live on a per-episode endpoint (not appendable via the show call). */
+  async getEpisodeReviews(
+    id: number,
+    season: number,
+    episode: number,
+  ): Promise<NormalizedReview[]> {
+    const res = await this.tmdb.get<{ results?: TmdbReview[] }>(
+      `/tv/${id}/season/${season}/episode/${episode}/reviews`,
+    );
+    return this.reviewsOf(res);
   }
 
   /** Appended TMDB translations payload → per-locale {title, overview} map (ISO 639-1 keys). */

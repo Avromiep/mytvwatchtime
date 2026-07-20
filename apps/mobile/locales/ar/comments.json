@@ -68,5 +68,13 @@
   "viewFullThread": "عرض المحادثة الكاملة",
   "myCommentsTitle": "تعليقاتي",
   "myCommentsEmpty": "لا توجد تعليقات بعد",
-  "myCommentsEmptyDesc": "ستظهر هنا تعليقاتك على المسلسلات والأفلام والحلقات والمجموعات."
+  "myCommentsEmptyDesc": "ستظهر هنا تعليقاتك على المسلسلات والأفلام والحلقات والمجموعات.",
+  "tmdbReviews": "مراجعات TMDB",
+  "showMore": "عرض المزيد",
+  "showLess": "عرض أقل",
+  "spoilerWarning": "تحذير من حرق",
+  "viewSpoiler": "اضغط للعرض على أي حال",
+  "reportSpoiler": "الإبلاغ كحرق",
+  "spoilerReported": "تم الإبلاغ عن الحرق",
+  "markAsSpoiler": "وضع علامة كحرق"
 }

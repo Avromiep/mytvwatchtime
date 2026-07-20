@@ -92,5 +92,13 @@
   "viewFullThread": "View full thread",
   "myCommentsTitle": "My Comments",
   "myCommentsEmpty": "No comments yet",
-  "myCommentsEmptyDesc": "Your comments on shows, movies, episodes and groups will appear here."
+  "myCommentsEmptyDesc": "Your comments on shows, movies, episodes and groups will appear here.",
+  "tmdbReviews": "TMDB reviews",
+  "showMore": "Show more",
+  "showLess": "Show less",
+  "spoilerWarning": "Spoiler warning",
+  "viewSpoiler": "Tap to view anyway",
+  "reportSpoiler": "Report as spoiler",
+  "spoilerReported": "Spoiler reported",
+  "markAsSpoiler": "Mark as spoiler"
 }

@@ -86,6 +86,7 @@ export function normalizeTraktComments(
         text,
         textLength: text.length,
         spoiler: !!r.spoiler,
+        spoilerCount: null,
         language: null,
         sourceCreatedAt: dateOrNull(r.created_at),
         sourceUpdatedAt: dateOrNull(r.updated_at),

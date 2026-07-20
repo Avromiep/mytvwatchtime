@@ -333,6 +333,7 @@ model User {
   lists              CustomList[]
   comments           Comment[]
   commentLikes       CommentLike[]
+  commentSpoilerReports CommentSpoilerReport[]
   notifications      Notification[]
   notificationPrefs  NotificationPreference?
   badges             UserBadge[]
@@ -465,6 +466,8 @@ model MediaItem {
   // match signal for "for you" scoring
   addedCount  Int       @default(0) @map("added_count")
   metadataRefreshedAt DateTime? @map("metadata_refreshed_at")
+  // Last time TMDB reviews were synced for this media (null = never).
+  reviewsSyncedAt DateTime? @map("reviews_synced_at")
   // Content classification (independent of structural type) + evidence model.
   contentClassification ContentClassification @default(GENERAL) @map("content_classification")
   classificationConfidence Float              @default(0) @map("classification_confidence")
@@ -492,6 +495,7 @@ model MediaItem {
   favorites    Favorite[]
   watchHistory WatchHistory[]
   lists        CustomListItem[]
+  externalReviews ExternalReview[]
 
   @@index([type])
   @@index([status])
@@ -580,6 +584,8 @@ model Episode {
   titles         Json?     @map("titles")
   overviews      Json?     @map("overviews")
   stillUrls      Json?     @map("still_urls")
+  // Last time TMDB reviews were synced for this episode (null = never).
+  reviewsSyncedAt DateTime? @map("reviews_synced_at")
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
@@ -591,6 +597,7 @@ model Episode {
   characterVotes CharacterVote[]
   externalIds    EpisodeExternalId[]
   snapshots      EpisodeProviderSnapshot[]
+  externalReviews ExternalReview[]
 
   @@unique([seasonId, number])
   @@index([seasonId])
@@ -611,6 +618,35 @@ model ExternalId {
   @@unique([provider, providerEntityKind, value])
   @@index([mediaId])
   @@map("external_ids")
+}
+
+// Provider-authored reviews (TMDB reviews) attached to a media (movie/show) or an
+// episode. Synced during TMDB hydration (append_to_response=reviews) and lazily when a
+// comments thread opens on a never-synced/stale target. Page-1 replace semantics: rows
+// that vanish from the provider's first page are pruned.
+model ExternalReview {
+  id              String           @id @default(cuid())
+  provider        ExternalProvider @map("provider")
+  externalId      String           @map("external_id") // provider review id
+  mediaId         String?          @map("media_id")
+  episodeId       String?          @map("episode_id")
+  author          String
+  username        String?
+  avatarUrl       String?          @map("avatar_url")
+  rating          Float?           // provider 1..10 scale, as given
+  content         String           @db.Text
+  url             String           // canonical provider review URL (badge target)
+  reviewCreatedAt DateTime         @map("review_created_at")
+  reviewUpdatedAt DateTime?        @map("review_updated_at")
+  pulledAt        DateTime         @default(now()) @map("pulled_at")
+
+  media   MediaItem? @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  episode Episode?   @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, externalId])
+  @@index([mediaId])
+  @@index([episodeId])
+  @@map("external_reviews")
 }
 
 // Episode-level external identities (e.g. a TVDB episode id). Separate table = no
@@ -1033,6 +1069,8 @@ model Comment {
   mediaId     String?          @map("media_id")
   listId      String?          @map("list_id")
   isSpoiler    Boolean          @default(false) @map("is_spoiler")
+  // Spoiler-report tally (community flagging; isSpoiler flips at the threshold).
+  spoilerCount Int              @default(0) @map("spoiler_count")
   language     String?
   source       ListSource?      @default(MANUAL) @map("source")
   sourceKey    String?          @map("source_key")
@@ -1050,6 +1088,7 @@ model Comment {
   replies   Comment[]    @relation("CommentReplies")
   likes     CommentLike[]
   reports   Report[]
+  spoilerReports CommentSpoilerReport[]
   image     CommentImage?
 
   @@index([threadType, threadId])
@@ -1140,6 +1179,22 @@ model CommentLike {
   @@unique([userId, commentId])
   @@index([commentId])
   @@map("comment_likes")
+}
+
+// Community spoiler flags: one row per (user, comment). `Comment.spoilerCount` is the
+// tally; `Comment.isSpoiler` flips to true at the threshold (5).
+model CommentSpoilerReport {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  commentId String   @map("comment_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, commentId])
+  @@index([commentId])
+  @@map("comment_spoiler_reports")
 }
 
 model Report {

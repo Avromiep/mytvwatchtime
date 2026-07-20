@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, ListSource } from '@prisma/client';
-import { MediaType } from '@tvwatch/shared';
+import { COMMENT_SPOILER_THRESHOLD, MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingService } from '../common/setting.service';
 import { CommentImageProcessor } from '../comment-images/comment-image.processor';
@@ -188,7 +188,9 @@ export class ImportService {
     if (!nt) {
       // The source title carries no letters/digits in any script — a title match would
       // hit every other letter-less title. Never bulk-resolve on an empty identity.
-      this.logger.warn(`resolveAllForShow: refusing to bulk-resolve an empty title identity (import ${importId})`);
+      this.logger.warn(
+        `resolveAllForShow: refusing to bulk-resolve an empty title identity (import ${importId})`,
+      );
       return { resolved: 0, matched: 0, needsReview: 0 };
     }
     const items = await this.prisma.importItem.findMany({
@@ -1614,7 +1616,8 @@ export class ImportService {
         body,
         // GIFs are stored by URL (tenor/etc.); static images are downloaded + processed below.
         gifUrl: image && image.format === 'gif' ? image.url : null,
-        isSpoiler: !!norm.spoiler,
+        isSpoiler: !!norm.spoiler || (Number(norm.spoilerCount) || 0) >= COMMENT_SPOILER_THRESHOLD,
+        spoilerCount: Number(norm.spoilerCount) || 0,
         language: norm.language ?? null,
         source,
         sourceKey: sourceKey ?? null,

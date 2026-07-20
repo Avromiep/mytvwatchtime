@@ -93,6 +93,11 @@ export class CreateCommentDto {
   @IsOptional()
   @IsString()
   parentId?: string;
+
+  @ApiPropertyOptional({ description: 'Author-marked spoiler — body is censored for readers.' })
+  @IsOptional()
+  @IsBoolean()
+  isSpoiler?: boolean;
 }
 
 export class UpdateCommentDto {

@@ -16,6 +16,7 @@ import {
 import { TvdbProvider } from './providers/tvdb.provider';
 import { TvmazeProvider } from './providers/tvmaze.provider';
 import { HydrationQueue } from './hydration/hydration.queue';
+import { ExternalReviewsService } from './external-reviews.service';
 import { slugify } from './util/slugify';
 
 /** Metadata is considered stale (eligible for a full refresh) after 24h. */
@@ -33,6 +34,7 @@ export class MediaMetadataService {
     private readonly config: ConfigService,
     private readonly hydration: HydrationQueue,
     private readonly redis: RedisService,
+    private readonly externalReviews?: ExternalReviewsService,
   ) {}
 
   /** Enqueue classification, versioned by metadataRefreshedAt so each re-hydration re-runs
@@ -711,7 +713,7 @@ export class MediaMetadataService {
     // (TMDB id for TMDB hydration; TVDB id smuggled into the same field for TVDB hydration).
     episodeExternalProvider: ExternalProvider = ExternalProvider.TMDB,
   ): Promise<string> {
-    return this.prisma.$transaction(async (tx) => {
+    const mediaId = await this.prisma.$transaction(async (tx) => {
       // Existing JSON (to merge locale overrides without clobbering other locales).
       let prev = existingId
         ? await tx.mediaItem.findUnique({
@@ -824,6 +826,13 @@ export class MediaMetadataService {
 
       return mediaId!;
     });
+    // TMDB reviews ride the one-call hydration (append=reviews); TVDB carries none.
+    if (data.reviews && this.externalReviews) {
+      await this.externalReviews
+        .syncMediaReviews(mediaId!, data.reviews)
+        .catch((e) => this.logger.debug(`Review sync skipped for ${mediaId}: ${(e as Error).message}`));
+    }
+    return mediaId!;
   }
 
   private async persistMovie(
@@ -832,7 +841,7 @@ export class MediaMetadataService {
     lang: string = currentLanguage(),
     enData?: NormalizedMovie,
   ): Promise<string> {
-    return this.prisma.$transaction(async (tx) => {
+    const mediaId = await this.prisma.$transaction(async (tx) => {
       let prev = existingId
         ? await tx.mediaItem.findUnique({
             where: { id: existingId },
@@ -926,6 +935,13 @@ export class MediaMetadataService {
 
       return mediaId!;
     });
+    // TMDB reviews ride the one-call hydration (append=reviews); TVDB carries none.
+    if (data.reviews && this.externalReviews) {
+      await this.externalReviews
+        .syncMediaReviews(mediaId!, data.reviews)
+        .catch((e) => this.logger.debug(`Review sync skipped for ${mediaId}: ${(e as Error).message}`));
+    }
+    return mediaId!;
   }
 
   // ---- Read helpers ----

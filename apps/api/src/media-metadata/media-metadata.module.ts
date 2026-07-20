@@ -21,6 +21,7 @@ import { HydrationQueue } from './hydration/hydration.queue';
 import { HydrationProcessor } from './hydration/hydration.processor';
 import { MetadataBackfillService } from './metadata-backfill.service';
 import { StructureRemapService } from './structure-remap.service';
+import { ExternalReviewsService } from './external-reviews.service';
 
 @Module({
   controllers: [MediaController],
@@ -46,10 +47,12 @@ import { StructureRemapService } from './structure-remap.service';
     TvmazeProvider,
     MediaMetadataService,
     DiscoveryService,
+    ExternalReviewsService,
   ],
   exports: [
     MediaMetadataService,
     DiscoveryService,
+    ExternalReviewsService,
     TmdbProvider,
     TmdbClient,
     TvdbProvider,

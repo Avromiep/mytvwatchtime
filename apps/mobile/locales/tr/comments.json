@@ -68,5 +68,13 @@
   "viewFullThread": "Tüm konuyu gör",
   "myCommentsTitle": "Yorumlarım",
   "myCommentsEmpty": "Henüz yorum yok",
-  "myCommentsEmptyDesc": "Dizi, film, bölüm ve gruplardaki yorumların burada görünür."
+  "myCommentsEmptyDesc": "Dizi, film, bölüm ve gruplardaki yorumların burada görünür.",
+  "tmdbReviews": "TMDB incelemeleri",
+  "showMore": "Daha fazla göster",
+  "showLess": "Daha az göster",
+  "spoilerWarning": "Spoiler uyarısı",
+  "viewSpoiler": "Yine de görmek için dokun",
+  "reportSpoiler": "Spoiler olarak bildir",
+  "spoilerReported": "Spoiler bildirildi",
+  "markAsSpoiler": "Spoiler olarak işaretle"
 }

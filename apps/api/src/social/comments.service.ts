@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { CommentThreadType, ListVisibility, NotificationCategory, Prisma } from '@prisma/client';
+import { COMMENT_SPOILER_THRESHOLD } from '@tvwatch/shared';
+import { ExternalReviewsService } from '../media-metadata/external-reviews.service';
 import { isCommunityGroupId } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { mapPublicUser } from '../common/utils/mapper.util';
@@ -35,6 +37,7 @@ export class CommentsService {
     private readonly events: EventEmitter2,
     private readonly notifications: NotificationService,
     private readonly commentImages: CommentImageService,
+    private readonly externalReviews?: ExternalReviewsService,
   ) {}
 
   async list(userId: string, q: CommentQueryDto) {
@@ -76,16 +79,40 @@ export class CommentsService {
       userId,
       rows.map((r) => r.id),
     );
+    const spoilerReportedIds = await this.spoilerReportedIds(
+      userId,
+      rows.map((r) => r.id),
+    );
     const mediaMap = await this.mediaRefs(rows.map((r) => r.mediaId).filter(Boolean) as string[]);
     const listMap = await this.listRefs(rows.map((r) => r.listId).filter(Boolean) as string[]);
 
     const items = rows.map((r) =>
-      this.toDto(r, counts.get(r.userId)!, likedIds.has(r.id), {
-        media: r.mediaId ? mediaMap.get(r.mediaId) : null,
-        list: r.listId ? listMap.get(r.listId) : null,
-      }),
+      this.toDto(
+        r,
+        counts.get(r.userId)!,
+        likedIds.has(r.id),
+        {
+          media: r.mediaId ? mediaMap.get(r.mediaId) : null,
+          list: r.listId ? listMap.get(r.listId) : null,
+        },
+        spoilerReportedIds.has(r.id),
+      ),
     );
-    return paginate(items, page, pageSize, total);
+
+    // TMDB reviews for media/episode threads (page 1): lazy-sync — inline when the target
+    // was never synced, background refresh when stale — then serve the stored set.
+    let externalReviews: any[] = [];
+    const reviewable =
+      q.threadType === 'SHOW' || q.threadType === 'MOVIE' || q.threadType === 'EPISODE';
+    if (page === 1 && reviewable && this.externalReviews) {
+      await this.externalReviews
+        .ensureFreshForThread(q.threadType, q.threadId)
+        .catch(() => undefined);
+      externalReviews = await this.externalReviews
+        .listForThread(q.threadType, q.threadId)
+        .catch(() => []);
+    }
+    return { ...paginate(items, page, pageSize, total), externalReviews };
   }
 
   async create(userId: string, dto: CreateCommentDto) {
@@ -166,6 +193,7 @@ export class CommentsService {
         mediaType: dto.mediaType,
         mediaId: dto.mediaId,
         listId: dto.listId,
+        isSpoiler: !!dto.isSpoiler,
       },
       include: { user: { include: { profile: true } }, image: true },
     });
@@ -573,8 +601,53 @@ export class CommentsService {
     return { reported: true };
   }
 
+  /**
+   * Community spoiler flag: idempotent per (user, comment). The comment's spoilerCount
+   * tallies flags; isSpoiler flips on at COMMENT_SPOILER_THRESHOLD (5). Authors flag
+   * their own comments via the create-time isSpoiler flag instead.
+   */
+  async reportSpoiler(userId: string, commentId: string) {
+    const comment = await this.prisma.comment.findUnique({ where: { id: commentId } });
+    if (!comment || comment.hidden || comment.adminDeleted)
+      throw new NotFoundException('Comment not found');
+    if (comment.userId === userId)
+      throw new BadRequestException('Mark your own comment as spoiler instead');
+
+    const res = await this.prisma.commentSpoilerReport.createMany({
+      data: [{ commentId, userId }],
+      skipDuplicates: true,
+    });
+    if (res.count === 0) {
+      return { reported: true, spoilerCount: comment.spoilerCount, isSpoiler: comment.isSpoiler };
+    }
+    const next = comment.spoilerCount + 1;
+    const updated = await this.prisma.comment.update({
+      where: { id: commentId },
+      data: {
+        spoilerCount: { increment: 1 },
+        ...(next >= COMMENT_SPOILER_THRESHOLD ? { isSpoiler: true } : {}),
+      },
+    });
+    return { reported: true, spoilerCount: updated.spoilerCount, isSpoiler: updated.isSpoiler };
+  }
+
+  private async spoilerReportedIds(userId: string, commentIds: string[]) {
+    if (commentIds.length === 0) return new Set<string>();
+    const rows = await this.prisma.commentSpoilerReport.findMany({
+      where: { userId, commentId: { in: commentIds } },
+      select: { commentId: true },
+    });
+    return new Set(rows.map((r) => r.commentId));
+  }
+
   /** Map a Prisma comment row (with user + image includes) to the public DTO. */
-  private toDto(r: any, counts: any, likedByMe: boolean, refs?: { media?: any; list?: any }) {
+  private toDto(
+    r: any,
+    counts: any,
+    likedByMe: boolean,
+    refs?: { media?: any; list?: any },
+    spoilerReportedByMe = false,
+  ) {
     const tombstone = !!r.deletedByUser;
     const image = r.image
       ? {
@@ -602,6 +675,9 @@ export class CommentsService {
       repliesCount: r.repliesCount,
       likedByMe,
       reportedByMe: false,
+      isSpoiler: !!r.isSpoiler,
+      spoilerCount: r.spoilerCount ?? 0,
+      spoilerReportedByMe,
       deletedByUser: tombstone,
       isEdited: !!r.editedAt,
       editedAt: r.editedAt ? r.editedAt.toISOString() : null,

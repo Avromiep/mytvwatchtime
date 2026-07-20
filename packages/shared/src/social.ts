@@ -32,6 +32,9 @@ export interface CommentListRefDto {
   movieCount: number;
 }
 
+/** Community spoiler-flag threshold: at this many reports a comment becomes a spoiler. */
+export const COMMENT_SPOILER_THRESHOLD = 5;
+
 export interface CommentDto {
   id: string;
   parentId?: string | null;
@@ -54,6 +57,11 @@ export interface CommentDto {
   repliesCount: number;
   likedByMe: boolean;
   reportedByMe: boolean;
+  /** Community-confirmed (or author-marked/imported) spoiler — censored client-side. */
+  isSpoiler: boolean;
+  /** Spoiler-flag tally; `isSpoiler` flips at COMMENT_SPOILER_THRESHOLD. */
+  spoilerCount: number;
+  spoilerReportedByMe: boolean;
   /** True when the author soft-deleted the comment (tombstone): body/attachments are hidden. */
   deletedByUser: boolean;
   /** True when the comment has been edited at least once. */
@@ -64,6 +72,21 @@ export interface CommentDto {
 
 export interface CommentQuery extends PaginationQuery {
   sort?: CommentSort;
+}
+
+/** Provider-authored review (TMDB) shown in media/episode comment threads. */
+export interface ExternalReviewDto {
+  id: string;
+  provider: 'TMDB';
+  author: string;
+  username?: string | null;
+  avatarUrl?: string | null;
+  /** TMDB 1..10 author rating (null when the review has none). */
+  rating?: number | null;
+  content: string;
+  /** Canonical TMDB review URL (badge link target). */
+  url: string;
+  createdAt: string;
 }
 
 export interface CommentRepliesQuery extends PaginationQuery {
@@ -90,6 +113,8 @@ export interface CreateCommentDto {
   /** Attached custom-list card. Exclusive with imageUrl/gifUrl/mediaType+mediaId. */
   listId?: string;
   parentId?: string;
+  /** Author-marked spoiler — body is censored for readers. */
+  isSpoiler?: boolean;
 }
 
 export interface UpdateCommentDto {

@@ -68,5 +68,13 @@
   "viewFullThread": "Voir le fil complet",
   "myCommentsTitle": "Mes commentaires",
   "myCommentsEmpty": "Aucun commentaire pour le moment",
-  "myCommentsEmptyDesc": "Vos commentaires sur les séries, films, épisodes et groupes apparaîtront ici."
+  "myCommentsEmptyDesc": "Vos commentaires sur les séries, films, épisodes et groupes apparaîtront ici.",
+  "tmdbReviews": "Avis TMDB",
+  "showMore": "Afficher plus",
+  "showLess": "Afficher moins",
+  "spoilerWarning": "Attention au spoil",
+  "viewSpoiler": "Appuyer pour voir quand même",
+  "reportSpoiler": "Signaler comme spoiler",
+  "spoilerReported": "Spoiler signalé",
+  "markAsSpoiler": "Marquer comme spoiler"
 }

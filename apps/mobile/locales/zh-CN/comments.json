@@ -68,5 +68,13 @@
   "viewFullThread": "查看完整讨论串",
   "myCommentsTitle": "我的评论",
   "myCommentsEmpty": "还没有评论",
-  "myCommentsEmptyDesc": "你在剧集、电影、单集和小组中的评论将显示在这里。"
+  "myCommentsEmptyDesc": "你在剧集、电影、单集和小组中的评论将显示在这里。",
+  "tmdbReviews": "TMDB 评论",
+  "showMore": "显示更多",
+  "showLess": "收起",
+  "spoilerWarning": "剧透警告",
+  "viewSpoiler": "点按仍要查看",
+  "reportSpoiler": "举报为剧透",
+  "spoilerReported": "已举报剧透",
+  "markAsSpoiler": "标记为剧透"
 }

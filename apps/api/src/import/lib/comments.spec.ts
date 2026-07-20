@@ -27,11 +27,15 @@ describe('tvtime comment owner resolution', () => {
     expect(owner).toBe(OWNER);
   });
   it('resolves owner id from user_personal_data.csv', () => {
-    const owner = resolveArchiveOwner([{ filename: 'user_personal_data.csv', rows: [{ user_id: '10142511' }] }]);
+    const owner = resolveArchiveOwner([
+      { filename: 'user_personal_data.csv', rows: [{ user_id: '10142511' }] },
+    ]);
     expect(owner).toBe('10142511');
   });
   it('ignores user_tv_show_data.csv (must be exact basename)', () => {
-    const owner = resolveArchiveOwner([{ filename: 'user_tv_show_data.csv', rows: [{ tv_show_id: '999', user_id: '999' }] }]);
+    const owner = resolveArchiveOwner([
+      { filename: 'user_tv_show_data.csv', rows: [{ tv_show_id: '999', user_id: '999' }] },
+    ]);
     expect(owner).toBeNull();
   });
   it('returns null when no owner file is present', () => {
@@ -184,7 +188,16 @@ describe('tvtime comment normalization (comments-prod v2)', () => {
   it('preserves unicode and emoji', () => {
     const r = normalizeComments(
       'comments-prod-comments.csv',
-      [{ text: "Can't wait 😍😍 안녕", user_id: OWNER, type: 'comment', comment_uuid: 'x', entity_type: 'movie', movie_name: 'M' }],
+      [
+        {
+          text: "Can't wait 😍😍 안녕",
+          user_id: OWNER,
+          type: 'comment',
+          comment_uuid: 'x',
+          entity_type: 'movie',
+          movie_name: 'M',
+        },
+      ],
       OWNER,
     );
     expect(r.candidates[0].text).toBe("Can't wait 😍😍 안녕");
@@ -193,26 +206,112 @@ describe('tvtime comment normalization (comments-prod v2)', () => {
   it('preserves line breaks', () => {
     const r = normalizeComments(
       'comments-prod-comments.csv',
-      [{ text: 'line one\nline two', user_id: OWNER, type: 'comment', comment_uuid: 'x', entity_type: 'movie', movie_name: 'M' }],
+      [
+        {
+          text: 'line one\nline two',
+          user_id: OWNER,
+          type: 'comment',
+          comment_uuid: 'x',
+          entity_type: 'movie',
+          movie_name: 'M',
+        },
+      ],
       OWNER,
     );
     expect(r.candidates[0].text).toBe('line one\nline two');
   });
 
   it('preserves spoiler state (is_spoiler true and spoiler_count>0)', () => {
-    const a = normalizeComments('comments-prod-comments.csv', [{ text: 'x', user_id: OWNER, type: 'comment', is_spoiler: 'true', comment_uuid: 'a', entity_type: 'movie', movie_name: 'M' }], OWNER).candidates[0];
-    const b = normalizeComments('comments-prod-comments.csv', [{ text: 'x', user_id: OWNER, type: 'comment', spoiler_count: '2', comment_uuid: 'b', entity_type: 'movie', movie_name: 'M' }], OWNER).candidates[0];
+    const a = normalizeComments(
+      'comments-prod-comments.csv',
+      [
+        {
+          text: 'x',
+          user_id: OWNER,
+          type: 'comment',
+          is_spoiler: 'true',
+          comment_uuid: 'a',
+          entity_type: 'movie',
+          movie_name: 'M',
+        },
+      ],
+      OWNER,
+    ).candidates[0];
+    const b = normalizeComments(
+      'comments-prod-comments.csv',
+      [
+        {
+          text: 'x',
+          user_id: OWNER,
+          type: 'comment',
+          spoiler_count: '2',
+          comment_uuid: 'b',
+          entity_type: 'movie',
+          movie_name: 'M',
+        },
+      ],
+      OWNER,
+    ).candidates[0];
+    const c = normalizeComments(
+      'comments-prod-comments.csv',
+      [
+        {
+          text: 'x',
+          user_id: OWNER,
+          type: 'comment',
+          spoiler_count: '0',
+          comment_uuid: 'c',
+          entity_type: 'movie',
+          movie_name: 'M',
+        },
+      ],
+      OWNER,
+    ).candidates[0];
     expect(a.spoiler).toBe(true);
     expect(b.spoiler).toBe(true);
+    // The legacy tally is carried through so apply can seed Comment.spoilerCount.
+    expect(b.spoilerCount).toBe(2);
+    expect(c.spoiler).toBe(false);
+    expect(c.spoilerCount).toBe(0);
   });
 
   it('preserves the source timestamp', () => {
-    const r = normalizeComments('comments-prod-comments.csv', [{ text: 'x', created_at: '2016-04-15 19:22:02', user_id: OWNER, type: 'comment', comment_uuid: 'a', entity_type: 'movie', movie_name: 'M' }], OWNER);
-    expect(r.candidates[0].sourceCreatedAt?.getTime()).toBe(new Date('2016-04-15T19:22:02').getTime());
+    const r = normalizeComments(
+      'comments-prod-comments.csv',
+      [
+        {
+          text: 'x',
+          created_at: '2016-04-15 19:22:02',
+          user_id: OWNER,
+          type: 'comment',
+          comment_uuid: 'a',
+          entity_type: 'movie',
+          movie_name: 'M',
+        },
+      ],
+      OWNER,
+    );
+    expect(r.candidates[0].sourceCreatedAt?.getTime()).toBe(
+      new Date('2016-04-15T19:22:02').getTime(),
+    );
   });
 
   it('preserves language when present', () => {
-    const r = normalizeComments('comments-prod-comments.csv', [{ text: 'x', lang: 'it', user_id: OWNER, type: 'comment', comment_uuid: 'a', entity_type: 'movie', movie_name: 'M' }], OWNER);
+    const r = normalizeComments(
+      'comments-prod-comments.csv',
+      [
+        {
+          text: 'x',
+          lang: 'it',
+          user_id: OWNER,
+          type: 'comment',
+          comment_uuid: 'a',
+          entity_type: 'movie',
+          movie_name: 'M',
+        },
+      ],
+      OWNER,
+    );
     expect(r.candidates[0].language).toBe('it');
   });
 });
@@ -242,13 +341,21 @@ describe('tvtime comment normalization (legacy episode_comment.csv)', () => {
   });
 
   it('skips a comment with parent_comment_id set (reply)', () => {
-    const r = normalizeComments('episode_comment.csv', [top({ parent_comment_id: '3301320' })], OWNER);
+    const r = normalizeComments(
+      'episode_comment.csv',
+      [top({ parent_comment_id: '3301320' })],
+      OWNER,
+    );
     expect(r.repliesSkipped).toBe(1);
     expect(r.candidates).toHaveLength(0);
   });
 
   it('skips a comment with depth>0 (reply)', () => {
-    const r = normalizeComments('episode_comment.csv', [top({ depth: '1', parent_comment_id: '3301320' })], OWNER);
+    const r = normalizeComments(
+      'episode_comment.csv',
+      [top({ depth: '1', parent_comment_id: '3301320' })],
+      OWNER,
+    );
     expect(r.repliesSkipped).toBe(1);
     expect(r.candidates).toHaveLength(0);
   });
@@ -298,19 +405,31 @@ describe('tvtime comment normalization (legacy show_comment.csv)', () => {
   });
 
   it('skips a show-page reply (depth>0 / parent)', () => {
-    const a = normalizeComments('show_comment.csv', [row({ depth: '1', parent_comment_id: '1438037' })], OWNER);
+    const a = normalizeComments(
+      'show_comment.csv',
+      [row({ depth: '1', parent_comment_id: '1438037' })],
+      OWNER,
+    );
     expect(a.repliesSkipped).toBe(1);
     expect(a.candidates).toHaveLength(0);
   });
 
   it('classifies show_comment_like.csv as activity (not a comment file)', () => {
-    const r = normalizeComments('show_comment_like.csv', [{ user_id: OWNER, show_comment_id: '1' }], OWNER);
+    const r = normalizeComments(
+      'show_comment_like.csv',
+      [{ user_id: OWNER, show_comment_id: '1' }],
+      OWNER,
+    );
     expect(r.activityRowsSkipped).toBe(1);
     expect(r.candidates).toHaveLength(0);
   });
 
   it('classifies show_comments_last_read_date.csv as activity', () => {
-    const r = normalizeComments('show_comments_last_read_date.csv', [{ user_id: OWNER, tv_show_id: '1' }], OWNER);
+    const r = normalizeComments(
+      'show_comments_last_read_date.csv',
+      [{ user_id: OWNER, tv_show_id: '1' }],
+      OWNER,
+    );
     expect(r.activityRowsSkipped).toBe(1);
     expect(r.candidates).toHaveLength(0);
   });
@@ -340,7 +459,9 @@ describe('tvtime comment normalization (legacy show_comment.csv)', () => {
 
 describe('tvtime comment images (image column)', () => {
   it('parseImageField extracts a gif url + format', () => {
-    const img = parseImageField('map[format:gif height:278 url:https://media.tenor.co/images/abc/tenor.gif uuid:9be84165 width:498]');
+    const img = parseImageField(
+      'map[format:gif height:278 url:https://media.tenor.co/images/abc/tenor.gif uuid:9be84165 width:498]',
+    );
     expect(img).toEqual({ url: 'https://media.tenor.co/images/abc/tenor.gif', format: 'gif' });
   });
 
@@ -401,7 +522,15 @@ describe('tvtime comment images (image column)', () => {
   it('skips a comment with neither text nor image', () => {
     const r = normalizeComments(
       'comments-prod-comments.csv',
-      [{ user_id: OWNER, type: 'comment', comment_uuid: 'u3', entity_type: 'movie', movie_name: 'M' }],
+      [
+        {
+          user_id: OWNER,
+          type: 'comment',
+          comment_uuid: 'u3',
+          entity_type: 'movie',
+          movie_name: 'M',
+        },
+      ],
       OWNER,
     );
     expect(r.invalid).toBe(1);
@@ -411,16 +540,28 @@ describe('tvtime comment images (image column)', () => {
 
 describe('tvtime comment activity files', () => {
   it('counts episode_comment_like rows as activity, no candidates', () => {
-    const r = normalizeComments('episode_comment_like.csv', [{ user_id: OWNER, episode_comment_id: '1' }], OWNER);
+    const r = normalizeComments(
+      'episode_comment_like.csv',
+      [{ user_id: OWNER, episode_comment_id: '1' }],
+      OWNER,
+    );
     expect(r.activityRowsSkipped).toBe(1);
     expect(r.candidates).toHaveLength(0);
   });
   it('counts object_report rows as activity', () => {
-    const r = normalizeComments('object_report.csv', [{ user_id: OWNER, object_type: 'episode-comment' }], OWNER);
+    const r = normalizeComments(
+      'object_report.csv',
+      [{ user_id: OWNER, object_type: 'episode-comment' }],
+      OWNER,
+    );
     expect(r.activityRowsSkipped).toBe(1);
   });
   it('counts profile_comment rows as out-of-scope activity', () => {
-    const r = normalizeComments('profile_comment.csv', [{ user_id: OWNER, comment: 'hi', parent_comment_id: '' }], OWNER);
+    const r = normalizeComments(
+      'profile_comment.csv',
+      [{ user_id: OWNER, comment: 'hi', parent_comment_id: '' }],
+      OWNER,
+    );
     expect(r.activityRowsSkipped).toBe(1);
     expect(r.candidates).toHaveLength(0);
   });
@@ -439,7 +580,11 @@ describe('tvtime comment ambiguous reply status', () => {
 });
 
 describe('tvtime comment dedup', () => {
-  const mk = (uuid: string, text: string, opts: Partial<{ movie: string; created: string; ep: number }> = {}) => ({
+  const mk = (
+    uuid: string,
+    text: string,
+    opts: Partial<{ movie: string; created: string; ep: number }> = {},
+  ) => ({
     text,
     user_id: OWNER,
     type: 'comment',
@@ -451,30 +596,74 @@ describe('tvtime comment dedup', () => {
   });
 
   it('imports a duplicate comment (same source id) across files once', () => {
-    const a = normalizeComments('comments-prod-comments.csv', [mk('uuid-1', 'hello')], OWNER).candidates;
-    const b = normalizeComments('comments-prod-comments.csv', [mk('uuid-1', 'hello')], OWNER).candidates;
+    const a = normalizeComments(
+      'comments-prod-comments.csv',
+      [mk('uuid-1', 'hello')],
+      OWNER,
+    ).candidates;
+    const b = normalizeComments(
+      'comments-prod-comments.csv',
+      [mk('uuid-1', 'hello')],
+      OWNER,
+    ).candidates;
     const { unique, duplicates } = dedupeComments([...a, ...b]);
     expect(unique).toHaveLength(1);
     expect(duplicates).toBe(1);
   });
 
   it('keeps two identical comments on different episodes distinct (no source id → fingerprint includes target)', () => {
-    const c1 = normalizeComments('episode_comment.csv', [{
-      tv_show_name: 'Show A', user_id: OWNER, episode_id: '111', created_at: '2019-01-01 00:00:00',
-      depth: '0', comment_type: 'comment', id: '', episode_season_number: '1', episode_number: '1', comment: 'nice',
-    }], OWNER).candidates[0];
-    const c2 = normalizeComments('episode_comment.csv', [{
-      tv_show_name: 'Show B', user_id: OWNER, episode_id: '222', created_at: '2019-01-01 00:00:00',
-      depth: '0', comment_type: 'comment', id: '', episode_season_number: '1', episode_number: '1', comment: 'nice',
-    }], OWNER).candidates[0];
+    const c1 = normalizeComments(
+      'episode_comment.csv',
+      [
+        {
+          tv_show_name: 'Show A',
+          user_id: OWNER,
+          episode_id: '111',
+          created_at: '2019-01-01 00:00:00',
+          depth: '0',
+          comment_type: 'comment',
+          id: '',
+          episode_season_number: '1',
+          episode_number: '1',
+          comment: 'nice',
+        },
+      ],
+      OWNER,
+    ).candidates[0];
+    const c2 = normalizeComments(
+      'episode_comment.csv',
+      [
+        {
+          tv_show_name: 'Show B',
+          user_id: OWNER,
+          episode_id: '222',
+          created_at: '2019-01-01 00:00:00',
+          depth: '0',
+          comment_type: 'comment',
+          id: '',
+          episode_season_number: '1',
+          episode_number: '1',
+          comment: 'nice',
+        },
+      ],
+      OWNER,
+    ).candidates[0];
     expect(commentIdentity(c1)).not.toBe(commentIdentity(c2));
     const { unique } = dedupeComments([c1, c2]);
     expect(unique).toHaveLength(2);
   });
 
   it('keeps two identical comments created at different times distinct (fingerprint includes time)', () => {
-    const c1 = normalizeComments('comments-prod-comments.csv', [mk('', 'same text', { created: '2019-01-01 00:00:00' })], OWNER).candidates[0];
-    const c2 = normalizeComments('comments-prod-comments.csv', [mk('', 'same text', { created: '2020-01-01 00:00:00' })], OWNER).candidates[0];
+    const c1 = normalizeComments(
+      'comments-prod-comments.csv',
+      [mk('', 'same text', { created: '2019-01-01 00:00:00' })],
+      OWNER,
+    ).candidates[0];
+    const c2 = normalizeComments(
+      'comments-prod-comments.csv',
+      [mk('', 'same text', { created: '2020-01-01 00:00:00' })],
+      OWNER,
+    ).candidates[0];
     expect(commentIdentity(c1)).not.toBe(commentIdentity(c2));
   });
 });
@@ -485,10 +674,21 @@ describe('tvtime comment privacy (logs must not contain text)', () => {
     const { logs, restore } = captureLogger();
     try {
       // Run a normalization that produces candidates and would-be warnings; ensure no text leaks.
-      normalizeComments('comments-prod-comments.csv', [
-        { text: SECRET, user_id: OWNER, type: 'comment', comment_uuid: 'u', entity_type: 'movie', movie_name: 'M' },
-        { text: '<nil>', user_id: OWNER, type: 'comment', comment_uuid: 'v' },
-      ], OWNER);
+      normalizeComments(
+        'comments-prod-comments.csv',
+        [
+          {
+            text: SECRET,
+            user_id: OWNER,
+            type: 'comment',
+            comment_uuid: 'u',
+            entity_type: 'movie',
+            movie_name: 'M',
+          },
+          { text: '<nil>', user_id: OWNER, type: 'comment', comment_uuid: 'v' },
+        ],
+        OWNER,
+      );
     } finally {
       restore();
     }

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -51,6 +51,10 @@ export function CommentCard({
   const tombstone = comment.deletedByUser;
   const avatar = compact ? AVATAR_COMPACT : AVATAR;
   const author = comment.author;
+  // Spoiler censoring: body + attachments stay hidden until THIS user taps to reveal
+  // (per-card, per-session — never persisted).
+  const [revealed, setRevealed] = useState(false);
+  const censored = comment.isSpoiler && !tombstone && !revealed;
 
   const openThread = () => onOpenThread?.(comment);
   const openMedia = (media: CommentMediaRefDto) =>
@@ -116,22 +120,48 @@ export function CommentCard({
         </Pressable>
       </View>
 
+      {/* Spoiler cover: replaces body + all attachments until the reader taps to reveal */}
+      {censored ? (
+        <Pressable
+          onPress={(e) => {
+            stop(e);
+            setRevealed(true);
+          }}
+          style={[styles.spoilerCover, { backgroundColor: tokens.surfaceElevated }]}
+          accessibilityRole="button"
+          accessibilityLabel={t('comments:viewSpoiler')}
+        >
+          <Ionicons name="eye-off-outline" size={18} color={tokens.orange} />
+          <T
+            variant="caption"
+            style={{ color: tokens.orange, fontWeight: '700', marginLeft: spacing.xs }}
+          >
+            {t('comments:spoilerWarning')}
+          </T>
+          <T variant="micro" muted style={{ marginTop: 2 }}>
+            {t('comments:viewSpoiler')}
+          </T>
+        </Pressable>
+      ) : null}
+
       {/* Body */}
       {tombstone ? (
         <T variant="body" muted style={[styles.body, { fontStyle: 'italic' }]}>
           {t('comments:deleted')}
         </T>
-      ) : comment.body ? (
+      ) : !censored && comment.body ? (
         <T variant="body" style={styles.body}>
           {comment.body}
         </T>
       ) : null}
 
       {/* Media (image/GIF) — fills card width, opens full-screen viewer */}
-      {!tombstone ? <CommentMedia image={comment.image} gifUrl={comment.gifUrl} /> : null}
+      {!tombstone && !censored ? (
+        <CommentMedia image={comment.image} gifUrl={comment.gifUrl} />
+      ) : null}
 
       {/* Attached show/movie card — opens the media detail page */}
-      {!tombstone && comment.media ? (
+      {!tombstone && !censored && comment.media ? (
         <Pressable
           onPress={(e) => {
             stop(e);
@@ -167,7 +197,7 @@ export function CommentCard({
       ) : null}
 
       {/* Attached list card — opens the list page */}
-      {!tombstone && comment.list ? (
+      {!tombstone && !censored && comment.list ? (
         <Pressable
           onPress={(e) => {
             stop(e);
@@ -267,6 +297,14 @@ const styles = StyleSheet.create({
   nameRow: { flexDirection: 'row', alignItems: 'center' },
   overflowBtn: { padding: spacing.xs, marginLeft: spacing.xs },
   body: { marginTop: spacing.sm, lineHeight: 20 },
+  spoilerCover: {
+    marginTop: spacing.sm,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   mediaCard: {
     flexDirection: 'row',
     alignItems: 'center',

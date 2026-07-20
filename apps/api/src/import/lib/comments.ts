@@ -23,6 +23,8 @@ export interface NormalizedImportedComment {
   text: string;
   textLength: number;
   spoiler: boolean;
+  /** Legacy spoiler-flag tally (TV Time spoiler_count) — seeds Comment.spoilerCount. */
+  spoilerCount: number | null;
   language: string | null;
   sourceCreatedAt: Date | null;
   sourceUpdatedAt: Date | null;
@@ -79,10 +81,19 @@ export type CommentFileKind =
 export function detectCommentFile(filename: string): CommentFileKind {
   const base = filename.replace(/\\/g, '/').split('/').pop() ?? filename.toLowerCase();
   const f = base.toLowerCase();
-  if (f === 'comments-prod-comments.csv' || f.includes('comments-prod-comments')) return 'comments_prod';
-  if (f === 'episode_comment.csv' || (f.includes('episode_comment') && !f.includes('like') && !f.includes('read'))) return 'episode_comment';
+  if (f === 'comments-prod-comments.csv' || f.includes('comments-prod-comments'))
+    return 'comments_prod';
+  if (
+    f === 'episode_comment.csv' ||
+    (f.includes('episode_comment') && !f.includes('like') && !f.includes('read'))
+  )
+    return 'episode_comment';
   // show_comment.csv → show-page comments; exclude show_comment_like / show_comments_last_read_date.
-  if (f === 'show_comment.csv' || (f.includes('show_comment') && !f.includes('like') && !f.includes('read'))) return 'show_comment';
+  if (
+    f === 'show_comment.csv' ||
+    (f.includes('show_comment') && !f.includes('like') && !f.includes('read'))
+  )
+    return 'show_comment';
   if (f.includes('profile_comment')) return 'profile_comment';
   if (ACTIVITY_FILES.some((a) => f.includes(a))) return 'activity';
   return 'none';
@@ -114,7 +125,9 @@ const toInt = (v: string | undefined): number | null => {
 const toDate = (v: string | undefined): Date | null => parseDate(v);
 
 /** Resolve the archive owner's TV Time user id from user.csv / user_personal_data.csv. */
-export function resolveArchiveOwner(files: { filename: string; rows: Record<string, string>[] }[]): string | null {
+export function resolveArchiveOwner(
+  files: { filename: string; rows: Record<string, string>[] }[],
+): string | null {
   const tryId = (v: string | undefined): string | null => {
     if (isAbsent(v)) return null;
     const s = String(v).trim();
@@ -146,7 +159,9 @@ export function resolveArchiveOwner(files: { filename: string; rows: Record<stri
  * Used as a fallback matching language when the request-language TMDb search fails.
  * Returns a SupportedLocale ('fr', 'es', …) or null.
  */
-export function resolveArchiveLanguage(files: { filename: string; rows: Record<string, string>[] }[]): SupportedLocale | null {
+export function resolveArchiveLanguage(
+  files: { filename: string; rows: Record<string, string>[] }[],
+): SupportedLocale | null {
   for (const target of ['user.csv', 'user_personal_data.csv']) {
     for (const f of files) {
       const base = (f.filename.replace(/\\/g, '/').split('/').pop() ?? f.filename).toLowerCase();
@@ -190,7 +205,9 @@ function validateText(raw: string | undefined): { text: string; ok: boolean } {
  * Parse a comment `image` field (Go single-map form: `map[format:png url:https://… width:576]`).
  * Returns { url, format } or null. GIFs are kept as a URL; static images are downloaded at apply.
  */
-export function parseImageField(raw: string | undefined | null): { url: string; format: string } | null {
+export function parseImageField(
+  raw: string | undefined | null,
+): { url: string; format: string } | null {
   if (isAbsent(raw)) return null;
   const s = String(raw).trim();
   if (!s || s === 'map[]' || s === '<nil>') return null;
@@ -304,7 +321,10 @@ export function normalizeComments(
     // Determine the comment target. `show_comment.csv` rows are show main-page comments; the
     // v2 unified file carries an explicit entity_type. Movie target from movie fields.
     let targetType: CommentTargetType;
-    if (entityType === 'movie' || (movieName && !seriesName && (!episodeIdNum || episodeIdNum === 0))) {
+    if (
+      entityType === 'movie' ||
+      (movieName && !seriesName && (!episodeIdNum || episodeIdNum === 0))
+    ) {
       targetType = 'movie';
     } else if (kind === 'show_comment' || entityType === 'show' || entityType === 'series') {
       targetType = 'show';
@@ -314,7 +334,8 @@ export function normalizeComments(
 
     const spoilerRaw = field(row, ['is_spoiler']);
     const spoilerCount = toInt(field(row, ['spoiler_count']));
-    const spoiler = spoilerRaw === 'true' || spoilerRaw === '1' || (spoilerCount != null && spoilerCount > 0);
+    const spoiler =
+      spoilerRaw === 'true' || spoilerRaw === '1' || (spoilerCount != null && spoilerCount > 0);
 
     const language = field(row, ['lang', 'language']) ?? null;
     const sourceCommentId = field(row, ['comment_uuid', 'uuid', 'id']) ?? null;
@@ -329,11 +350,12 @@ export function normalizeComments(
       text,
       textLength: text.length,
       spoiler,
+      spoilerCount,
       language,
       sourceCreatedAt: toDate(field(row, ['created_at'])),
       sourceUpdatedAt: toDate(field(row, ['updated_at'])),
       image,
-      externalEpisodeId: targetType === 'episode' ? episodeIdNum ?? null : null,
+      externalEpisodeId: targetType === 'episode' ? (episodeIdNum ?? null) : null,
       showTitle: seriesName ?? null,
       movieTitle: movieName ?? null,
       seasonNumber: season,

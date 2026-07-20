@@ -71,6 +71,7 @@ export function CommentComposer({
   const [attachedMedia, setAttachedMedia] = useState<AttachedMedia | null>(null);
   const [attachedList, setAttachedList] = useState<AttachedList | null>(null);
   const [mediaPickerOpen, setMediaPickerOpen] = useState(false);
+  const [spoiler, setSpoiler] = useState(false);
   const hasCardAttachment = !!attachedMedia || !!attachedList;
 
   const sending = create.isPending;
@@ -192,12 +193,14 @@ export function CommentComposer({
         mediaType: attachedMedia?.mediaType,
         mediaId: attachedMedia?.mediaId,
         listId: attachedList?.id,
+        isSpoiler: spoiler || undefined,
       });
       setBody('');
       setInputH(null);
       setSelectedGif(null);
       setAttachedMedia(null);
       setAttachedList(null);
+      setSpoiler(false);
       fireAnalytics(onsentUrl);
 
       if (imageUri && comment?.id) {
@@ -449,15 +452,27 @@ export function CommentComposer({
               color={selectedGif || imageUri || hasCardAttachment ? tokens.textDim : tokens.primary}
             />
           </Pressable>
+          <Pressable
+            onPress={() => setSpoiler((v) => !v)}
+            hitSlop={8}
+            style={[styles.actionBtn, { marginRight: spacing.sm }]}
+            accessibilityRole="button"
+            accessibilityLabel={t('comments:markAsSpoiler')}
+            accessibilityState={{ selected: spoiler }}
+          >
+            <Ionicons
+              name={spoiler ? 'eye-off' : 'eye-off-outline'}
+              size={24}
+              color={spoiler ? tokens.orange : tokens.primary}
+            />
+          </Pressable>
           <TextField
             value={body}
             onChangeText={setBody}
             placeholder={placeholder ?? t('comments:addComment')}
             containerStyle={{ flex: 1, marginBottom: 0 }}
             multiline
-            onContentSizeChange={(e: any) =>
-              setInputH(e?.nativeEvent?.contentSize?.height ?? null)
-            }
+            onContentSizeChange={(e: any) => setInputH(e?.nativeEvent?.contentSize?.height ?? null)}
             style={[
               styles.composerInput,
               inputH != null

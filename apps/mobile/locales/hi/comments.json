@@ -68,5 +68,13 @@
   "viewFullThread": "पूरा थ्रेड देखें",
   "myCommentsTitle": "मेरी टिप्पणियाँ",
   "myCommentsEmpty": "अभी कोई टिप्पणी नहीं",
-  "myCommentsEmptyDesc": "शो, फ़िल्मों, एपिसोड और समूहों पर आपकी टिप्पणियाँ यहाँ दिखेंगी।"
+  "myCommentsEmptyDesc": "शो, फ़िल्मों, एपिसोड और समूहों पर आपकी टिप्पणियाँ यहाँ दिखेंगी।",
+  "tmdbReviews": "TMDB समीक्षाएँ",
+  "showMore": "और दिखाएँ",
+  "showLess": "कम दिखाएँ",
+  "spoilerWarning": "स्पॉइलर चेतावनी",
+  "viewSpoiler": "फिर भी देखने के लिए टैप करें",
+  "reportSpoiler": "स्पॉइलर के रूप में रिपोर्ट करें",
+  "spoilerReported": "स्पॉइलर रिपोर्ट किया गया",
+  "markAsSpoiler": "स्पॉइलर के रूप में चिह्नित करें"
 }

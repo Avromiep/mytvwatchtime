@@ -11,7 +11,13 @@ import { CommentComposer } from './CommentComposer';
 import { CommentEditDialog } from './CommentEditDialog';
 import { useCommentActions } from './useCommentActions';
 import { feedColumn } from './layout';
-import { useCommentsFeed, useMe, useToggleCommentLike, type CommentSortMode } from '../../api/hooks';
+import {
+  useCommentsFeed,
+  useMe,
+  useToggleCommentLike,
+  type CommentSortMode,
+} from '../../api/hooks';
+import { ExternalReviewCard } from './ExternalReviewCard';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { spacing } from '../../theme/theme';
 import { showError } from '../../lib/dialog';
@@ -40,10 +46,12 @@ export function CommentsFeed({
 
   const items: CommentDto[] = feed.data?.pages.flatMap((p) => p.items) ?? [];
   const total = feed.data?.pages[0]?.total ?? 0;
+  const externalReviews = feed.data?.pages[0]?.externalReviews ?? [];
   const isFetchingNextPage = feed.isFetchingNextPage;
 
   const openThread = (c: CommentDto) => router.push(`/comment/${c.id}` as any);
-  const openAuthor = (c: CommentDto) => c.author?.username && router.push(`/user/${encodeURIComponent(c.author.username)}` as any);
+  const openAuthor = (c: CommentDto) =>
+    c.author?.username && router.push(`/user/${encodeURIComponent(c.author.username)}` as any);
 
   const renderItem = ({ item }: { item: CommentDto }) => (
     <CommentCard
@@ -59,7 +67,10 @@ export function CommentsFeed({
   );
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: tokens.background }} behavior="padding">
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: tokens.background }}
+      behavior="padding"
+    >
       <Screen style={{ flex: 1 }}>
         <Header title={title} showBack />
 
@@ -95,7 +106,11 @@ export function CommentsFeed({
               data={items}
               keyExtractor={(i) => i.id}
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl, flexGrow: 1 }}
+              contentContainerStyle={{
+                paddingHorizontal: spacing.lg,
+                paddingBottom: spacing.xl,
+                flexGrow: 1,
+              }}
               ListEmptyComponent={
                 <EmptyState
                   title={t('comments:noComments')}
@@ -104,21 +119,35 @@ export function CommentsFeed({
                 />
               }
               ListFooterComponent={
-                isFetchingNextPage ? (
-                  <View style={{ paddingVertical: spacing.md, alignItems: 'center' }}>
-                    <T variant="micro" muted>
-                      {t('comments:loadingMore')}
+                <View>
+                  {isFetchingNextPage ? (
+                    <View style={{ paddingVertical: spacing.md, alignItems: 'center' }}>
+                      <T variant="micro" muted>
+                        {t('comments:loadingMore')}
+                      </T>
+                    </View>
+                  ) : items.length > 0 && !feed.hasNextPage ? (
+                    <T variant="micro" muted style={{ textAlign: 'center', marginTop: spacing.md }}>
+                      {t('comments:reachedEnd')}
                     </T>
-                  </View>
-                ) : items.length > 0 && !feed.hasNextPage ? (
-                  <T variant="micro" muted style={{ textAlign: 'center', marginTop: spacing.md }}>
-                    {t('comments:reachedEnd')}
-                  </T>
-                ) : null
+                  ) : null}
+                  {externalReviews.length > 0 && (
+                    <View style={{ marginTop: spacing.lg }}>
+                      <T variant="caption" muted style={{ marginBottom: spacing.sm }}>
+                        {t('comments:tmdbReviews')}
+                      </T>
+                      {externalReviews.map((r) => (
+                        <ExternalReviewCard key={r.id} review={r} />
+                      ))}
+                    </View>
+                  )}
+                </View>
               }
               onEndReached={() => {
                 if (feed.hasNextPage && !isFetchingNextPage && !feed.isError)
-                  feed.fetchNextPage().catch(() => showError({ description: t('comments:failedToLoad') }));
+                  feed
+                    .fetchNextPage()
+                    .catch(() => showError({ description: t('comments:failedToLoad') }));
               }}
               onEndReachedThreshold={0.4}
               ItemSeparatorComponent={() => <View style={{ height: spacing.md }} />}

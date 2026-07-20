@@ -68,5 +68,13 @@
   "viewFullThread": "スレッド全体を見る",
   "myCommentsTitle": "自分のコメント",
   "myCommentsEmpty": "まだコメントがありません",
-  "myCommentsEmptyDesc": "番組・映画・エピソード・グループへのコメントがここに表示されます。"
+  "myCommentsEmptyDesc": "番組・映画・エピソード・グループへのコメントがここに表示されます。",
+  "tmdbReviews": "TMDBレビュー",
+  "showMore": "もっと見る",
+  "showLess": "閉じる",
+  "spoilerWarning": "ネタバレ注意",
+  "viewSpoiler": "タップして表示",
+  "reportSpoiler": "ネタバレとして報告",
+  "spoilerReported": "ネタバレを報告しました",
+  "markAsSpoiler": "ネタバレとしてマーク"
 }
