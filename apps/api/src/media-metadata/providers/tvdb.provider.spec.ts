@@ -186,3 +186,62 @@ describe('TvdbProvider — episode + translations', () => {
     expect(show.cast[1]).toMatchObject({ characterExternalId: 64771393 });
   });
 });
+
+describe('TvdbProvider — artwork mapping (v4 types)', () => {
+  it('series: type 2 is the poster, type 3 the backdrop — never the type-1 banner', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/series/368495/extended': {
+          id: 368495,
+          name: 'Show',
+          status: { name: 'Ended' },
+          artworks: [
+            { type: 1, image: 'banner.jpg' },
+            { type: 2, image: 'poster.jpg' },
+            { type: 3, image: 'fanart.jpg' },
+          ],
+        },
+        '/series/368495/episodes': { episodes: [] },
+      }) as any,
+    );
+    const show = await provider.getShow(368495, 'en');
+    expect(show.posterUrl).toBe('https://art/poster.jpg');
+    expect(show.backdropUrl).toBe('https://art/fanart.jpg');
+  });
+
+  it('series: a banner fills the backdrop only when no fanart exists — poster stays null', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/series/368495/extended': {
+          id: 368495,
+          name: 'Show',
+          status: { name: 'Ended' },
+          artworks: [{ type: 1, image: 'banner.jpg' }],
+        },
+        '/series/368495/episodes': { episodes: [] },
+      }) as any,
+    );
+    const show = await provider.getShow(368495, 'en');
+    expect(show.posterUrl).toBeNull();
+    expect(show.backdropUrl).toBe('https://art/banner.jpg');
+  });
+
+  it('movie: type 14 is the poster, 15 the backdrop — a type-1 banner never becomes a poster', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/movies/99/extended': {
+          id: 99,
+          name: 'Movie',
+          artworks: [
+            { type: 1, image: 'banner.jpg' },
+            { type: 14, image: 'poster.jpg' },
+            { type: 15, image: 'bg.jpg' },
+          ],
+        },
+      }) as any,
+    );
+    const movie = await provider.getMovie(99, 'en');
+    expect(movie.posterUrl).toBe('https://art/poster.jpg');
+    expect(movie.backdropUrl).toBe('https://art/bg.jpg');
+  });
+});

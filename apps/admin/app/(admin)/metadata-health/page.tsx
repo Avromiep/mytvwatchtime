@@ -21,6 +21,7 @@ interface MetadataHealth {
   multiTvdbIds: number;
   nonEnglishBase: number;
   nonEnglishContent: number;
+  bannerAsPoster: number;
 }
 
 /** Live progress of one background repair job (from /admin/metadata-health/repair-progress). */
@@ -40,6 +41,7 @@ const REPAIR_LABELS: Record<string, string> = {
   'tvdb-id-conflicts': 'TVDB ID conflict repair',
   'english-base': 'English base restore',
   'english-content': 'English content verify',
+  'banner-posters': 'Banner poster repair',
 };
 
 /** One-line guidance per stat: what it means and what to do about it. */
@@ -65,6 +67,8 @@ const STAT_HINTS: Record<string, string> = {
     "Rows explicitly marked as having a non-English base title (title_locale ≠ en). Repair re-hydrates them with a proper English base and restores the 'en' override. Rows with an unset marker are NOT counted (most have a fine English base already). No user data touched.",
   nonEnglishContent:
     "Suspected wrong-language CONTENT with a lying/missing marker: the title an English user sees contains non-ASCII. Verify+Fix checks the most-popular suspects first against the provider's canonical English title and re-hydrates only real mismatches. Verified rows are remembered and leave this count (a title change re-arms them), so the number DRAINS as runs complete. Deep mode verifies every row — catches pure-ASCII foreign titles. A nightly Scheduled Job keeps it converged. No user data touched.",
+  bannerAsPoster:
+    'Rows whose poster is actually a TVDB BANNER (wide artwork in a poster slot) — legacy of a swapped TVDB artwork mapping. Repair re-hydrates them from TVDB, which re-picks the correct poster (type 2) and backdrop (type 3). Most-visible first, stops early on TVDB rate limits. No user data touched.',
 };
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -97,6 +101,9 @@ export default function MetadataHealthPage() {
   const [enContentResult, setEnContentResult] = useState<string | null>(null);
   const [enContentCount, setEnContentCount] = useState('500');
   const [enContentDeep, setEnContentDeep] = useState(false);
+  const [repairingBanner, setRepairingBanner] = useState(false);
+  const [bannerResult, setBannerResult] = useState<string | null>(null);
+  const [bannerCount, setBannerCount] = useState('500');
   const [castCount, setCastCount] = useState('500');
   const [repairs, setRepairs] = useState<Record<string, RepairProgress>>({});
   const [batchCount, setBatchCount] = useState('200');
@@ -246,6 +253,22 @@ export default function MetadataHealthPage() {
       .finally(() => setRepairingEnContent(false));
   };
 
+  const runBannerRepair = () => {
+    setRepairingBanner(true);
+    setBannerResult(null);
+    const n = Math.max(1, Number(bannerCount) || 500);
+    api
+      .post(`/admin/repair-banner-posters/run?count=${n}`)
+      .then(() => {
+        setBannerResult(
+          `Banner-poster repair started (${n} rows). Watch the progress panel above; stats refresh in 60s.`,
+        );
+        setTimeout(() => load(), 60000);
+      })
+      .catch(() => setBannerResult('Banner-poster repair failed to start.'))
+      .finally(() => setRepairingBanner(false));
+  };
+
   if (!canView) return <p className="p-6 text-sm text-zinc-500">Admins only.</p>;
 
   const pct = (n: number) => (stats && stats.total > 0 ? Math.round((n / stats.total) * 100) : 0);
@@ -335,6 +358,11 @@ export default function MetadataHealthPage() {
       {enContentResult && (
         <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-200">
           {enContentResult}
+        </div>
+      )}
+      {bannerResult && (
+        <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-800 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-200">
+          {bannerResult}
         </div>
       )}
 
@@ -555,6 +583,32 @@ export default function MetadataHealthPage() {
                     className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
                   >
                     {repairingEnContent ? 'Starting…' : 'Verify & Fix English'}
+                  </button>
+                </div>
+              }
+            />
+            <MetricCard
+              label="Banner as Poster"
+              value={stats.bannerAsPoster}
+              sub="wide TVDB banner in the poster slot"
+              hint={STAT_HINTS.bannerAsPoster}
+              highlight={stats.bannerAsPoster > 0}
+              action={
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={bannerCount}
+                    onChange={(e) => setBannerCount(e.target.value)}
+                    className="w-20 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+                    title="Rows per run"
+                  />
+                  <button
+                    onClick={runBannerRepair}
+                    disabled={repairingBanner}
+                    className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    {repairingBanner ? 'Starting…' : 'Fix Banner Posters'}
                   </button>
                 </div>
               }

@@ -4,8 +4,19 @@ import { tvdbCode, formatNetworks } from '@tvwatch/shared';
 
 /** Map our app locales → TVDB 3-letter language codes for the episodes path param. */
 const TVDB_3LETTER: Record<string, string> = {
-  en: 'eng', fr: 'fra', es: 'spa', 'pt-BR': 'por', de: 'deu', it: 'ita',
-  ar: 'ara', tr: 'tur', hi: 'hin', id: 'ind', ja: 'jpn', ko: 'kor', 'zh-CN': 'zho',
+  en: 'eng',
+  fr: 'fra',
+  es: 'spa',
+  'pt-BR': 'por',
+  de: 'deu',
+  it: 'ita',
+  ar: 'ara',
+  tr: 'tur',
+  hi: 'hin',
+  id: 'ind',
+  ja: 'jpn',
+  ko: 'kor',
+  'zh-CN': 'zho',
 };
 function tvdbLang3(locale?: string): string {
   if (!locale) return 'eng';
@@ -139,11 +150,35 @@ interface TvdbTranslationBlock {
 
 /** Reverse-map TVDB 3-letter codes → our app locale codes. */
 const TVDB_TO_APP: Record<string, string> = {
-  eng: 'en', fra: 'fr', spa: 'es', por: 'pt-BR', deu: 'de', ita: 'ita',
-  ara: 'ar', tur: 'tr', hin: 'hi', ind: 'id', jpn: 'ja', kor: 'ko', zho: 'zh-CN',
-  rus: 'en', hrv: 'en', heb: 'en', swe: 'en', pol: 'en', hun: 'en',
-  nld: 'en', fin: 'en', ukr: 'en', srp: 'en', ell: 'en', ces: 'en',
-  sqi: 'en', lit: 'en', zhtw: 'zh-CN', pt: 'pt-BR',
+  eng: 'en',
+  fra: 'fr',
+  spa: 'es',
+  por: 'pt-BR',
+  deu: 'de',
+  ita: 'ita',
+  ara: 'ar',
+  tur: 'tr',
+  hin: 'hi',
+  ind: 'id',
+  jpn: 'ja',
+  kor: 'ko',
+  zho: 'zh-CN',
+  rus: 'en',
+  hrv: 'en',
+  heb: 'en',
+  swe: 'en',
+  pol: 'en',
+  hun: 'en',
+  nld: 'en',
+  fin: 'en',
+  ukr: 'en',
+  srp: 'en',
+  ell: 'en',
+  ces: 'en',
+  sqi: 'en',
+  lit: 'en',
+  zhtw: 'zh-CN',
+  pt: 'pt-BR',
 };
 
 interface TvdbMovieExtended {
@@ -184,7 +219,10 @@ export class TvdbProvider {
     return this.client.enabled;
   }
 
-  async searchShows(query: string, page = 1): Promise<{ items: NormalizedSearchItem[]; total: number }> {
+  async searchShows(
+    query: string,
+    page = 1,
+  ): Promise<{ items: NormalizedSearchItem[]; total: number }> {
     const limit = 50;
     const res = await this.client.get<{ data: TvdbSearchHit[] }>('/search', {
       query,
@@ -210,7 +248,10 @@ export class TvdbProvider {
   }
 
   /** Search TVDB for movies (backup provider when TMDB has no/weak results). */
-  async searchMovies(query: string, page = 1): Promise<{ items: NormalizedSearchItem[]; total: number }> {
+  async searchMovies(
+    query: string,
+    page = 1,
+  ): Promise<{ items: NormalizedSearchItem[]; total: number }> {
     const limit = 50;
     const res = await this.client.get<{ data: TvdbSearchHit[] }>('/search', {
       query,
@@ -253,8 +294,11 @@ export class TvdbProvider {
     );
     const s = res.data;
 
-    const poster = s.artworks?.find((a) => a.type === 1);
-    const backdrop = s.artworks?.find((a) => a.type === 2);
+    // TVDB v4 SERIES artwork types: 1=banner (WIDE), 2=poster, 3=background/fanart.
+    // (The old swap — poster=1, backdrop=2 — put wide banners into poster slots.)
+    // A banner only ever fills the BACKDROP as a last resort, never the poster.
+    const poster = s.artworks?.find((a) => a.type === 2);
+    const backdrop = s.artworks?.find((a) => a.type === 3) ?? s.artworks?.find((a) => a.type === 1);
 
     // Pick the title/overview for the request locale from the translations block,
     // falling back to English, then to the original-language name (same logic as
@@ -312,7 +356,7 @@ export class TvdbProvider {
       .filter((c) => c.personName && c.peopleType === 'Actor')
       .slice(0, 20)
       .map((c, i) => ({
-        tmdbPersonId: c.peopleId ?? (900000000 + i), // unique per person (avoids all-0 collision)
+        tmdbPersonId: c.peopleId ?? 900000000 + i, // unique per person (avoids all-0 collision)
         name: c.personName ?? 'Unknown',
         character: c.name ?? null,
         profileUrl: c.personImgURL ?? c.image ?? null,
@@ -386,7 +430,11 @@ export class TvdbProvider {
           links?: { next?: string | null };
         }>(`/series/${tvdbId}/episodes/default/${lang}`, { page }, language);
         const raw = res.data as any;
-        const eps: TvdbEpisode[] = Array.isArray(raw) ? raw : Array.isArray(raw?.episodes) ? raw.episodes : [];
+        const eps: TvdbEpisode[] = Array.isArray(raw)
+          ? raw
+          : Array.isArray(raw?.episodes)
+            ? raw.episodes
+            : [];
         if (eps.length === 0) break;
         for (const e of eps) {
           const sn = e.seasonNumber ?? 0;
@@ -457,7 +505,22 @@ export class TvdbProvider {
     return { title: t?.name ?? null, overview: t?.overview ?? null, locale: lang };
   }
 
-  private normalizeEpisode(e: TvdbEpisode): NormalizedEpisode {    return {
+  /** Lightweight localized TEXT base (title/overview) — ONE translations call, no
+   *  episodes, no artworks. Light upserts use it to write a proper English base
+   *  without paying for a full hydration. */
+  async localizedShowBase(tvdbId: number, lang3 = 'eng') {
+    const t = await this.getSeriesTranslations(tvdbId, lang3);
+    return { title: t.title?.trim() || undefined, overview: t.overview ?? null };
+  }
+
+  /** Movie counterpart of {@link localizedShowBase}. */
+  async localizedMovieBase(tvdbId: number, lang3 = 'eng') {
+    const t = await this.getMovieTranslations(tvdbId, lang3);
+    return { title: t.title?.trim() || undefined, overview: t.overview ?? null };
+  }
+
+  private normalizeEpisode(e: TvdbEpisode): NormalizedEpisode {
+    return {
       tmdbId: e.id,
       number: e.number ?? 0,
       title: e.name || `Episode ${e.number}`,
@@ -474,19 +537,26 @@ export class TvdbProvider {
    *  Pass meta=translations to get ALL locale translations in one call. */
   async getMovie(tvdbId: number, language?: string): Promise<NormalizedMovie> {
     const res = await this.client.get<{ data: TvdbMovieExtended }>(
-      `/movies/${tvdbId}/extended`, { meta: 'translations' }, language,
+      `/movies/${tvdbId}/extended`,
+      { meta: 'translations' },
+      language,
     );
     const m = res.data;
 
-    // TVDB artwork types: 1=poster, 2=background/banner, 14=movie poster (varies). Be lenient.
-    const poster = m.artworks?.find((a) => a.type === 1 || a.type === 14);
-    const backdrop = m.artworks?.find((a) => a.type === 2 || a.type === 15);
+    // TVDB v4 MOVIE artwork types: 14=poster, 15=background. Types 1/2/3 are SERIES
+    // semantics (1=banner, 2=poster, 3=background) — a type-1 on a movie is a wide
+    // banner, never a poster; banners only fill the backdrop as a last resort.
+    const poster = m.artworks?.find((a) => a.type === 14) ?? m.artworks?.find((a) => a.type === 2);
+    const backdrop =
+      m.artworks?.find((a) => a.type === 15) ??
+      m.artworks?.find((a) => a.type === 3) ??
+      m.artworks?.find((a) => a.type === 1);
 
     const cast: NormalizedCast[] = (m.characters || [])
       .filter((c) => c.personName && c.peopleType === 'Actor')
       .slice(0, 20)
       .map((c, i) => ({
-        tmdbPersonId: c.peopleId ?? (900000000 + i),
+        tmdbPersonId: c.peopleId ?? 900000000 + i,
         name: c.personName ?? 'Unknown',
         character: c.name ?? null,
         profileUrl: c.personImgURL ?? c.image ?? null,
@@ -502,7 +572,11 @@ export class TvdbProvider {
     const tmdbRemoteId = m.remoteIds?.find((r) => r.sourceName === 'TheMovieDB.com')?.id;
     // Release date: prefer first_release, then first entry in releases.
     const releaseDate = m.first_release?.date ?? m.releases?.[0]?.date ?? null;
-    const releaseYear = m.year ? Number(m.year) : (releaseDate ? Number(releaseDate.slice(0, 4)) : null);
+    const releaseYear = m.year
+      ? Number(m.year)
+      : releaseDate
+        ? Number(releaseDate.slice(0, 4))
+        : null;
     const studio = m.studios?.[0]?.name ?? null;
 
     // Extract ALL translations from the translations block (one call, all locales).

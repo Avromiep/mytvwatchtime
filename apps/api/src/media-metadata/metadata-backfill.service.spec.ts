@@ -1135,3 +1135,34 @@ describe('MetadataBackfillService.repairNonEnglishContent', () => {
     expect(staleWrite![0].join(' ')).toContain('stale = true');
   });
 });
+
+describe('MetadataBackfillService.repairBannerPosters', () => {
+  it('clears the freshness stamp and re-hydrates from TVDB (fixed mapper re-picks artworks)', async () => {
+    const prisma = mockPrisma();
+    prisma.$queryRaw.mockResolvedValue([
+      { id: 'm1', title: 'Show A', type: 'SHOW', tvdb: '368495' },
+      { id: 'm2', title: 'Movie B', type: 'MOVIE', tvdb: '777' },
+    ]);
+    const meta = mockMeta();
+    const service = new MetadataBackfillService(
+      prisma,
+      meta,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    const res = await service.repairBannerPosters();
+
+    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'm1' },
+      data: { metadataRefreshedAt: null },
+    });
+    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(368495);
+    expect(meta.ensureMovieFullTvdb).toHaveBeenCalledWith(777);
+    expect(res).toEqual(expect.objectContaining({ processed: 2, succeeded: 2, failed: 0 }));
+  });
+});

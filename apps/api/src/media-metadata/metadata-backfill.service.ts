@@ -123,6 +123,7 @@ export class MetadataBackfillService {
       multiTvdbIds,
       nonEnglishBase,
       nonEnglishContent,
+      bannerAsPoster,
     ] = await Promise.all([
       this.prisma.mediaItem.count(),
       this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
@@ -214,6 +215,14 @@ export class MetadataBackfillService {
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
           AND COALESCE(NULLIF(m.titles->>'en',''), m.title)
                 IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'`,
+      // Rows whose POSTER is a TVDB banner (wide artwork in a poster slot) — legacy of
+      // the swapped TVDB series artwork mapping (type 1=banner was taken as poster).
+      // URL shape: artworks.thetvdb.com/banners/v4/{kind}/{id}/banners/<file>.
+      // Fixed by a TVDB rehydration (the corrected mapper re-picks poster=type 2).
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c FROM media_items m
+        WHERE m.poster_url ~ '/banners/[^/]+$'
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB')`,
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     return {
@@ -237,6 +246,7 @@ export class MetadataBackfillService {
       multiTvdbIds: toNum(multiTvdbIds as any),
       nonEnglishBase: toNum(nonEnglishBase as any),
       nonEnglishContent: toNum(nonEnglishContent as any),
+      bannerAsPoster: toNum(bannerAsPoster as any),
     };
   }
 
@@ -1565,6 +1575,109 @@ export class MetadataBackfillService {
       return { processed: candidates.length, verified, fixed, failed, sample };
     } finally {
       this.enContentFixRunning = false;
+    }
+  }
+
+  // ---- TVDB banner-as-poster rows (legacy of the swapped series artwork mapping) ----
+  private bannerFixRunning = false;
+
+  /**
+   * Rehydrate rows whose POSTER is a TVDB banner (wide artwork in a poster slot) — the
+   * old swapped series artwork mapping (type 1=banner taken as poster) wrote
+   * `/banners/<file>` URLs into poster_url. The corrected TVDB mapper re-picks
+   * poster=type 2 / backdrop=type 3, so a standard TVDB rehydration repairs the images.
+   * Most-popular first; one TVDB call per row; stops early on TVDB rate limits.
+   * User data untouched.
+   */
+  async repairBannerPosters(limit?: number): Promise<{
+    processed: number;
+    succeeded: number;
+    failed: number;
+    sample: string[];
+  }> {
+    const empty = { processed: 0, succeeded: 0, failed: 0, sample: [] as string[] };
+    if (this.bannerFixRunning) {
+      this.logger.log('Banner-poster repair already running — skipping');
+      return empty;
+    }
+    this.bannerFixRunning = true;
+    this.trackRepair('banner-posters', {
+      running: true,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      finishedAt: null,
+    });
+    try {
+      const take = Math.max(1, Math.min(limit ?? 500, 100000));
+      const candidates = await this.prisma.$queryRaw<
+        { id: string; title: string; type: string; tvdb: string }[]
+      >`
+        SELECT m.id, m.title, m.type,
+               (SELECT e.value FROM external_ids e
+                 WHERE e.media_id = m.id AND e.provider = 'THE_TVDB'
+                 ORDER BY e.value LIMIT 1) AS tvdb
+        FROM media_items m
+        WHERE m.poster_url ~ '/banners/[^/]+$'
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB')
+        ORDER BY m.popularity DESC, m.id
+        LIMIT ${take}`;
+      this.trackRepair('banner-posters', { total: candidates.length });
+
+      let succeeded = 0;
+      let failed = 0;
+      const sample: string[] = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const m = candidates[i];
+        this.trackRepair('banner-posters', {
+          processed: i + 1,
+          succeeded,
+          failed,
+          current: m.title,
+        });
+        try {
+          // Clear the freshness stamp so the TVDB rehydration actually re-fetches
+          // (and re-picks artworks with the fixed mapper).
+          await this.prisma.mediaItem.update({
+            where: { id: m.id },
+            data: { metadataRefreshedAt: null },
+          });
+          if (m.type === 'SHOW') await this.meta.ensureShowFullTvdb(Number(m.tvdb));
+          else await this.meta.ensureMovieFullTvdb(Number(m.tvdb));
+          succeeded++;
+          if (sample.length < 5) sample.push(m.title);
+        } catch (e) {
+          if (this.isRateLimitError(e)) {
+            this.logger.warn(
+              `Banner-poster repair: TVDB rate limit at ${i + 1}/${candidates.length} — stopping early (${succeeded} fixed, ${failed} failed)`,
+            );
+            break;
+          }
+          failed++;
+          if (failed <= 10)
+            this.logger.warn(
+              `Banner-poster repair failed for "${m.title}" (${m.id}): ${(e as Error).message}`,
+            );
+          else
+            this.logger.debug(
+              `Banner-poster repair failed for "${m.title}": ${(e as Error).message}`,
+            );
+        }
+      }
+      this.trackRepair('banner-posters', {
+        running: false,
+        processed: succeeded + failed,
+        succeeded,
+        failed,
+        finishedAt: new Date(),
+      });
+      this.logger.log(
+        `Banner-poster repair: ${succeeded}/${candidates.length} re-hydrated from TVDB with corrected artworks, ${failed} failed`,
+      );
+      return { processed: succeeded + failed, succeeded, failed, sample };
+    } finally {
+      this.bannerFixRunning = false;
     }
   }
 

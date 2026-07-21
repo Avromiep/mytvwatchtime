@@ -147,6 +147,18 @@ export class AdminController {
     };
   }
 
+  @Post('repair-banner-posters/run')
+  @RequireRoles('ADMIN')
+  runRepairBannerPosters(@Query('count') count?: string) {
+    const n = count ? Number(count) : undefined;
+    this.metadataBackfill.repairBannerPosters(n).catch((e) => {
+      console.error('[Banner poster repair] FAILED:', (e as Error)?.message ?? e);
+    });
+    return {
+      message: `Banner-poster repair started (${n ?? 500} rows max). Check API logs for progress + results.`,
+    };
+  }
+
   @Post('tmdb-changes/run')
   @RequireRoles('ADMIN')
   runTmdbChanges(@Query('start') start?: string) {

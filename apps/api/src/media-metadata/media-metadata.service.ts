@@ -86,6 +86,23 @@ export class MediaMetadataService {
     }
   }
 
+  /** English TEXT base from TVDB (one translations call) for a new TVDB-origin row —
+   *  same "never born stuck in one user's language" contract as fetchEnBase. Returns
+   *  undefined unless TVDB actually has an English title (a missing title must NOT
+   *  stamp title_locale='en' on a localized base). Best-effort. */
+  private async fetchEnBaseTvdb(type: MediaType, tvdbId: number) {
+    if (!this.tvdb.enabled) return undefined;
+    try {
+      const base =
+        type === MediaType.SHOW
+          ? await this.tvdb.localizedShowBase(tvdbId, 'eng')
+          : await this.tvdb.localizedMovieBase(tvdbId, 'eng');
+      return base?.title ? base : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Localized create fields for a NEW media row: English base (when available) plus
    *  the request-locale override. The base columns hold English so every language
    *  reads correctly via `override[lang] ?? override['en'] ?? base`. */
@@ -363,19 +380,17 @@ export class MediaMetadataService {
     // NOTE: NO title-based attach here — a TVDB id is authoritative for identity, a title
     // is not (US vs AU "Married at First Sight" collide; attaching by title poisoned the AU
     // row with the US id and mis-routed every later lookup). Unknown id = a new row, always.
+    // The base is English whenever TVDB has an English title (fetched once, light) — the
+    // request language lives in the override slots, so the row isn't born contaminated.
     const created = await this.prisma.mediaItem.create({
       data: {
+        ...this.newMediaLocaleFields(
+          item,
+          lang === 'en' ? undefined : await this.fetchEnBaseTvdb(MediaType.SHOW, item.tvdbId),
+          lang,
+        ),
         type: MediaType.SHOW,
-        title: item.title,
-        overview: item.overview,
-        posterUrl: item.posterUrl,
-        backdropUrl: item.backdropUrl,
         popularity: item.popularity ?? 0,
-        titleLocale: lang,
-        titles: mergeLocalized(null, lang, item.title, undefined),
-        overviews: mergeLocalized(null, lang, item.overview, undefined),
-        posterUrls: mergeLocalized(null, lang, item.posterUrl, undefined),
-        backdropUrls: mergeLocalized(null, lang, item.backdropUrl, undefined),
         show: { create: { yearStart: item.year ?? null, inProduction: true } },
         externalIds: {
           create: [
@@ -437,19 +452,16 @@ export class MediaMetadataService {
     // NOTE: NO title-based attach here — a TVDB id is authoritative for identity, a title
     // is not (US vs AU "Married at First Sight" collide; attaching by title poisoned the AU
     // row with the US id and mis-routed every later lookup). Unknown id = a new row, always.
+    // English base when TVDB has one (see the show path above).
     const created = await this.prisma.mediaItem.create({
       data: {
+        ...this.newMediaLocaleFields(
+          item,
+          lang === 'en' ? undefined : await this.fetchEnBaseTvdb(MediaType.MOVIE, item.tvdbId),
+          lang,
+        ),
         type: MediaType.MOVIE,
-        title: item.title,
-        overview: item.overview,
-        posterUrl: item.posterUrl,
-        backdropUrl: item.backdropUrl,
         popularity: item.popularity ?? 0,
-        titleLocale: lang,
-        titles: mergeLocalized(null, lang, item.title, undefined),
-        overviews: mergeLocalized(null, lang, item.overview, undefined),
-        posterUrls: mergeLocalized(null, lang, item.posterUrl, undefined),
-        backdropUrls: mergeLocalized(null, lang, item.backdropUrl, undefined),
         movie: { create: { releaseYear: item.year ?? null } },
         externalIds: {
           create: [

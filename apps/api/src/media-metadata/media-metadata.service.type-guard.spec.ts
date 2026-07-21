@@ -384,3 +384,80 @@ describe('MediaMetadataService — titleLocale marker', () => {
     expect(calls.mediaItemCreate[0].data.titleLocale).toBe('it');
   });
 });
+
+describe('MediaMetadataService — TVDB light upserts are born with an English base', () => {
+  function make(enTitle: string | null) {
+    const created: any[] = [];
+    const prisma = {
+      mediaItem: {
+        create: async (a: any) => {
+          created.push(a);
+          return { id: 'new-1' };
+        },
+      },
+      externalId: { findFirst: async () => null },
+    };
+    const tvdb = {
+      enabled: true,
+      localizedShowBase: jest.fn(async () => ({
+        title: enTitle ?? undefined,
+        overview: enTitle ? 'English overview' : null,
+      })),
+    };
+    const svc = new MediaMetadataService(
+      prisma as any,
+      {} as any, // tmdb
+      tvdb as any,
+      {} as any, // tvmaze
+      {} as any, // config
+      { enqueueClassifyCandidate: async () => undefined } as any,
+      { get: async () => null, set: async () => undefined, del: async () => undefined } as any,
+    );
+    return { svc, created, tvdb };
+  }
+
+  const item = {
+    tvdbId: 95491,
+    title: 'Diari di vampiri',
+    overview: 'descrizione italiana',
+    posterUrl: 'p.jpg',
+    backdropUrl: 'b.jpg',
+    year: 2009,
+  };
+
+  it('non-en creation: English base + request-locale overrides + titleLocale en', async () => {
+    const { svc, created } = make('The Vampire Diaries');
+
+    await runInLanguage('it', () => svc.lightUpsertShowTvdb(item));
+
+    expect(created).toHaveLength(1);
+    const data = created[0].data;
+    expect(data.title).toBe('The Vampire Diaries');
+    expect(data.titleLocale).toBe('en');
+    expect(data.titles).toMatchObject({ en: 'The Vampire Diaries', it: 'Diari di vampiri' });
+    // Images come from the (language-independent) search item.
+    expect(data.posterUrl).toBe('p.jpg');
+  });
+
+  it('keeps the localized base + honest marker when TVDB has no English title', async () => {
+    const { svc, created } = make(null);
+
+    await runInLanguage('it', () => svc.lightUpsertShowTvdb(item));
+
+    const data = created[0].data;
+    expect(data.title).toBe('Diari di vampiri');
+    expect(data.titleLocale).toBe('it');
+  });
+
+  it('en creation: no extra fetch — the item itself is the English base', async () => {
+    const { svc, created, tvdb } = make('The Vampire Diaries');
+
+    await runInLanguage('en', () =>
+      svc.lightUpsertShowTvdb({ ...item, title: 'The Vampire Diaries' }),
+    );
+
+    expect(tvdb.localizedShowBase).not.toHaveBeenCalled();
+    expect(created[0].data.title).toBe('The Vampire Diaries');
+    expect(created[0].data.titleLocale).toBe('en');
+  });
+});
