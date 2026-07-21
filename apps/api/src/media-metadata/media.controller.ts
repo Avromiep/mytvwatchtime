@@ -34,21 +34,35 @@ export class MediaController {
   @Get('trending/shows')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
-  trendingShows(@Query('page') page = '1', @CurrentUser('id') userId?: string) {
-    return this.discovery.trendingShows(userId, parseInt(page));
+  trendingShows(
+    @Query('page') page = '1',
+    @Query('genre') genre: string | undefined,
+    @CurrentUser('id') userId?: string,
+  ) {
+    return this.discovery.trendingShows(userId, parseInt(page), 20, genre);
   }
 
   @Get('trending/movies')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
-  trendingMovies(@Query('page') page = '1', @CurrentUser('id') userId?: string) {
-    return this.discovery.trendingMovies(userId, parseInt(page));
+  trendingMovies(
+    @Query('page') page = '1',
+    @Query('genre') genre: string | undefined,
+    @CurrentUser('id') userId?: string,
+  ) {
+    return this.discovery.trendingMovies(userId, parseInt(page), 20, genre);
   }
 
   @Get('discover/sections')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
-  sections(@CurrentUser('id') userId?: string) {
-    return this.discovery.discoverSections(userId);
+  sections(@Query('genre') genre: string | undefined, @CurrentUser('id') userId?: string) {
+    return this.discovery.discoverSections(userId, genre);
+  }
+
+  /** Catalog genres (most-used first) — filter chip lists in explore/search/see-all. */
+  @Get('genres')
+  genres() {
+    return this.discovery.listGenres();
   }
 }

@@ -1,7 +1,7 @@
 import { Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { MediaType } from '@tvwatch/shared';
-import { IsEnum, IsInt, IsOptional, Min } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -11,6 +11,11 @@ class WatchlistQueryDto {
   @IsOptional()
   @IsEnum(MediaType)
   type?: MediaType;
+
+  /** Genre slug filter (media_genres join). */
+  @IsOptional()
+  @IsString()
+  genre?: string;
 
   @IsOptional()
   @Type(() => Number)
@@ -34,16 +39,26 @@ export class CollectionsController {
 
   @Get('watchlist')
   watchlist(@CurrentUser('id') userId: string, @Query() q: WatchlistQueryDto) {
-    return this.collections.watchlist(userId, q.type, q.page, q.pageSize);
+    return this.collections.watchlist(userId, q.type, q.page, q.pageSize, q.genre);
   }
 
   @Get('favorites/shows')
-  favoriteShows(@CurrentUser('id') userId: string, @Query('page') page = '1', @Query('pageSize') pageSize = '20') {
-    return this.collections.favorites(userId, MediaType.SHOW, Number(page), Number(pageSize));
+  favoriteShows(
+    @CurrentUser('id') userId: string,
+    @Query('page') page = '1',
+    @Query('pageSize') pageSize = '20',
+    @Query('genre') genre?: string,
+  ) {
+    return this.collections.favorites(userId, MediaType.SHOW, Number(page), Number(pageSize), genre);
   }
 
   @Get('favorites/movies')
-  favoriteMovies(@CurrentUser('id') userId: string, @Query('page') page = '1', @Query('pageSize') pageSize = '20') {
-    return this.collections.favorites(userId, MediaType.MOVIE, Number(page), Number(pageSize));
+  favoriteMovies(
+    @CurrentUser('id') userId: string,
+    @Query('page') page = '1',
+    @Query('pageSize') pageSize = '20',
+    @Query('genre') genre?: string,
+  ) {
+    return this.collections.favorites(userId, MediaType.MOVIE, Number(page), Number(pageSize), genre);
   }
 }

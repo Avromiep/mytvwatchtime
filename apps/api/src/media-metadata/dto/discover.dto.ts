@@ -13,6 +13,12 @@ export class SearchQueryDto extends PaginationDto {
   @IsOptional()
   @IsEnum(MediaType)
   type?: MediaType;
+
+  /** Genre slug filter (matched against hydrated genres + TMDB payload genre ids). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  genre?: string;
 }
 
 export class DiscoverQueryDto extends PaginationDto {

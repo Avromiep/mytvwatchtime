@@ -1,10 +1,11 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { MediaType } from '@tvwatch/shared';
-import type { MediaCardLiteDto } from '@tvwatch/shared';
+import type { GenreFilterDto, MediaCardLiteDto } from '@tvwatch/shared';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { currentLanguage } from '../common/language.context';
 import { RedisService } from '../common/redis/redis.service';
+import { localized } from '../common/utils/localization.util';
 import { mapMediaCardLite, mapMovie, mapShow } from '../common/utils/mapper.util';
 import { MediaMetadataService } from './media-metadata.service';
 import { TmdbProvider } from './providers/tmdb.provider';
@@ -16,6 +17,8 @@ import { paginate } from '../common/dto/pagination.dto';
 interface SearchCacheEntry {
   /** Merged ordered media ids (local DB first, then TMDb pages). */
   ids: string[];
+  /** TMDB genre ids per media id from the search payload — genre filters on light rows. */
+  genreIds: Record<string, number[]>;
   tmdbPagesFetched: number;
   /** True once every enabled source returned a short/empty page. */
   exhausted: boolean;
@@ -57,7 +60,7 @@ export class DiscoveryService {
     const lang = currentLanguage();
     const want = Math.max(1, Math.min(q.pageSize ?? 20, 50));
     const page = Math.max(1, q.page ?? 1);
-    const cacheKey = `search:v4:${q.type ?? 'all'}:${term}:${lang}`;
+    const cacheKey = `search:v5:${q.type ?? 'all'}:${term}:${lang}`;
 
     let entry = await this.redis.get<SearchCacheEntry>(cacheKey);
     if (!entry) {
@@ -76,11 +79,15 @@ export class DiscoveryService {
     const start = (page - 1) * want;
     // Rank media without posters last (stable: the merged local+TMDB relevance order is
     // preserved within each group). Done at read time so late-hydrated posters count.
-    const orderedIds = await this.posterLast(entry.ids);
+    let orderedIds = await this.posterLast(entry.ids);
+    // Genre filter: hydrated rows match via the DB join, light rows via the TMDB
+    // payload genre ids cached alongside the window (zero extra provider calls).
+    const genre = q.genre?.trim();
+    if (genre) orderedIds = await this.filterIdsByGenre(orderedIds, genre, entry.genreIds ?? {});
     const slice = orderedIds.slice(start, start + want);
     const items = await this.fetchListDtos(slice, userId, want);
     // hasMore via paginate's formula: +1 while more pages may exist upstream.
-    const total = entry.ids.length + (entry.exhausted ? 0 : 1);
+    const total = orderedIds.length + (entry.exhausted ? 0 : 1);
     return paginate(items, page, want, total);
   }
 
@@ -106,7 +113,7 @@ export class DiscoveryService {
     });
     const localIds = [...exactIds, ...containsRows.map((r) => r.id)];
 
-    let entry: SearchCacheEntry = { ids: localIds, tmdbPagesFetched: 0, exhausted: false };
+    let entry: SearchCacheEntry = { ids: localIds, genreIds: {}, tmdbPagesFetched: 0, exhausted: false };
     entry = await this.fetchNextTmdbPage(term, q, entry);
 
     // If NO results from local + TMDB, fall back to TVDB API (synchronous).
@@ -163,11 +170,15 @@ export class DiscoveryService {
       const upserted = await Promise.all(
         items.map((i) => (kind === 'show' ? this.meta.lightUpsertShow(i) : this.meta.lightUpsertMovie(i))),
       );
+      items.forEach((item, idx) => {
+        entry.genreIds[upserted[idx]] = item.genreIds ?? [];
+      });
       entry.ids.push(...upserted);
       if (items.length >= 20) allShort = false; // a full page means there may be more
     }
     return {
       ids: [...new Set(entry.ids)],
+      genreIds: entry.genreIds,
       tmdbPagesFetched: nextPage,
       exhausted: allShort,
     };
@@ -195,6 +206,9 @@ export class DiscoveryService {
     const where = {
       title: { contains: term, mode: 'insensitive' as const },
       ...(q.type ? { type: q.type } : {}),
+      ...(q.genre?.trim()
+        ? { genres: { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } } }
+        : {}),
     };
     const [rows, total] = await Promise.all([
       this.prisma.mediaItem.findMany({
@@ -239,53 +253,163 @@ export class DiscoveryService {
   }
 
   /**
-   * Trending ids with a short cache: resolving a page costs a TMDb call plus one
+   * Trending entries with a short cache: resolving a page costs a TMDb call plus one
    * lightUpsert per item (each = 1 externalId read + a mediaItem write), so an
-   * uncached Discover open did ~80 queries, half of them writes. Ids are
-   * user-agnostic; user-specific flags are applied by fetchListDtos afterwards.
+   * uncached Discover open did ~80 queries, half of them writes. Entries are
+   * user-agnostic and carry the payload's TMDB genre ids so genre filters need no
+   * extra provider call; user-specific flags are applied by fetchListDtos afterwards.
    */
-  private async cachedTrendingIds(kind: 'show' | 'movie', page: number): Promise<string[]> {
-    const key = `trending:ids:${kind}:${currentLanguage()}:${page}`;
-    const cached = await this.redis.get<string[]>(key);
+  private async cachedTrendingEntries(
+    kind: 'show' | 'movie',
+    page: number,
+  ): Promise<{ id: string; g: number[] }[]> {
+    const key = `trending:ids:v2:${kind}:${currentLanguage()}:${page}`;
+    const cached = await this.redis.get<{ id: string; g: number[] }[]>(key);
     if (cached?.length) return cached;
     const items = kind === 'show'
       ? await this.tmdb.trendingShows('week', page)
       : await this.tmdb.trendingMovies('week', page);
-    const ids = await Promise.all(
-      items.map((i) => (kind === 'show' ? this.meta.lightUpsertShow(i) : this.meta.lightUpsertMovie(i))),
+    const entries = await Promise.all(
+      items.map(async (i) => ({
+        id: await (kind === 'show' ? this.meta.lightUpsertShow(i) : this.meta.lightUpsertMovie(i)),
+        g: i.genreIds ?? [],
+      })),
     );
-    if (ids.length) await this.redis.set(key, ids, 300);
-    return ids;
+    if (entries.length) await this.redis.set(key, entries, 300);
+    return entries;
   }
 
-  async trendingShows(userId?: string, page = 1, pageSize = 20) {
-    if (!this.tmdb.enabled) return { items: await this.topDb(MediaType.SHOW, pageSize, userId), page, hasMore: false };
-    const ids = await this.cachedTrendingIds('show', page);
+  async trendingShows(userId?: string, page = 1, pageSize = 20, genre?: string) {
+    if (!this.tmdb.enabled)
+      return {
+        items: await this.topDb(MediaType.SHOW, pageSize, userId, genre ? ({ genre } as DiscoverQueryDto) : undefined),
+        page,
+        hasMore: false,
+      };
+    const entries = await this.cachedTrendingEntries('show', page);
+    const ids = await this.applyGenreToEntries(entries, genre);
     const listItems = await this.fetchListDtos(ids, userId, pageSize);
-    return { items: listItems, page, hasMore: ids.length === 20 };
+    return { items: listItems, page, hasMore: entries.length === 20 };
   }
 
-  async trendingMovies(userId?: string, page = 1, pageSize = 20) {
-    if (!this.tmdb.enabled) return { items: await this.topDb(MediaType.MOVIE, pageSize, userId), page, hasMore: false };
-    const ids = await this.cachedTrendingIds('movie', page);
+  async trendingMovies(userId?: string, page = 1, pageSize = 20, genre?: string) {
+    if (!this.tmdb.enabled)
+      return {
+        items: await this.topDb(MediaType.MOVIE, pageSize, userId, genre ? ({ genre } as DiscoverQueryDto) : undefined),
+        page,
+        hasMore: false,
+      };
+    const entries = await this.cachedTrendingEntries('movie', page);
+    const ids = await this.applyGenreToEntries(entries, genre);
     const listItems = await this.fetchListDtos(ids, userId, pageSize);
-    return { items: listItems, page, hasMore: ids.length === 20 };
+    return { items: listItems, page, hasMore: entries.length === 20 };
   }
 
-  async discoverSections(userId?: string) {
+  private async applyGenreToEntries(
+    entries: { id: string; g: number[] }[],
+    genre?: string,
+  ): Promise<string[]> {
+    const ids = entries.map((e) => e.id);
+    if (!genre?.trim()) return ids;
+    const payload: Record<string, number[]> = {};
+    for (const e of entries) payload[e.id] = e.g;
+    return this.filterIdsByGenre(ids, genre.trim(), payload);
+  }
+
+  /**
+   * TMDB genre ids (tv + movie lists) matching a genre name — used to filter light
+   * rows by the genre ids carried in provider payloads. Lists cached 24h.
+   */
+  private async tmdbGenreIds(name: string): Promise<number[]> {
+    const key = 'tmdb:genre-lists:v1';
+    let lists = await this.redis.get<{
+      tv: { id: number; name: string }[];
+      movie: { id: number; name: string }[];
+    }>(key);
+    if (!lists) {
+      const [tv, movie] = this.tmdb.enabled
+        ? await Promise.all([
+            this.tmdb.genres('tv').catch(() => [] as { id: number; name: string }[]),
+            this.tmdb.genres('movie').catch(() => [] as { id: number; name: string }[]),
+          ])
+        : [[], []];
+      lists = { tv, movie };
+      await this.redis.set(key, lists, 86400);
+    }
+    const needle = name.trim().toLowerCase();
+    return [...lists.tv, ...lists.movie]
+      .filter((g) => g.name.toLowerCase() === needle)
+      .map((g) => g.id);
+  }
+
+  /**
+   * Genre filter over an id window. The filter value is a genre SLUG (locale-
+   * independent): hydrated rows match through the media_genres join on slug,
+   * light rows through the TMDB genre ids cached from the provider payload
+   * (the row's English base name maps slug → TMDB genre id).
+   */
+  private async filterIdsByGenre(
+    ids: string[],
+    genre: string,
+    payloadGenreIds: Record<string, number[]>,
+  ): Promise<string[]> {
+    if (ids.length === 0) return ids;
+    const [row, dbRows] = await Promise.all([
+      this.prisma.genre.findFirst({
+        where: { slug: { equals: genre, mode: 'insensitive' } },
+        select: { name: true },
+      }),
+      this.prisma.mediaItem.findMany({
+        where: {
+          id: { in: ids },
+          genres: { some: { genre: { slug: { equals: genre, mode: 'insensitive' } } } },
+        },
+        select: { id: true },
+      }),
+    ]);
+    const tmdbIds = await this.tmdbGenreIds(row?.name ?? genre);
+    const dbMatched = new Set(dbRows.map((r) => r.id));
+    return ids.filter(
+      (id) => dbMatched.has(id) || (payloadGenreIds[id] ?? []).some((g) => tmdbIds.includes(g)),
+    );
+  }
+
+  /** Genres present in the catalog, most-used first — filter chip lists. */
+  async listGenres(): Promise<GenreFilterDto[]> {
+    const rows = await this.prisma.genre.findMany({
+      where: { media: { some: {} } },
+      include: { _count: { select: { media: true } } },
+      orderBy: { media: { _count: 'desc' } },
+    });
+    return rows.map((g) => ({
+      id: g.id,
+      name: localized(g, 'names', 'name') ?? g.name,
+      slug: g.slug,
+    }));
+  }
+
+  async discoverSections(userId?: string, genre?: string) {
+    const g = genre?.trim() || undefined;
     const [trendingShows, trendingMovies] = await Promise.all([
       this.tmdb.enabled
-        ? this.trendingShows(userId, 1, 20)
-        : { items: await this.topDb(MediaType.SHOW, 20, userId), page: 1, hasMore: false },
+        ? this.trendingShows(userId, 1, 20, g)
+        : { items: await this.topDb(MediaType.SHOW, 20, userId, g ? ({ genre: g } as DiscoverQueryDto) : undefined), page: 1, hasMore: false },
       this.tmdb.enabled
-        ? this.trendingMovies(userId, 1, 20)
-        : { items: await this.topDb(MediaType.MOVIE, 20, userId), page: 1, hasMore: false },
+        ? this.trendingMovies(userId, 1, 20, g)
+        : { items: await this.topDb(MediaType.MOVIE, 20, userId, g ? ({ genre: g } as DiscoverQueryDto) : undefined), page: 1, hasMore: false },
     ]);
-    const topForYou = userId ? await this.recommendedForYou(userId) : trendingShows.items.slice(0, 10);
+    const topForYou = userId ? await this.recommendedForYou(userId, g) : trendingShows.items.slice(0, 10);
     return { topForYou, trendingShows: trendingShows.items, trendingMovies: trendingMovies.items };
   }
 
-  private async recommendedForYou(userId: string) {
+  /**
+   * Personalized "Top shows for you". Affinity comes from the user's genres
+   * (history ×2, favorites ×1) AND the TMDB keywords of what they watch/love;
+   * candidates are then ranked by affinity + community rating + recency, so
+   * fresh well-rated matches beat old catalog filler. Anything the user already
+   * watched, watchlisted, or favorited is excluded.
+   */
+  private async recommendedForYou(userId: string, genre?: string) {
     // Score genres: watch history counts double, favorites +1 each.
     // Aggregates in SQL — the old findMany pulled every mediaGenre row for the
     // user's entire history/favorites (thousands of rows) on every Discover open.
@@ -310,28 +434,91 @@ export class DiscoveryService {
     const scores = new Map<string, number>();
     for (const r of histGenres) scores.set(r.name, (scores.get(r.name) ?? 0) + 2 * r.c);
     for (const r of favGenres) scores.set(r.name, (scores.get(r.name) ?? 0) + r.c);
-    const genreNames = [...scores.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([name]) => name);
+    const topGenres = [...scores.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const genreNames = topGenres.map(([name]) => name);
     if (genreNames.length === 0) return [];
-    const watchedIds = (
-      await this.prisma.watchHistory.findMany({
-        where: { userId },
-        select: { mediaId: true },
-        distinct: ['mediaId'],
-      })
-    ).map((w) => w.mediaId);
-    const rows = await this.prisma.mediaItem.findMany({
+
+    // Keyword affinity: frequency of TMDB keywords over the user's watched +
+    // favorited shows/movies (persisted at hydration) — catches taste signals
+    // genres are too coarse for (e.g. "isekai", "true crime", "sitcom").
+    const topKeywords = await this.prisma.$queryRaw<{ kw: string; c: number }[]>`
+      SELECT kw, COUNT(*)::int AS c FROM (
+        SELECT jsonb_array_elements_text(s.keywords::jsonb) AS kw
+        FROM shows s
+        WHERE jsonb_typeof(s.keywords::jsonb) = 'array' AND (
+          EXISTS (SELECT 1 FROM watch_history wh WHERE wh.media_id = s.media_id AND wh.user_id = ${userId})
+          OR EXISTS (SELECT 1 FROM favorites f WHERE f.media_id = s.media_id AND f.user_id = ${userId})
+        )
+        UNION ALL
+        SELECT jsonb_array_elements_text(m.keywords::jsonb) AS kw
+        FROM movies m
+        WHERE jsonb_typeof(m.keywords::jsonb) = 'array' AND (
+          EXISTS (SELECT 1 FROM watch_history wh WHERE wh.media_id = m.media_id AND wh.user_id = ${userId})
+          OR EXISTS (SELECT 1 FROM favorites f WHERE f.media_id = m.media_id AND f.user_id = ${userId})
+        )
+      ) kws
+      GROUP BY kw
+      ORDER BY c DESC
+      LIMIT 12
+    `;
+    const keywordWeight = new Map(topKeywords.map((r, i) => [r.kw.toLowerCase(), 12 - i]));
+
+    // Novelty: never recommend what the user already tracks.
+    const excludedIds = (
+      await this.prisma.$queryRaw<{ media_id: string }[]>`
+        SELECT media_id FROM watch_history WHERE user_id = ${userId}
+        UNION SELECT media_id FROM watchlist_items WHERE user_id = ${userId}
+        UNION SELECT media_id FROM favorites WHERE user_id = ${userId}
+      `
+    ).map((r) => r.media_id);
+
+    const candidates = await this.prisma.mediaItem.findMany({
       where: {
         type: MediaType.SHOW,
-        genres: { some: { genre: { name: { in: genreNames } } } },
-        id: { notIn: watchedIds },
+        posterUrl: { not: null },
+        AND: [
+          { genres: { some: { genre: { name: { in: genreNames } } } } },
+          ...(genre
+            ? [{ genres: { some: { genre: { slug: { equals: genre, mode: 'insensitive' as const } } } } }]
+            : []),
+        ],
+        id: { notIn: excludedIds },
+      },
+      include: {
+        genres: { include: { genre: true } },
+        show: { select: { keywords: true, yearStart: true } },
       },
       orderBy: { popularity: 'desc' },
-      take: 10,
+      take: 150,
     });
-    return this.fetchListDtos(rows.map((r) => r.id), userId);
+
+    // Rank: genre affinity (rank-weighted) + keyword affinity (capped) +
+    // community rating + recency boost (old catalogs sink, fresh shows float).
+    const genreRank = new Map(topGenres.map(([name], idx) => [name, idx]));
+    const thisYear = new Date().getFullYear();
+    const scored = candidates.map((m) => {
+      let score = 0;
+      for (const mg of m.genres) {
+        const rank = genreRank.get(mg.genre.name);
+        if (rank !== undefined) score += 12 - rank * 2;
+      }
+      const kws = Array.isArray(m.show?.keywords) ? (m.show!.keywords as string[]) : [];
+      let kwScore = 0;
+      for (const k of kws) kwScore += keywordWeight.get(k.toLowerCase()) ?? 0;
+      score += Math.min(kwScore, 18);
+      score += m.rating ?? 0;
+      const year = m.show?.yearStart ?? null;
+      if (year) {
+        const age = thisYear - year;
+        if (age <= 3) score += 10;
+        else if (age <= 7) score += 6;
+        else if (age <= 12) score += 3;
+        else if (age > 25) score -= 6;
+      }
+      return { id: m.id, score };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    return this.fetchListDtos(scored.slice(0, 10).map((s) => s.id), userId);
   }
 
   private async discoverViaDb(type: MediaType, q: DiscoverQueryDto, userId?: string) {
@@ -341,7 +528,9 @@ export class DiscoveryService {
   private async topDb(type: MediaType, limit: number, userId?: string, q?: DiscoverQueryDto) {
     const where = {
       type,
-      ...(q?.genre ? { genres: { some: { genre: { name: q.genre } } } } : {}),
+      ...(q?.genre?.trim()
+        ? { genres: { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } } }
+        : {}),
       ...(q?.minRating ? { rating: { gte: q.minRating } } : {}),
     };
     const rows = await this.prisma.mediaItem.findMany({

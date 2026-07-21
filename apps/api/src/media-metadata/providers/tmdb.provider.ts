@@ -151,6 +151,8 @@ export interface NormalizedSearchItem {
   year?: number | null;
   rating?: number | null;
   popularity?: number | null;
+  /** TMDB genre ids from list payloads (search/trending/discover) — genre filtering. */
+  genreIds?: number[];
 }
 
 interface TmdbShow {
@@ -181,6 +183,7 @@ interface TmdbShow {
   next_episode_to_air?: { air_date?: string } | null;
   original_language?: string;
   origin_country?: string[];
+  genre_ids?: number[];
   keywords?: { results?: { name?: string }[] };
   translations?: { translations?: TmdbTranslation[] };
 }
@@ -208,6 +211,7 @@ interface TmdbMovie {
   videos?: { results?: { site: string; type: string; key: string }[] };
   production_countries?: { iso_3166_1: string }[];
   original_language?: string;
+  genre_ids?: number[];
   keywords?: { keywords?: { name?: string }[] };
   translations?: { translations?: TmdbTranslation[] };
 }
@@ -356,6 +360,7 @@ export class TmdbProvider {
         year: s.first_air_date ? Number(s.first_air_date.slice(0, 4)) : null,
         rating: s.vote_average ?? null,
         popularity: s.popularity ?? null,
+        genreIds: s.genre_ids ?? [],
       })),
     };
   }
@@ -381,6 +386,7 @@ export class TmdbProvider {
         year: m.release_date ? Number(m.release_date.slice(0, 4)) : null,
         rating: m.vote_average ?? null,
         popularity: m.popularity ?? null,
+        genreIds: m.genre_ids ?? [],
       })),
     };
   }
@@ -661,6 +667,7 @@ export class TmdbProvider {
       overview: s.overview || null,
       rating: s.vote_average ?? null,
       popularity: s.popularity ?? null,
+      genreIds: s.genre_ids ?? [],
     }));
   }
 
@@ -678,6 +685,7 @@ export class TmdbProvider {
       year: m.release_date ? Number(m.release_date.slice(0, 4)) : null,
       rating: m.vote_average ?? null,
       popularity: m.popularity ?? null,
+      genreIds: m.genre_ids ?? [],
     }));
   }
 

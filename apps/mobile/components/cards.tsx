@@ -36,6 +36,7 @@ export function PosterCard({
   title,
   poster,
   progress,
+  rating,
   width = 130,
   style,
 }: {
@@ -44,6 +45,8 @@ export function PosterCard({
   title: string;
   poster?: string | null;
   progress?: number;
+  /** TMDB vote average (1..10) — shown as a star badge on the poster when > 0. */
+  rating?: number | null;
   width?: number;
   style?: StyleProp<ViewStyle>;
 }) {
@@ -64,6 +67,27 @@ export function PosterCard({
       <Pressable style={cardStyle}>
         <View style={{ borderRadius: radius.md, overflow: 'hidden' }}>
           <PosterImage uri={poster} style={{ width, height: h }} transition={0} />
+
+          {rating != null && rating > 0 ? (
+            <View
+              style={{
+                position: 'absolute',
+                top: 4,
+                left: 4,
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: tokens.mediaScrim,
+                borderRadius: radius.sm,
+                paddingHorizontal: 4,
+                paddingVertical: 2,
+              }}
+            >
+              <Ionicons name="star" size={10} color={tokens.warning} />
+              <T variant="micro" style={{ color: tokens.mediaText, marginLeft: 2 }}>
+                {rating.toFixed(1)}
+              </T>
+            </View>
+          ) : null}
 
           {progress !== undefined ? (
             <View
@@ -105,7 +129,7 @@ export function PosterGrid({ data, kind, emptyTitle, emptyCta, minCardWidth = 11
       {rows.map((row, ri) => (
         <View key={ri} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.sm }}>
           {row.map((it) => (
-            <PosterCard key={it.id} id={it.id} kind={kind} title={it.title} poster={it.images?.poster ?? it.posterUrl} progress={it.userProgress ?? (it.watched ? 1 : undefined)} width={cellW} style={{ marginRight: 0 }} />
+            <PosterCard key={it.id} id={it.id} kind={kind} title={it.title} poster={it.images?.poster ?? it.posterUrl} progress={it.userProgress ?? (it.watched ? 1 : undefined)} rating={it.rating} width={cellW} style={{ marginRight: 0 }} />
           ))}
           {Array.from({ length: cols - row.length }).map((_, fi) => (
             <View key={'f' + fi} style={{ width: cellW }} />
@@ -138,7 +162,7 @@ export function Carousel({ title, action, onAction, data, kind, width = 120 }: {
         contentContainerStyle={{ paddingHorizontal: spacing.lg }}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <PosterCard id={item.id} kind={kind} title={item.title} poster={item.images?.poster ?? item.posterUrl} progress={cardProgress(item)} width={width} />
+          <PosterCard id={item.id} kind={kind} title={item.title} poster={item.images?.poster ?? item.posterUrl} progress={cardProgress(item)} rating={item.rating} width={width} />
         )}
       />
     </View>

@@ -75,8 +75,12 @@ export class CollectionsService {
     return { inWatchlist: false };
   }
 
-  async watchlist(userId: string, type?: MediaType, page = 1, pageSize = 20) {
-    const where = { userId, ...(type ? { media: { type } } : {}) };
+  async watchlist(userId: string, type?: MediaType, page = 1, pageSize = 20, genre?: string) {
+    const genreFilter = genre?.trim()
+      ? { genres: { some: { genre: { slug: { equals: genre.trim(), mode: 'insensitive' as const } } } } }
+      : {};
+    const mediaWhere = { ...(type ? { type } : {}), ...genreFilter };
+    const where = { userId, ...(Object.keys(mediaWhere).length ? { media: mediaWhere } : {}) };
     const [rows, total] = await Promise.all([
       this.prisma.watchlistItem.findMany({
         where,
@@ -109,8 +113,11 @@ export class CollectionsService {
     return { favorite: false };
   }
 
-  async favorites(userId: string, type: MediaType, page = 1, pageSize = 20) {
-    const where = { userId, media: { type } };
+  async favorites(userId: string, type: MediaType, page = 1, pageSize = 20, genre?: string) {
+    const genreFilter = genre?.trim()
+      ? { genres: { some: { genre: { slug: { equals: genre.trim(), mode: 'insensitive' as const } } } } }
+      : {};
+    const where = { userId, media: { type, ...genreFilter } };
     const [rows, total] = await Promise.all([
       this.prisma.favorite.findMany({
         where,

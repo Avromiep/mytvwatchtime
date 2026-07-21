@@ -35,12 +35,21 @@ export interface MediaCardLiteDto {
   type: MediaType;
   title: string;
   images: ImageSet;
+  /** TMDB vote average (1..10) — null until the row carries a rating. */
+  rating?: number | null;
   inWatchlist?: boolean;
   favorite?: boolean;
   /** Shows only: 0..1 watched fraction of AIRED episodes. */
   userProgress?: number;
   /** Movies only. */
   watched?: boolean;
+}
+
+/** Genre row for filter UIs (explore/search/see-all chips), most-used first. */
+export interface GenreFilterDto {
+  id: string;
+  name: string;
+  slug: string;
 }
 
 export interface DiscoverSectionsDto {

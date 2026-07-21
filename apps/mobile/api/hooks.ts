@@ -16,6 +16,7 @@ import type {
   DiscoverSectionsDto,
   EpisodeDetailDto,
   EpisodeInteractionsDto,
+  GenreFilterDto,
   MediaCardDto,
   MediaCardLiteDto,
   HistoryItemDto,
@@ -166,23 +167,37 @@ export const useMovie = (id: string) =>
   });
 // Server-paginated search (20/page): the API keeps the merged ordering in a short-lived
 // cache and expands it on demand, so onEndReached reveals results beyond the first page.
-export const useSearch = (q: string, type?: MediaType) =>
+export const useSearch = (q: string, type?: MediaType, genre?: string | null) =>
   useInfiniteQuery({
-    queryKey: qk.search(q, type),
+    queryKey: [...qk.search(q, type), genre ?? ''],
     queryFn: ({ pageParam = 1 }) =>
-      api.get<Paginated<MediaCardDto>>('/search', { q, type, page: pageParam, pageSize: 20 }),
+      api.get<Paginated<MediaCardDto>>('/search', {
+        q,
+        type,
+        genre: genre || undefined,
+        page: pageParam,
+        pageSize: 20,
+      }),
     initialPageParam: 1,
     getNextPageParam: (last) => (last?.hasMore ? last.page + 1 : undefined),
     enabled: q.length > 1,
   });
-export const useDiscoverSections = (userId?: string) =>
+export const useDiscoverSections = (userId?: string, genre?: string | null) =>
   // User-scoped key: the server's anonymous fallback (topForYou = trending) must NEVER
   // share a cache entry with the personalized sections — otherwise a token-less early
   // request (cold start / expired token) shows trending as "Top shows for you" until
   // the next manual refetch.
   useQuery({
-    queryKey: [...qk.discover(), userId ?? 'anon'],
-    queryFn: () => api.get<DiscoverSectionsDto>('/discover/sections'),
+    queryKey: [...qk.discover(), userId ?? 'anon', genre ?? ''],
+    queryFn: () =>
+      api.get<DiscoverSectionsDto>('/discover/sections', { genre: genre || undefined }),
+  });
+// Catalog genres for filter chips (explore/search/see-all) — rarely changes.
+export const useGenres = () =>
+  useQuery({
+    queryKey: ['genres'] as const,
+    queryFn: () => api.get<GenreFilterDto[]>('/genres'),
+    staleTime: 3600000,
   });
 export const useDiscoverShows = (p: any) =>
   useQuery({
@@ -253,17 +268,17 @@ function useAllPages<T>(key: readonly unknown[], path: string, params: Record<st
   return { ...query, items, fullyLoaded: !hasNextPage };
 }
 
-export const useAllWatchlist = (type?: MediaType) =>
+export const useAllWatchlist = (type?: MediaType, genre?: string | null) =>
   useAllPages<MediaCardLiteDto>(
-    ['watchlist', 'all', type] as const,
+    ['watchlist', 'all', type, genre ?? ''] as const,
     '/me/watchlist',
-    type ? { type } : {},
+    { ...(type ? { type } : {}), ...(genre ? { genre } : {}) },
   );
-export const useAllFavorites = (type: MediaType) =>
+export const useAllFavorites = (type: MediaType, genre?: string | null) =>
   useAllPages<MediaCardLiteDto>(
-    ['favorites', 'all', type] as const,
+    ['favorites', 'all', type, genre ?? ''] as const,
     type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies',
-    {},
+    genre ? { genre } : {},
   );
 export const useAllHistory = (p: { mediaType?: MediaType }) =>
   useAllPages<HistoryItemDto>(['history', 'all', p.mediaType] as const, '/me/history', p);

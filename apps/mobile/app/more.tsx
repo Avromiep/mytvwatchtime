@@ -1,11 +1,11 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { ActivityIndicator, Dimensions, FlatList, View } from 'react-native';
+import { ActivityIndicator, Dimensions, FlatList, ScrollView, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { MediaType } from '@tvwatch/shared';
 import { Header } from '../components/Header';
 import { PosterCard, cardProgress } from '../components/cards';
-import { EmptyState, Screen, Spinner } from '../components/primitives';
-import { useDiscoverSections, useAllFavorites, useAllWatchlist } from '../api/hooks';
+import { Chip, EmptyState, Screen, Spinner } from '../components/primitives';
+import { useDiscoverSections, useAllFavorites, useAllWatchlist, useGenres } from '../api/hooks';
 import { useAuth } from '../context/AuthContext';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -28,7 +28,10 @@ function useColumns() {
 export default function MoreScreen() {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['social', 'common']);
-  const { t: tab } = useLocalSearchParams<{ t: string }>();
+  const { t: tab, g: initialGenre } = useLocalSearchParams<{ t: string; g?: string }>();
+  // Genre filter (explore hands its active chip over via the `g` route param).
+  const [genre, setGenre] = useState<string | null>(initialGenre ?? null);
+  const genres = useGenres();
 
   const TITLES: Record<string, string> = {
     'trending-shows': t('social:more.trendingShows'),
@@ -58,9 +61,12 @@ export default function MoreScreen() {
   const [loadingMore, setLoadingMore] = useState(false);
 
   const pageQuery = useQuery({
-    queryKey: ['trending-page', trendingType, page],
+    queryKey: ['trending-page', trendingType, page, genre ?? ''],
     queryFn: () =>
-      api.get<{ items: any[]; hasMore: boolean }>(`/trending/${trendingType}?page=${page}`),
+      api.get<{ items: any[]; hasMore: boolean }>(`/trending/${trendingType}`, {
+        page,
+        genre: genre || undefined,
+      }),
     enabled: isTrending,
     staleTime: 60000,
   });
@@ -73,7 +79,7 @@ export default function MoreScreen() {
     setLoadingMore(false);
   }, [pageQuery.data, page, isTrending]);
 
-  // Reset when tab changes
+  // Reset when tab or genre filter changes
   useEffect(() => {
     if (isTrending) {
       setAllItems([]);
@@ -81,7 +87,7 @@ export default function MoreScreen() {
       setHasMore(true);
       setLoadingMore(false);
     }
-  }, [tab]);
+  }, [tab, genre]);
 
   const loadMore = useCallback(() => {
     if (!hasMore || loadingMore || pageQuery.isFetching) return;
@@ -91,11 +97,11 @@ export default function MoreScreen() {
 
   // --- Collection hooks (auto-paged to the end — see-alls show exactly what the user has) ---
   const { user } = useAuth();
-  const sections = useDiscoverSections(user?.id);
-  const watchlistShows = useAllWatchlist(MediaType.SHOW);
-  const watchlistMovies = useAllWatchlist(MediaType.MOVIE);
-  const favShows = useAllFavorites(MediaType.SHOW);
-  const favMovies = useAllFavorites(MediaType.MOVIE);
+  const sections = useDiscoverSections(user?.id, genre);
+  const watchlistShows = useAllWatchlist(MediaType.SHOW, genre);
+  const watchlistMovies = useAllWatchlist(MediaType.MOVIE, genre);
+  const favShows = useAllFavorites(MediaType.SHOW, genre);
+  const favMovies = useAllFavorites(MediaType.MOVIE, genre);
 
   // --- Collect items ---
   let items: any[] = [];
@@ -137,6 +143,22 @@ export default function MoreScreen() {
   return (
     <Screen>
       <Header title={title} showBack />
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={{ flexGrow: 0, marginBottom: spacing.sm }}
+        contentContainerStyle={{ paddingHorizontal: spacing.lg }}
+      >
+        <Chip label={t('common:all')} active={!genre} onPress={() => setGenre(null)} />
+        {(genres.data ?? []).map((g) => (
+          <Chip
+            key={g.id}
+            label={g.name}
+            active={genre === g.slug}
+            onPress={() => setGenre(genre === g.slug ? null : g.slug)}
+          />
+        ))}
+      </ScrollView>
       {loading ? (
         <Spinner />
       ) : (
@@ -170,6 +192,7 @@ export default function MoreScreen() {
                     title={item.title}
                     poster={item.posterUrl ?? item.images?.poster}
                     progress={cardProgress(item)}
+                    rating={item.rating}
                     width={cardW}
                     style={{ marginRight: spacing.md }}
                   />

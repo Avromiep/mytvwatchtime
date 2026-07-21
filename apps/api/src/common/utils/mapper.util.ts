@@ -158,6 +158,7 @@ export function mapMediaCardLite(media: AnyRecord, userId?: string): MediaCardLi
     type: media.type,
     title: localized(media, 'titles', 'title') ?? media.title,
     images: imagesOf(media),
+    rating: media.rating ?? null,
     inWatchlist: !!(media.watchlist?.length || media._inWatchlist),
     favorite: !!(media.favorites?.length || media._favorite),
     ...(media.type === MediaType.SHOW

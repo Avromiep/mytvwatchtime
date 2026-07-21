@@ -14,7 +14,7 @@ import { router } from 'expo-router';
 import { Header } from '../../components/Header';
 import { Carousel, PosterCard } from '../../components/cards';
 import { Chip, Screen, Spinner, T } from '../../components/primitives';
-import { useDiscoverSections, useSearch } from '../../api/hooks';
+import { useDiscoverSections, useGenres, useSearch } from '../../api/hooks';
 import { useAuth } from '../../context/AuthContext';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
 import { useAppearance } from '../../context/PreferencesProvider';
@@ -37,9 +37,12 @@ export default function ExploreScreen() {
   }, [q]);
 
   const searching = debouncedQ.length > 1;
-  const search = useSearch(debouncedQ, undefined);
+  // Genre filter applies to both modes: search results AND the discover carousels.
+  const [genre, setGenre] = useState<string | null>(null);
+  const genres = useGenres();
+  const search = useSearch(debouncedQ, undefined, genre);
   const { user } = useAuth();
-  const sections = useDiscoverSections(user?.id);
+  const sections = useDiscoverSections(user?.id, genre);
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -65,8 +68,13 @@ export default function ExploreScreen() {
   useTabPressReset(() => {
     setQ('');
     setDebouncedQ('');
+    setGenre(null);
     discoverRef.current?.scrollTo({ y: 0, animated: true });
   });
+
+  // Active genre rides along into see-all screens so the filter survives navigation.
+  const moreHref = (key: string) =>
+    `/more?t=${key}${genre ? `&g=${encodeURIComponent(genre)}` : ''}` as any;
 
   return (
     <Screen>
@@ -112,6 +120,25 @@ export default function ExploreScreen() {
           />
           <Chip label={t('explore:groups')} onPress={() => router.push('/groups' as any)} />
         </View>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ marginTop: spacing.sm }}
+        >
+          <Chip
+            label={t('common:all')}
+            active={!genre}
+            onPress={() => setGenre(null)}
+          />
+          {(genres.data ?? []).map((g) => (
+            <Chip
+              key={g.id}
+              label={g.name}
+              active={genre === g.slug}
+              onPress={() => setGenre(genre === g.slug ? null : g.slug)}
+            />
+          ))}
+        </ScrollView>
       </View>
 
       {/* Adaptive grid (chunked rows) when searching. */}
@@ -150,6 +177,7 @@ export default function ExploreScreen() {
                           kind={item.type === 'SHOW' ? 'shows' : 'movies'}
                           title={item.title}
                           poster={item.images?.poster ?? item.images?.backdrop}
+                          rating={item.rating}
                           width={cellW}
                           style={{ marginRight: 0 }}
                         />
@@ -196,21 +224,21 @@ export default function ExploreScreen() {
                 data={sections.data?.topForYou ?? []}
                 kind="shows"
                 action={t('explore:seeAll')}
-                onAction={() => router.push('/more?t=top-for-you')}
+                onAction={() => router.push(moreHref('top-for-you'))}
               />
               <Carousel
                 title={t('explore:trendingShows')}
                 data={sections.data?.trendingShows ?? []}
                 kind="shows"
                 action={t('explore:seeAll')}
-                onAction={() => router.push('/more?t=trending-shows')}
+                onAction={() => router.push(moreHref('trending-shows'))}
               />
               <Carousel
                 title={t('explore:trendingMovies')}
                 data={sections.data?.trendingMovies ?? []}
                 kind="movies"
                 action={t('explore:seeAll')}
-                onAction={() => router.push('/more?t=trending-movies')}
+                onAction={() => router.push(moreHref('trending-movies'))}
               />
             </>
           )}
