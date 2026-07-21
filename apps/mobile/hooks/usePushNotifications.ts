@@ -4,7 +4,6 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { api } from '../api/client';
 import { showError } from '../lib/dialog';
-import { navigateFromLink } from '../lib/announcement';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -15,12 +14,11 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// Responses already navigated for. Both the tap listener AND
-// getLastNotificationResponseAsync() can deliver the same response (the "last"
-// response persists until a newer one arrives), and the effect below re-runs
-// when `enabled` flips — without dedupe each tap would push the route twice.
-const handledResponses = new Set<string>();
-
+/**
+ * Push REGISTRATION only (permissions + token + device upsert). Notification TAP
+ * handling lives exclusively in useNotificationNavigation (app root) — a second
+ * response listener here pushed every tapped route twice.
+ */
 export function usePushNotifications(enabled: boolean) {
   useEffect(() => {
     if (!enabled || Platform.OS === 'web') return;
@@ -92,24 +90,5 @@ export function usePushNotifications(enabled: boolean) {
     return () => {
       cancelled = true;
     };
-  }, [enabled]);
-
-  // Tap handling: warm taps via listener, cold start via the last queued response.
-  useEffect(() => {
-    if (!enabled || Platform.OS === 'web') return;
-    const open = (response: Notifications.NotificationResponse | null) => {
-      const link = (response?.notification.request.content.data as any)?.link;
-      if (typeof link !== 'string' || !response) return;
-      const key = `${response.notification.request.identifier}:${response.notification.date}:${link}`;
-      if (handledResponses.has(key)) return;
-      if (handledResponses.size > 100) handledResponses.clear();
-      handledResponses.add(key);
-      navigateFromLink(link);
-    };
-    const sub = Notifications.addNotificationResponseReceivedListener(open);
-    Notifications.getLastNotificationResponseAsync()
-      .then(open)
-      .catch(() => undefined);
-    return () => sub.remove();
   }, [enabled]);
 }

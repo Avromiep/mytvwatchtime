@@ -1,5 +1,18 @@
-import type { CommentDto } from '@tvwatch/shared';
+import type { CommentDto, MyCommentContextDto } from '@tvwatch/shared';
 import { formatDateTime } from '@tvwatch/shared';
+import type { TFunction } from 'i18next';
+
+/** Localized display label for a thread context (group slugs resolve via `groups:names`). */
+export function threadContextLabel(
+  ctx: MyCommentContextDto | null | undefined,
+  t: TFunction,
+): string {
+  if (!ctx) return '';
+  if (ctx.threadType === 'GROUP') {
+    return t(`groups:names.${ctx.groupId ?? ctx.label}`, { defaultValue: ctx.label });
+  }
+  return ctx.label;
+}
 
 /**
  * Helpers for the Reddit-style threaded comment screen.

@@ -14,7 +14,11 @@ import { CommentComposer } from '../../components/comments/CommentComposer';
 import { CommentEditDialog } from '../../components/comments/CommentEditDialog';
 import { useCommentActions } from '../../components/comments/useCommentActions';
 import { feedColumn } from '../../components/comments/layout';
-import { buildChildrenMap, type ExpandedNode } from '../../components/comments/thread-utils';
+import {
+  buildChildrenMap,
+  threadContextLabel,
+  type ExpandedNode,
+} from '../../components/comments/thread-utils';
 import {
   useExternalReview,
   useExternalReviewReplies,
@@ -38,7 +42,7 @@ const AVATAR = 44;
  */
 export default function ReviewThreadScreen() {
   const { tokens, resolvedLocale } = useAppearance();
-  const { t } = useTranslation(['comments', 'common']);
+  const { t } = useTranslation(['comments', 'common', 'groups']);
   const params = useLocalSearchParams<{ id: string }>();
   const id = params.id;
   const qc = useQueryClient();
@@ -287,7 +291,14 @@ export default function ReviewThreadScreen() {
       behavior="padding"
     >
       <Screen style={{ flex: 1 }}>
-        <Header title={t('comments:threadTitle')} showBack />
+        <Header
+          title={
+            review?.context
+              ? threadContextLabel(review.context, t) || t('comments:threadTitle')
+              : t('comments:threadTitle')
+          }
+          showBack
+        />
         <View style={[feedColumn.root, { flex: 1 }]}>
           {reviewQ.isLoading ? (
             <Spinner />

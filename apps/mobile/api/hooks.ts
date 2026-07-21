@@ -11,6 +11,7 @@ import {
 import type {
   CommentDto,
   CommentSort,
+  CommentThreadDto,
   CurrentUserDto,
   DiscoverSectionsDto,
   EpisodeDetailDto,
@@ -24,6 +25,7 @@ import type {
   MovieDetailDto,
   MovieStatsDto,
   AnnouncementDto,
+  MyCommentContextDto,
   NotificationItemDto,
   NotificationPreferencesDto,
   Paginated,
@@ -354,7 +356,12 @@ export const useCommentsFeed = (p: {
   return useInfiniteQuery({
     queryKey: qk.comments(p),
     queryFn: ({ pageParam }) =>
-      api.get<Paginated<CommentDto> & { externalReviews?: ExternalReviewDto[] }>('/comments', {
+      api.get<
+        Paginated<CommentDto> & {
+          externalReviews?: ExternalReviewDto[];
+          thread?: MyCommentContextDto | null;
+        }
+      >('/comments', {
         ...rest,
         page: pageParam as number,
         pageSize,
@@ -366,11 +373,11 @@ export const useCommentsFeed = (p: {
   });
 };
 
-/** Single comment (thread header). */
+/** Single comment (thread header) with thread context + ancestor chain. */
 export const useComment = (id: string, polling = false) =>
   useQuery({
     queryKey: qk.comment(id),
-    queryFn: () => api.get<CommentDto>(`/comments/${id}`),
+    queryFn: () => api.get<CommentThreadDto>(`/comments/${id}`),
     enabled: !!id,
     refetchInterval: polling ? COMMENT_POLL_INTERVAL : false,
   });

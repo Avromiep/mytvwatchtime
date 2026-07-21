@@ -102,6 +102,15 @@ export class CommentsService {
       ),
     );
 
+    // Display context (title label + navigation ids) for the whole thread — the feed
+    // header renders this instead of a generic "Comments" title.
+    const thread =
+      (
+        await this.threadContexts([
+          { id: 'thread', threadType: q.threadType, threadId: q.threadId },
+        ])
+      ).get('thread') ?? null;
+
     // TMDB reviews are first-class thread roots in this feed: merge them into the items
     // stream (page 1 only) after the lazy sync, sorted with the comments.
     const reviewable =
@@ -120,10 +129,10 @@ export class CommentsService {
             (a: any, b: any) => +new Date(b.createdAt as string) - +new Date(a.createdAt as string),
           );
         }
-        return paginate(merged, page, pageSize, total);
+        return { ...paginate(merged, page, pageSize, total), thread };
       }
     }
-    return paginate(items, page, pageSize, total);
+    return { ...paginate(items, page, pageSize, total), thread };
   }
 
   async create(userId: string, dto: CreateCommentDto) {
@@ -264,10 +273,83 @@ export class CommentsService {
     const liked = await this.likedIds(userId, [r.id]);
     const mediaMap = await this.mediaRefs(r.mediaId ? [r.mediaId] : []);
     const listMap = await this.listRefs(r.listId ? [r.listId] : []);
-    return this.toDto(r, c, liked.has(r.id), {
+    const dto = this.toDto(r, c, liked.has(r.id), {
       media: r.mediaId ? mediaMap.get(r.mediaId) : null,
       list: r.listId ? listMap.get(r.listId) : null,
     });
+
+    // Thread context (header title) + ancestor chain (root-first) so a deep-linked reply
+    // (e.g. from "My Comments") shows its parents and names the thread.
+    const context = (await this.threadContexts([r])).get(r.id) ?? null;
+
+    // Review replies: the "parent" is a provider review, not a comment — attach it as a
+    // pseudo-comment (kind='review') so the thread page can render it above the reply.
+    let review: any = null;
+    if (r.externalReviewId) {
+      const er = await this.prisma.externalReview.findUnique({
+        where: { id: r.externalReviewId },
+      });
+      if (er) {
+        const [erLiked, erReplies] = await Promise.all([
+          this.prisma.externalReviewLike.findUnique({
+            where: {
+              userId_externalReviewId: { userId, externalReviewId: er.id },
+            },
+          }),
+          this.prisma.comment.count({
+            where: {
+              externalReviewId: er.id,
+              deletedByUser: false,
+              adminDeleted: false,
+              hidden: false,
+            },
+          }),
+        ]);
+        review = this.toReviewDto(er, r.threadType, r.threadId, !!erLiked, erReplies);
+      }
+    }
+
+    const ancestors: any[] = [];
+    let cursor = r.parentId;
+    const seen = new Set<string>([r.id]);
+    while (cursor && ancestors.length < 10 && !seen.has(cursor)) {
+      seen.add(cursor);
+      const p = await this.prisma.comment.findUnique({
+        where: { id: cursor },
+        include: { user: { include: { profile: true } }, image: true },
+      });
+      if (!p || p.hidden || p.adminDeleted) break;
+      ancestors.unshift(p);
+      cursor = p.parentId;
+    }
+    if (!ancestors.length) return { ...dto, context, ancestors: [], review };
+
+    const aCounts = await this.authorCounts([...new Set(ancestors.map((a) => a.userId))]);
+    const aLiked = await this.likedIds(
+      userId,
+      ancestors.map((a) => a.id),
+    );
+    const aSpoiler = await this.spoilerReportedIds(
+      userId,
+      ancestors.map((a) => a.id),
+    );
+    const aMedia = await this.mediaRefs(
+      ancestors.map((a) => a.mediaId).filter(Boolean) as string[],
+    );
+    const aLists = await this.listRefs(ancestors.map((a) => a.listId).filter(Boolean) as string[]);
+    const ancestorDtos = ancestors.map((a) =>
+      this.toDto(
+        a,
+        aCounts.get(a.userId)!,
+        aLiked.has(a.id),
+        {
+          media: a.mediaId ? aMedia.get(a.mediaId) : null,
+          list: a.listId ? aLists.get(a.listId) : null,
+        },
+        aSpoiler.has(a.id),
+      ),
+    );
+    return { ...dto, context, ancestors: ancestorDtos, review };
   }
 
   /** Paginated list of the user's own comments (newest first) with thread context labels. */
@@ -791,6 +873,15 @@ export class CommentsService {
         where: { externalReviewId: id, deletedByUser: false, adminDeleted: false, hidden: false },
       }),
     ]);
+    const threadType = r.episodeId ? 'EPISODE' : (r.media?.type ?? 'SHOW');
+    const threadId = r.episodeId ?? r.mediaId;
+    // Display context so the review thread page can title itself with the media name.
+    const context =
+      (
+        await this.threadContexts([
+          { id: 'review', threadType: threadType as any, threadId: threadId! },
+        ])
+      ).get('review') ?? null;
     return {
       id: r.id,
       provider: r.provider,
@@ -805,8 +896,9 @@ export class CommentsService {
       likesCount: r.likesCount,
       likedByMe: !!liked,
       // The thread this review belongs to (for the reply composer).
-      threadType: r.episodeId ? 'EPISODE' : (r.media?.type ?? 'SHOW'),
-      threadId: r.episodeId ?? r.mediaId,
+      threadType,
+      threadId,
+      context,
     };
   }
 

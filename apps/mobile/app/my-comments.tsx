@@ -9,7 +9,7 @@ import { EmptyState, Screen, Spinner, T } from '../components/primitives';
 import { useMyComments } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
-import { formatRelativeShort } from '../components/comments/thread-utils';
+import { formatRelativeShort, threadContextLabel } from '../components/comments/thread-utils';
 
 const THREAD_ICONS = {
   SHOW: 'tv-outline',
@@ -86,11 +86,7 @@ function MyCommentRow({ item, onPress }: { item: MyCommentDto; onPress: () => vo
   const { t } = useTranslation(['comments', 'groups']);
   const ctx = item.context;
   const icon = THREAD_ICONS[ctx?.threadType ?? item.threadType] ?? 'chatbubble-outline';
-  const label = ctx
-    ? ctx.threadType === 'GROUP'
-      ? t(`groups:names.${ctx.groupId ?? ctx.label}`, { defaultValue: ctx.label })
-      : ctx.label
-    : '';
+  const label = threadContextLabel(ctx, t);
 
   return (
     <Pressable

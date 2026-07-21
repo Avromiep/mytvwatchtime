@@ -11,6 +11,7 @@ import { CommentComposer } from './CommentComposer';
 import { CommentEditDialog } from './CommentEditDialog';
 import { useCommentActions } from './useCommentActions';
 import { feedColumn } from './layout';
+import { threadContextLabel } from './thread-utils';
 import {
   useCommentsFeed,
   useMe,
@@ -33,7 +34,7 @@ export function CommentsFeed({
   title: string;
 }) {
   const { tokens } = useAppearance();
-  const { t } = useTranslation(['comments', 'common']);
+  const { t } = useTranslation(['comments', 'common', 'groups']);
 
   const [sort, setSort] = useState<CommentSortMode>('LATEST');
   const [editing, setEditing] = useState<CommentDto | null>(null);
@@ -48,6 +49,10 @@ export function CommentsFeed({
   const items: CommentDto[] = feed.data?.pages.flatMap((p) => p.items) ?? [];
   const total = feed.data?.pages[0]?.total ?? 0;
   const isFetchingNextPage = feed.isFetchingNextPage;
+  // Header names the thread (show/movie/episode title, localized group name) once the
+  // first page arrives; the caller-provided title is the fallback.
+  const threadCtx = feed.data?.pages[0]?.thread;
+  const headerTitle = threadCtx ? threadContextLabel(threadCtx, t) || title : title;
 
   // Reviews are first-class thread roots: they open their own thread page and like
   // through the review endpoint; everything else behaves like a normal comment card.
@@ -83,7 +88,7 @@ export function CommentsFeed({
       behavior="padding"
     >
       <Screen style={{ flex: 1 }}>
-        <Header title={title} showBack />
+        <Header title={headerTitle} showBack />
 
         {/* Centered feed column: full-width on mobile, capped + centered on desktop/tablet. */}
         <View style={[feedColumn.root, { flex: 1 }]}>

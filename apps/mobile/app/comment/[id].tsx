@@ -1,22 +1,28 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, View } from 'react-native';
+import { FlatList, KeyboardAvoidingView, Pressable, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import type { CommentDto, Paginated } from '@tvwatch/shared';
 import { Header } from '../../components/Header';
-import { Button, EmptyState, Screen, Spinner, T } from '../../components/primitives';
+import { EmptyState, Screen, Spinner, T } from '../../components/primitives';
 import { SortBar } from '../../components/comments/SortBar';
+import { CommentCard } from '../../components/comments/CommentCard';
 import { NodeContent, ThreadNode, type ThreadHandlers } from '../../components/comments/ThreadNode';
 import { CommentComposer } from '../../components/comments/CommentComposer';
 import { CommentEditDialog } from '../../components/comments/CommentEditDialog';
 import { useCommentActions } from '../../components/comments/useCommentActions';
 import { feedColumn } from '../../components/comments/layout';
-import { buildChildrenMap, type ExpandedNode } from '../../components/comments/thread-utils';
+import {
+  buildChildrenMap,
+  threadContextLabel,
+  type ExpandedNode,
+} from '../../components/comments/thread-utils';
 import {
   useComment,
   useCommentReplies,
   useMe,
   useToggleCommentLike,
+  useToggleExternalReviewLike,
   type CommentSortMode,
 } from '../../api/hooks';
 import { api } from '../../api/client';
@@ -26,7 +32,7 @@ import { showError } from '../../lib/dialog';
 
 export default function CommentThreadScreen() {
   const { tokens } = useAppearance();
-  const { t } = useTranslation(['comments', 'common']);
+  const { t } = useTranslation(['comments', 'common', 'groups']);
   const params = useLocalSearchParams<{ id: string; highlight?: string }>();
   const id = params.id;
 
@@ -55,6 +61,7 @@ export default function CommentThreadScreen() {
 
   const replies = useCommentReplies(id, sort, { polling: true, depth: 2 });
   const like = useToggleCommentLike();
+  const reviewLike = useToggleExternalReviewLike();
   const { openOverflow } = useCommentActions({ onEdit: setEditing });
 
   const rootItems = useMemo(
@@ -215,6 +222,28 @@ export default function CommentThreadScreen() {
 
   const ListHeader = parent ? (
     <View style={{ paddingBottom: spacing.sm }}>
+      {/* Review parent: this comment replies to a provider review — show it (with the
+          TMDB badge) above the reply; tapping it opens the full review thread. */}
+      {parent.review ? (
+        <View style={{ marginBottom: spacing.sm }}>
+          <CommentCard
+            comment={parent.review}
+            isOwner={false}
+            onLike={(c) => reviewLike.mutate({ reviewId: c.reviewId!, liked: c.likedByMe })}
+            onOpenThread={(c) => router.push(`/review/${c.reviewId}` as any)}
+            onOverflow={() => undefined}
+            showReplyAction={false}
+            interactive
+          />
+        </View>
+      ) : null}
+      {/* Ancestor chain (root-first) when this comment is a reply — deep links from
+          "My Comments" show the parents above the target comment. */}
+      {(parent.ancestors ?? []).map((a) => (
+        <View key={a.id} style={{ opacity: 0.75 }}>
+          <NodeContent comment={a} depth={0} collapsed={false} handlers={handlers} />
+        </View>
+      ))}
       <NodeContent
         comment={parent}
         depth={0}
@@ -235,6 +264,10 @@ export default function CommentThreadScreen() {
     </View>
   ) : null;
 
+  const headerTitle = parent?.context
+    ? threadContextLabel(parent.context, t) || t('comments:threadTitle')
+    : t('comments:threadTitle');
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: tokens.background }}
@@ -242,20 +275,25 @@ export default function CommentThreadScreen() {
     >
       <Screen style={{ flex: 1 }}>
         <Header
-          title={t('comments:threadTitle')}
+          title={headerTitle}
           showBack
           right={
-            parent?.parentId ? (
-              <Button
-                title={t('comments:viewFullThread')}
-                variant="ghost"
+            parent ? (
+              // Compact text action (not the pill Button): the 48dp button would grow the
+              // 40dp header row and push the back arrow down a few pixels.
+              <Pressable
                 onPress={() =>
                   router.push(
                     `/comments?type=${parent.threadType}&threadId=${encodeURIComponent(parent.threadId)}` as any,
                   )
                 }
-                style={{ paddingHorizontal: spacing.sm }}
-              />
+                hitSlop={8}
+                accessibilityRole="button"
+              >
+                <T variant="caption" style={{ color: tokens.primary, fontWeight: '700' }}>
+                  {t('comments:viewFullThread')}
+                </T>
+              </Pressable>
             ) : undefined
           }
         />

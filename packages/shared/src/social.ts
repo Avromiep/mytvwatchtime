@@ -104,6 +104,8 @@ export interface ExternalReviewDto {
   /** The comment thread this review belongs to (for the reply composer). */
   threadType: 'SHOW' | 'MOVIE' | 'EPISODE';
   threadId: string;
+  /** Display context for the review thread page header (media/episode label). */
+  context?: MyCommentContextDto | null;
 }
 
 export interface CommentRepliesQuery extends PaginationQuery {
@@ -144,7 +146,35 @@ export interface UpdateCommentDto {
   detachImage?: boolean;
 }
 
-export interface PaginatedComments extends Paginated<CommentDto> {}
+export interface PaginatedComments extends Paginated<CommentDto> {
+  /** Display context (title label + navigation ids) for the whole thread. */
+  thread?: MyCommentContextDto | null;
+}
+
+/** Thread context attached to comments in the "my comments" list. */
+export interface MyCommentContextDto {
+  threadType: 'SHOW' | 'MOVIE' | 'EPISODE' | 'GROUP';
+  threadId: string;
+  /** Display label: media title, "Show · S01E05" for episodes, or the group slug (localized client-side via `groups:names.<id>`). */
+  label: string;
+  /** Episode title for EPISODE threads. */
+  sublabel?: string | null;
+  mediaType?: 'SHOW' | 'MOVIE';
+  /** Media id for SHOW/MOVIE threads and for an EPISODE thread's parent show. */
+  mediaId?: string | null;
+  episodeId?: string;
+  groupId?: string;
+}
+
+/** Single-comment view (`GET /comments/:id`): the comment plus its thread context and,
+ *  for replies, the ancestor chain (root-first) so deep-links show the parents. */
+export interface CommentThreadDto extends CommentDto {
+  context: MyCommentContextDto | null;
+  ancestors: CommentDto[];
+  /** The provider review this comment replies to (pseudo-comment, kind='review') — set
+   *  only for review replies (externalReviewId), which have no comment ancestors. */
+  review?: CommentDto | null;
+}
 
 /** Thread context attached to comments in the "my comments" list. */
 export interface MyCommentContextDto {

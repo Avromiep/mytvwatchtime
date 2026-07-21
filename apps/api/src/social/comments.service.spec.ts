@@ -43,6 +43,8 @@ function mockPrisma(commentRow: any = makeComment()) {
     commentImage: { findUnique: jest.fn().mockResolvedValue(null) },
     commentLike: { findMany: jest.fn().mockResolvedValue([]) },
     commentSpoilerReport: { findMany: jest.fn().mockResolvedValue([]) },
+    mediaItem: { findMany: jest.fn().mockResolvedValue([]) },
+    episode: { findMany: jest.fn().mockResolvedValue([]) },
     follow: { count: jest.fn().mockResolvedValue(0), groupBy: jest.fn().mockResolvedValue([]) },
     $queryRaw: jest.fn().mockResolvedValue([]),
   };
@@ -158,6 +160,18 @@ describe('CommentsService.create — GIF support', () => {
     expect(list.items[0].gifUrl).toBe('https://media.giphy.com/media/abc/giphy.gif');
     const replies = await service.replies('u1', 'c1', {} as any);
     expect(replies.items[0].gifUrl).toBe('https://media.giphy.com/media/abc/giphy.gif');
+  });
+
+  it('list includes the thread display context for the feed header', async () => {
+    const { service, prisma } = makeService(makeComment({ threadType: 'SHOW', threadId: 'm1' }));
+    prisma.mediaItem.findMany = jest
+      .fn()
+      .mockResolvedValue([
+        { id: 'm1', titles: { en: 'The Show' }, title: 'The Show', show: null, movie: null },
+      ]);
+    const list = await service.list('u1', { threadType: 'SHOW', threadId: 'm1' } as any);
+    expect(list.thread?.label).toBe('The Show');
+    expect(list.thread?.mediaId).toBe('m1');
   });
 
   it('reply with missing parent throws NotFound', async () => {
@@ -285,6 +299,80 @@ describe('CommentsService.findOne', () => {
   it('throws NotFound for hidden comments', async () => {
     const { service } = makeService(makeComment({ hidden: true }));
     await expect(service.findOne('u2', 'c1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('returns thread context and an empty ancestor chain for a top-level comment', async () => {
+    const { service, prisma } = makeService(makeComment({ threadType: 'SHOW', threadId: 'm1' }));
+    prisma.mediaItem.findMany = jest
+      .fn()
+      .mockResolvedValue([
+        { id: 'm1', titles: { en: 'The Show' }, title: 'The Show', show: null, movie: null },
+      ]);
+    const res = await service.findOne('u2', 'c1');
+    expect(res.context?.label).toBe('The Show');
+    expect(res.context?.mediaId).toBe('m1');
+    expect(res.ancestors).toEqual([]);
+  });
+
+  it('returns the ancestor chain (root-first) for a deep reply', async () => {
+    const root = makeComment({
+      id: 'root',
+      body: 'root',
+      userId: 'u3',
+      user: { id: 'u3', username: 'carol', profile: null, createdAt: new Date('2024-01-01') },
+    });
+    const mid = makeComment({
+      id: 'mid',
+      parentId: 'root',
+      depth: 1,
+      rootId: 'root',
+      body: 'mid',
+      userId: 'u2',
+      user: { id: 'u2', username: 'bob', profile: null, createdAt: new Date('2024-01-01') },
+    });
+    const leaf = makeComment({
+      id: 'leaf',
+      parentId: 'mid',
+      depth: 2,
+      rootId: 'root',
+      body: 'leaf',
+    });
+    const { service, prisma } = makeService(leaf);
+    const byId: Record<string, any> = { root, mid, leaf };
+    prisma.comment.findUnique = jest
+      .fn()
+      .mockImplementation(async (args: any) => byId[args.where.id] ?? null);
+    const res = await service.findOne('u1', 'leaf');
+    expect(res.id).toBe('leaf');
+    expect(res.ancestors.map((a: any) => a.id)).toEqual(['root', 'mid']);
+  });
+
+  it('attaches the provider review as pseudo-parent for a review reply', async () => {
+    const { service, prisma } = makeService(
+      makeComment({ body: 'Nice', externalReviewId: 'er1', threadType: 'MOVIE', threadId: 'm1' }),
+    );
+    prisma.externalReview = {
+      findUnique: jest.fn().mockResolvedValue({
+        id: 'er1',
+        provider: 'TMDB',
+        author: 'r96sk',
+        username: 'r96sk',
+        avatarUrl: null,
+        rating: 9,
+        content: 'a cracker!',
+        url: 'https://tmdb/x',
+        likesCount: 1,
+        reviewCreatedAt: new Date('2024-09-11'),
+      }),
+    };
+    prisma.externalReviewLike = { findUnique: jest.fn().mockResolvedValue(null) };
+    prisma.comment.count = jest.fn().mockResolvedValue(1);
+    const res = await service.findOne('u1', 'c1');
+    expect(res.review?.kind).toBe('review');
+    expect(res.review?.reviewId).toBe('er1');
+    expect(res.review?.author.username).toBe('r96sk');
+    expect(res.review?.repliesCount).toBe(1);
+    expect(res.ancestors).toEqual([]);
   });
 });
 
@@ -667,6 +755,8 @@ describe('CommentsService — external review threads (header + likes)', () => {
         count: jest.fn(async () => 7),
       },
       comment: { count: jest.fn().mockResolvedValue(4) },
+      mediaItem: { findMany: jest.fn().mockResolvedValue([]) },
+      episode: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const service = new CommentsService(prisma, { emit: jest.fn() } as any, {} as any, {} as any);
     return { service, prisma };

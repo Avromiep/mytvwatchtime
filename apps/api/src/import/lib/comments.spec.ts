@@ -6,6 +6,7 @@ import {
   dedupeComments,
   commentIdentity,
   parseImageField,
+  parseEmbeddedReplies,
 } from './comments';
 
 // Helper to capture Nest Logger output and assert comment text never appears in logs.
@@ -93,7 +94,7 @@ describe('tvtime comment normalization (comments-prod v2)', () => {
     expect(r.candidates[0].sourceCreatedAt?.getFullYear()).toBe(2019);
   });
 
-  it('imports only the parent when a top-level comment contains embedded replies', () => {
+  it('imports embedded replies of a top-level comment as reply candidates', () => {
     const r = normalizeComments(
       'comments-prod-comments.csv',
       [
@@ -111,9 +112,127 @@ describe('tvtime comment normalization (comments-prod v2)', () => {
       ],
       OWNER,
     );
-    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates).toHaveLength(2);
     expect(r.candidates[0].text).toBe('Top level');
-    expect(r.repliesSkipped).toBe(1); // the embedded reply counted, not imported
+    const reply = r.candidates[1];
+    expect(reply.isReply).toBe(true);
+    expect(reply.parentSourceCommentId).toBe('parent-uuid');
+    expect(reply.text).toBe('inner');
+    expect(reply.authorIsOwner).toBe(false); // no user_id in blob → deleted-user identity '0'
+    expect(reply.sourceAuthorId).toBe('0');
+    expect(r.repliesSkipped).toBe(0);
+  });
+
+  describe('embedded replies blobs (v2 `replies` column)', () => {
+    const parent = {
+      parentSourceCommentId: 'parent-uuid',
+      parentDepth: 0,
+      sourceRow: 1,
+      sourceFile: 'comments-prod-comments.csv',
+      targetType: 'movie' as const,
+      showTitle: null,
+      movieTitle: 'Now You See Me 2',
+      seasonNumber: null,
+      episodeNumber: null,
+      externalEpisodeId: null,
+    };
+    // Real shape from a production export (spaces/emoji in text, scientific-notation ids).
+    const REALISTIC =
+      '[map[comment_id:<nil> comment_uuid:parent-uuid created_at:1.656705025e+09 entity_type:movie ' +
+      'entity_uuid:50c4ba03-8cd6-4748-8c46-5b7a28c1e66f image:<nil> is_spoiler:false lang:en ' +
+      'like_count:0 replies:<nil> reply_count:0 report_count:0 spoiler_count:0 ' +
+      'text:3rd expected in May 2023 😃 type:reply updated_at:1.656705025e+09 ' +
+      'user_id:2.1270298e+07 uuid:46414e8e-d4ba-4d4e-a4f9-37a7c82f7b4d]]';
+
+    it('parses a realistic blob reply: spaces in text, sci-notation ids, epoch floats', () => {
+      const r = parseEmbeddedReplies(REALISTIC, parent, OWNER);
+      expect(r.unparseable).toBe(0);
+      expect(r.replies).toHaveLength(1);
+      const reply = r.replies[0];
+      expect(reply.text).toBe('3rd expected in May 2023 😃'); // full text, not truncated at the first space
+      expect(reply.sourceAuthorId).toBe('21270298'); // 2.1270298e+07 → integer string
+      expect(reply.authorIsOwner).toBe(false);
+      expect(reply.isReply).toBe(true);
+      expect(reply.parentSourceCommentId).toBe('parent-uuid');
+      expect(reply.sourceCommentId).toBe('46414e8e-d4ba-4d4e-a4f9-37a7c82f7b4d');
+      expect(reply.legacyCommentId).toBeNull(); // comment_id:<nil>
+      expect(reply.depth).toBe(1);
+      expect(reply.sourceCreatedAt?.getTime()).toBe(1656705025000);
+      expect(reply.language).toBe('en');
+      expect(reply.spoiler).toBe(false);
+      expect(reply.movieTitle).toBe('Now You See Me 2'); // target inherited from the parent row
+      expect(reply.targetType).toBe('movie');
+    });
+
+    it('attributes owner-authored blob replies to the owner', () => {
+      const blob = `[map[text:my own reply type:reply user_id:${OWNER} uuid:r-1]]`;
+      const r = parseEmbeddedReplies(blob, parent, OWNER);
+      expect(r.replies).toHaveLength(1);
+      expect(r.replies[0].authorIsOwner).toBe(true);
+      expect(r.replies[0].sourceAuthorId).toBe(OWNER);
+    });
+
+    it('maps missing and zero user_id to the shared deleted-user identity', () => {
+      const blob = '[map[text:a type:reply user_id:0 uuid:r-1] map[text:b type:reply uuid:r-2]]';
+      const r = parseEmbeddedReplies(blob, parent, OWNER);
+      expect(r.unparseable).toBe(0);
+      expect(r.replies.map((x) => x.sourceAuthorId)).toEqual(['0', '0']);
+    });
+
+    it('walks nested replies, chaining depth and parent uuid', () => {
+      const blob =
+        '[map[text:outer type:reply user_id:111 uuid:r-1 ' +
+        'replies:[map[text:inner reply type:reply user_id:222 uuid:r-2 replies:<nil>]]]]';
+      const r = parseEmbeddedReplies(blob, parent, OWNER);
+      expect(r.unparseable).toBe(0);
+      expect(r.replies).toHaveLength(2);
+      expect(r.replies[0].depth).toBe(1);
+      expect(r.replies[0].parentSourceCommentId).toBe('parent-uuid');
+      expect(r.replies[1].depth).toBe(2);
+      expect(r.replies[1].parentSourceCommentId).toBe('r-1');
+      expect(r.replies[1].text).toBe('inner reply');
+    });
+
+    it('extracts gif attachments from nested image maps', () => {
+      const blob =
+        '[map[text:look type:reply user_id:111 uuid:r-1 ' +
+        'image:map[format:gif height:270 url:https://media.tenor.co/x.gif width:480]]]';
+      const r = parseEmbeddedReplies(blob, parent, OWNER);
+      expect(r.replies[0].image).toEqual({ url: 'https://media.tenor.co/x.gif', format: 'gif' });
+    });
+
+    it('accepts image-only replies and spoiler flags', () => {
+      const blob =
+        '[map[text:<nil> type:reply user_id:111 uuid:r-1 is_spoiler:true spoiler_count:7 ' +
+        'image:map[format:png url:https://x.co/i.png]]]';
+      const r = parseEmbeddedReplies(blob, parent, OWNER);
+      expect(r.replies).toHaveLength(1);
+      expect(r.replies[0].spoiler).toBe(true);
+      expect(r.replies[0].spoilerCount).toBe(7);
+    });
+
+    it('counts unparseable entries (no text, garbage user_id) without dropping valid ones', () => {
+      const blob =
+        '[map[text: type:reply user_id:111 uuid:r-1] ' +
+        'map[text:ok reply type:reply user_id:222 uuid:r-2] ' +
+        'map[text:bad id type:reply user_id:abc!! uuid:r-3]]';
+      const r = parseEmbeddedReplies(blob, parent, OWNER);
+      expect(r.replies).toHaveLength(1);
+      expect(r.replies[0].sourceCommentId).toBe('r-2');
+      expect(r.unparseable).toBe(2);
+    });
+
+    it('handles empty and <nil> blobs', () => {
+      expect(parseEmbeddedReplies(undefined, parent, OWNER).replies).toHaveLength(0);
+      expect(parseEmbeddedReplies('<nil>', parent, OWNER).replies).toHaveLength(0);
+      expect(parseEmbeddedReplies('[]', parent, OWNER).replies).toHaveLength(0);
+    });
+
+    it("does not split text on a ']' that is not the map end", () => {
+      const blob = '[map[text:see [this] now type:reply user_id:111 uuid:r-1]]';
+      const r = parseEmbeddedReplies(blob, parent, OWNER);
+      expect(r.replies[0].text).toBe('see [this] now');
+    });
   });
 
   it('skips a like row (type=like)', () => {
@@ -168,6 +287,73 @@ describe('tvtime comment normalization (comments-prod v2)', () => {
     expect(r.candidates).toHaveLength(1);
     expect(r.candidates[0].isReply).toBe(true);
     expect(r.candidates[0].parentSourceCommentId).toBe('p-1');
+  });
+
+  it('resolves a v2 reply parent from sort_key when parent_uuid is a self-reference', () => {
+    // Real v2 exports duplicate a reply as comment+reply rows; the reply row's parent_uuid
+    // is the row's OWN uuid — the true parent is embedded in the sort_key.
+    const own = '128a512c-9ad8-44bc-b2f3-27ab5387e8bf';
+    const realParent = 'd3dc7f9b-9e4d-4b7e-bf7a-784519a1d013';
+    const r = normalizeComments(
+      'comments-prod-comments.csv',
+      [
+        {
+          text: 'a reply',
+          user_id: OWNER,
+          type: 'reply',
+          comment_uuid: own,
+          parent_uuid: own,
+          sort_key: `reply-${own}-1715503181-${realParent}`,
+          entity_type: 'movie',
+          movie_name: 'M',
+        },
+      ],
+      OWNER,
+    );
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0].isReply).toBe(true);
+    expect(r.candidates[0].parentSourceCommentId).toBe(realParent);
+  });
+
+  it('treats a self-referencing parent_uuid as parentless when no sort_key parent exists', () => {
+    const own = '128a512c-9ad8-44bc-b2f3-27ab5387e8bf';
+    const r = normalizeComments(
+      'comments-prod-comments.csv',
+      [
+        {
+          text: 'a reply',
+          user_id: OWNER,
+          type: 'reply',
+          comment_uuid: own,
+          parent_uuid: own,
+          entity_type: 'movie',
+          movie_name: 'M',
+        },
+      ],
+      OWNER,
+    );
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0].parentSourceCommentId).toBeNull();
+  });
+
+  it('keeps a genuine parent_uuid that differs from the row id', () => {
+    const own = '128a512c-9ad8-44bc-b2f3-27ab5387e8bf';
+    const r = normalizeComments(
+      'comments-prod-comments.csv',
+      [
+        {
+          text: 'a reply',
+          user_id: OWNER,
+          type: 'reply',
+          comment_uuid: own,
+          parent_uuid: 'd3dc7f9b-9e4d-4b7e-bf7a-784519a1d013',
+          entity_type: 'movie',
+          movie_name: 'M',
+        },
+      ],
+      OWNER,
+    );
+    expect(r.candidates[0].parentSourceCommentId).toBe('d3dc7f9b-9e4d-4b7e-bf7a-784519a1d013');
   });
 
   it('skips an empty comment', () => {

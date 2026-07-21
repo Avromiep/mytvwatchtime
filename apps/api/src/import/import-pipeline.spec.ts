@@ -134,27 +134,38 @@ describe('tvtime import pipeline (fixtures, no DB)', () => {
       }
       // Imported comments (owner top-level + replies + other-user shadows):
       //  - comments-prod-comments-v1.csv: 1 comment (Safe synthetic top-level comment one)
-      //  - comments-prod-comments.csv (v2): 1 comment (parent0002) + embedded reply counted
+      //  - comments-prod-comments.csv (v2): 1 comment (parent0002) + its embedded blob reply
+      //    (user_id 0 → shared deleted-user shadow candidate)
       //  - episode_comment.csv: 1 top-level (3000213) + 1 reply (depth1, 3301835) + 1 other-user (99999)
-      expect(topLevel).toBe(5);
-      // replies skipped: only the embedded blob reply in v2 (row replies are now imported)
-      expect(replies).toBe(1);
+      expect(topLevel).toBe(6);
+      // no unparseable blob entries (the embedded reply is imported, not skipped)
+      expect(replies).toBe(0);
       // other-user rows are imported as shadow candidates, not skipped
       expect(otherUsers).toBe(0);
       // activity: v1 like+report+user-read (3) + episode_comment_like (1) + v2 like (1)
       expect(activity).toBeGreaterThanOrEqual(5);
       expect(invalid).toBe(0);
-      expect(candidates.length).toBe(5);
+      expect(candidates.length).toBe(6);
 
-      // Dedup: all five have distinct source ids → no duplicates.
+      // Dedup: all six have distinct source ids → no duplicates.
       const { unique, duplicates } = dedupeComments(candidates);
-      expect(unique.length).toBe(5);
+      expect(unique.length).toBe(6);
       expect(duplicates).toBe(0);
-      // The reply keeps its parent linkage; the other-user comment is a shadow candidate.
-      const reply = candidates.find((c: any) => c.isReply);
-      expect(reply?.parentSourceCommentId).toBe('3301320');
-      const shadow = candidates.find((c: any) => !c.authorIsOwner);
-      expect(shadow?.sourceAuthorId).toBe('99999');
+      // The row reply keeps its parent linkage; the other-user comment is a shadow candidate.
+      const reply = candidates.find((c: any) => c.parentSourceCommentId === '3301320');
+      expect(reply?.isReply).toBe(true);
+      const shadow = candidates.find((c: any) => c.sourceAuthorId === '99999');
+      expect(shadow?.authorIsOwner).toBe(false);
+      // The embedded blob reply: deleted-user shadow, linked to the parent's uuid.
+      const embedded = candidates.find(
+        (c: any) => c.sourceCommentId === 'child0001-0000-0000-0000-000000000001',
+      );
+      expect(embedded).toBeDefined();
+      expect(embedded.isReply).toBe(true);
+      expect(embedded.authorIsOwner).toBe(false);
+      expect(embedded.sourceAuthorId).toBe('0');
+      expect(embedded.parentSourceCommentId).toBe('parent0002-0000-0000-0000-000000000002');
+      expect(embedded.movieTitle).toBe('Demo Movie Two');
     });
 
     it('a single malformed optional row does not fail the whole pipeline', () => {

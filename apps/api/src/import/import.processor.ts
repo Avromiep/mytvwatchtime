@@ -1834,6 +1834,10 @@ export class ImportProcessor implements OnModuleInit {
 
     const fileInputs = files.map((f) => ({ filename: f.filename, rows: f.rows }));
     const ownerId = resolveArchiveOwner(fileInputs);
+    // Persist for shadow-account claiming at apply time (ImportService.claimShadowAccount).
+    await this.prisma.import
+      .update({ where: { id: importId }, data: { ownerExternalId: ownerId } })
+      .catch(() => undefined);
 
     // ----- Ratings -----
     const allRatings: NormalizedImportedRating[] = [];
