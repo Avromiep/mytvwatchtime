@@ -1,4 +1,5 @@
 import {
+  catchUpPushAt,
   isValidTimeZone,
   tzOffsetMs,
   utcFromZoned,
@@ -47,5 +48,25 @@ describe('timezone.util', () => {
   it('isValidTimeZone', () => {
     expect(isValidTimeZone('Europe/Rome')).toBe(true);
     expect(isValidTimeZone('not-a-zone')).toBe(false);
+  });
+
+  describe('catchUpPushAt (no midnight pushes, never skipped)', () => {
+    const now = new Date('2026-07-15T16:00:00Z');
+    const nextSlot = new Date('2026-07-16T12:00:00Z');
+
+    it('future slots are untouched', () => {
+      const slot = new Date('2026-07-15T18:00:00Z');
+      expect(catchUpPushAt(slot, now, 18, nextSlot)).toBe(slot);
+    });
+
+    it('a past slot fires ~10 minutes from now before 21:00 local — however late', () => {
+      const slot = new Date('2026-07-15T11:00:00Z'); // 5h late
+      expect(catchUpPushAt(slot, now, 16, nextSlot).toISOString()).toBe('2026-07-15T16:10:00.000Z');
+    });
+
+    it('at/after 21:00 local it defers to the next-day slot instead of firing at night', () => {
+      const slot = new Date('2026-07-15T20:00:00Z');
+      expect(catchUpPushAt(slot, new Date('2026-07-15T22:00:00Z'), 22, nextSlot)).toBe(nextSlot);
+    });
   });
 });

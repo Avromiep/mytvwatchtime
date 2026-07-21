@@ -67,3 +67,16 @@ export function isValidTimeZone(tz: string): boolean {
     return false;
   }
 }
+
+/**
+ * Late-slot catch-up policy for scheduled notifications. A slot that already passed
+ * fires ~10min from now when the user's local evening hasn't started (< 21:00);
+ * at/after 21:00 local it DEFERS to `nextSlot` (the caller's next-day first spread
+ * slot) — notifications are NEVER skipped, they just never land as midnight
+ * "airs today" pings.
+ */
+export function catchUpPushAt(pushAt: Date, now: Date, localHour: number, nextSlot: Date): Date {
+  if (pushAt > now) return pushAt;
+  if (localHour >= 21) return nextSlot;
+  return new Date(now.getTime() + 10 * 60 * 1000);
+}

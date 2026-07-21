@@ -8,7 +8,12 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingService } from '../common/setting.service';
 import { NotificationService } from './notification.service';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
-import { utcFromZoned, zonedDayRange, zonedParts } from '../common/utils/timezone.util';
+import {
+  catchUpPushAt,
+  utcFromZoned,
+  zonedDayRange,
+  zonedParts,
+} from '../common/utils/timezone.util';
 import { pickReminderShow, type ReminderCandidate } from './watchlist-reminder.util';
 
 @Injectable()
@@ -75,15 +80,13 @@ export class NotificationScheduler {
         });
         for (const { userId } of watchlistUsers) {
           if (!perUser.has(userId)) perUser.set(userId, []);
-          perUser
-            .get(userId)!
-            .push({
-              ep,
-              media,
-              isSeasonPremiere: false,
-              isSeriesPremiere: true,
-              lastWatchedAt: null,
-            });
+          perUser.get(userId)!.push({
+            ep,
+            media,
+            isSeasonPremiere: false,
+            isSeriesPremiere: true,
+            lastWatchedAt: null,
+          });
         }
         continue;
       }
@@ -156,7 +159,18 @@ export class NotificationScheduler {
           pushAt.setHours(spreadStartHour + slotOffset, 0, 0, 0);
         }
         if (pushAt <= now) {
-          pushAt.setTime(now.getTime() + 10 * 60 * 1000);
+          // The ideal slot already passed — fire ~now, unless the local evening has
+          // started (>= 21:00); then DEFER to tomorrow's first spread slot in the
+          // user's tz (never skip, never a midnight "airs today" push).
+          const localHour = tz ? zonedParts(now, tz).hour : now.getHours();
+          let nextSlot: Date;
+          if (tz) {
+            const p = zonedParts(now, tz);
+            nextSlot = utcFromZoned(tz, p.year, p.month, p.day + 1, spreadStartHour, 0);
+          } else {
+            nextSlot = new Date(day.end.getTime() + spreadStartHour * 3_600_000);
+          }
+          pushAt = catchUpPushAt(pushAt, now, localHour, nextSlot);
         }
 
         const title = isSeasonPremiere

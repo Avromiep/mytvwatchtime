@@ -94,7 +94,7 @@
 - Expo Go: works via Expo Push API with `EXPO_ACCESS_TOKEN`.
 - Dev build: requires Firebase `google-services.json` in `android/app/` + gradle plugins in both `build.gradle` files.
 - Self-hosted: `PUSH_MODE=relay` sends through public server's `/api/push/relay` endpoint.
-- Episode notifications spread across afternoon (noon→3pm→4pm...), computed **per user in their device timezone** (devices register with `timezone` from `Intl.DateTimeFormat().resolvedOptions().timeZone`; latest active device wins, then `NotificationPreference.timezone`, then server tz). "Today" is the user's local day (`common/utils/timezone.util.ts` — Intl-based, DST-safe). Devices re-register on every app start, which also backfills tz for pre-feature users.
+- Episode notifications spread across afternoon (noon→3pm→4pm...), computed **per user in their device timezone** (devices register with `timezone` from `Intl.DateTimeFormat().resolvedOptions().timeZone`; latest active device wins, then `NotificationPreference.timezone`, then server tz). "Today" is the user's local day (`common/utils/timezone.util.ts` — Intl-based, DST-safe). Devices re-register on every app start, which also backfills tz for pre-feature users — including WEB (`useWebPush` re-registers even when a PushSubscription already exists; the old early-return left pre-tz web devices at tz=NULL forever). A slot that already passed fires +10min when it's before 21:00 local, and DEFERS to the next day's first spread slot (user tz) at/after 21:00 local (`catchUpPushAt`) — notifications are NEVER skipped and never land as midnight "airs today" pushes (quiet-hours prefs exist but are NOT enforced anywhere).
 
 ## Self-hosted backend support
 - Mobile app has a "Self-hosted backend" checkbox on login/register.

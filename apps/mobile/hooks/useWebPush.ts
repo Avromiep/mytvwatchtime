@@ -30,21 +30,21 @@ export function useWebPush(enabled: boolean) {
         if (permission !== 'granted') return;
 
         const reg = await navigator.serviceWorker.ready;
-        const existing = await reg.pushManager.getSubscription();
-        if (existing) {
-          subscribed = true;
-          return;
+        let subscription = await reg.pushManager.getSubscription();
+        if (!subscription) {
+          const flags = await api.get<Record<string, any>>('/feature-flags');
+          const publicKey = flags.vapid_public_key;
+          if (!publicKey) return;
+
+          subscription = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicKey),
+          });
         }
 
-        const flags = await api.get<Record<string, any>>('/feature-flags');
-        const publicKey = flags.vapid_public_key;
-        if (!publicKey) return;
-
-        const subscription = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(publicKey),
-        });
-
+        // Register (or refresh) with the server on EVERY app start — the upsert carries
+        // the device timezone used for per-user notification scheduling. Returning early
+        // for existing subscriptions left pre-tz devices with tz=NULL forever (no backfill).
         const sub = subscription.toJSON();
         await api.post('/devices/register', {
           token: subscription.endpoint,
