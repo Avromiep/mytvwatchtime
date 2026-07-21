@@ -61,6 +61,15 @@ import { normalizeTvTimeJsonLists } from './lib/tvtime-json/lists';
 import { normalizeTvTimeJsonRatings } from './lib/tvtime-json/ratings';
 import { normalizeTvTimeWatchlistCsv } from './lib/tvtime-json/activity';
 import { mediaKey } from './lib/tvtime-json/types';
+import {
+  isTvTimeOutArchive,
+  isTvTimeOutStandaloneFile,
+  classifyTvTimeOutFile,
+  type TvTimeOutFileKind,
+} from './lib/tvtime-out/detect';
+import { normalizeTvTimeOutSeries } from './lib/tvtime-out/series';
+import { normalizeTvTimeOutMovies } from './lib/tvtime-out/movies';
+import { normalizeTvTimeOutFailed } from './lib/tvtime-out/failed';
 
 export const IMPORT_QUEUE = 'imports';
 
@@ -169,6 +178,12 @@ export class ImportProcessor implements OnModuleInit {
       // import unwatched rows as watched).
       const tvTimeJsonEntries = this.tvTimeJsonEntriesFor(imp, bytes);
       if (tvTimeJsonEntries) return await this.runTvTimeJsonBody(importId, tvTimeJsonEntries);
+
+      // TV Time Out (browser extension) export? Dated tvtime-*.json files — the
+      // markers can't collide with the Trakt or tvtime-json detectors, but this is
+      // still checked before CSV inference.
+      const tvTimeOutEntries = this.tvTimeOutEntriesFor(imp, bytes);
+      if (tvTimeOutEntries) return await this.runTvTimeOutBody(importId, tvTimeOutEntries);
 
       const files = this.extractAndParse(imp.sourceType, imp.originalFilename ?? 'upload', bytes);
       await this.setStatus(importId, 'PARSING', { totalFiles: files.length, progress: 5 });
@@ -1786,6 +1801,378 @@ export class ImportProcessor implements OnModuleInit {
       });
       this.logger.log(
         `Import ${importId} (tvtime-json): staged episodes=${showsRes.episodes.length} movies=${moviesRes.watched.length} watchlist=${moviesRes.watchlist.length + watchlistShows.length} favorites=${favorites.length} ratings=${ratingsRes.candidates.length} lists=${lists.length}`,
+      );
+    } catch (e) {
+      this.logger.error(`Import ${importId} failed: ${(e as Error).message}`);
+      await this.setStatus(importId, 'FAILED', {
+        errorMessage: (e as Error).message?.slice(0, 1000),
+      });
+    }
+  }
+
+  /** Zip entries (or a synthetic single-file entry) when the upload is a TV Time Out export; else null. */
+  private tvTimeOutEntriesFor(imp: any, bytes: Buffer): ZipEntry[] | null {
+    if (imp.sourceType === 'zip') {
+      const { entries } = inspectZip(bytes);
+      return isTvTimeOutArchive(entries.map((e) => e.filename)) ? entries : null;
+    }
+    const name = imp.originalFilename ?? '';
+    if (imp.sourceType === 'json' && isTvTimeOutStandaloneFile(name)) {
+      return [{ filename: name, size: bytes.length, isSupported: true, getData: () => bytes }];
+    }
+    return null;
+  }
+
+  /**
+   * TV Time Out (browser extension) export pipeline. Mirrors runTvTimeJsonBody but parses the
+   * dated tvtime-series/tvtime-movies JSON files; tvtime-failed is logged for reporting
+   * only and the tvtime-summary HTML file is unsupported. No ratings/emotions/comments/lists exist in
+   * this format. `Import.format` stays 'tvtime' (default) so the apply stage tags records
+   * source=TVTIME, sharing the conflict domain with legacy TV Time CSV + JSON imports (same
+   * underlying TV Time account data).
+   */
+  private async runTvTimeOutBody(importId: string, entries: ZipEntry[]) {
+    try {
+      await this.setStatus(importId, 'PARSING', { totalFiles: entries.length, progress: 10 });
+
+      // ---- PARSING ----
+      const parsed: {
+        filename: string;
+        kind: TvTimeOutFileKind;
+        data: unknown;
+        size: number;
+        failed: boolean;
+      }[] = [];
+      for (const e of entries) {
+        const kind = e.isSupported ? classifyTvTimeOutFile(e.filename) : 'unsupported';
+        if (kind === 'unsupported' || kind === 'summary') {
+          parsed.push({ filename: e.filename, kind, data: null, size: e.size, failed: false });
+          continue;
+        }
+        try {
+          parsed.push({
+            filename: e.filename,
+            kind,
+            data: JSON.parse(e.getData().toString('utf8')),
+            size: e.size,
+            failed: false,
+          });
+        } catch {
+          this.logger.warn(`Import ${importId}: unparseable ${e.filename} — file skipped`);
+          parsed.push({ filename: e.filename, kind, data: null, size: e.size, failed: true });
+        }
+      }
+      let totalRows = 0;
+      for (const f of parsed) {
+        const status =
+          f.failed || f.kind === 'unsupported' || f.kind === 'summary' ? 'unsupported' : 'parsed';
+        const rowCount = f.failed ? 0 : Array.isArray(f.data) ? f.data.length : f.data ? 1 : 0;
+        if (status === 'parsed') totalRows += rowCount;
+        await this.prisma.importFile.create({
+          data: {
+            importId,
+            filename: f.filename,
+            detectedType: f.kind === 'summary' ? 'html' : 'json',
+            fileSizeBytes: f.size,
+            rowCount,
+            headers: [],
+            status,
+          },
+        });
+      }
+      if (totalRows > IMPORT_LIMITS.MAX_ROWS) {
+        throw new Error(`Too many rows (${totalRows} > ${IMPORT_LIMITS.MAX_ROWS})`);
+      }
+
+      // ---- NORMALIZING ----
+      await this.setStatus(importId, 'NORMALIZING', { totalRows, progress: 15 });
+      const ok = parsed.filter((f) => !f.failed);
+      const dataOf = (kind: TvTimeOutFileKind) =>
+        ok.filter((f) => f.kind === kind).map((f) => f.data);
+
+      const seriesResults = dataOf('series').map((d) => normalizeTvTimeOutSeries(d));
+      const episodes = seriesResults.flatMap((r) => r.episodes);
+      const footprints = new Map(seriesResults.flatMap((r) => [...r.footprints.entries()]));
+      const watchlistShows = seriesResults.flatMap((r) => r.watchlist);
+      const showFavorites = seriesResults.flatMap((r) => r.favorites);
+      const seriesInvalid = seriesResults.reduce((n, r) => n + r.invalid, 0);
+
+      const moviesResults = dataOf('movies').map((d) => normalizeTvTimeOutMovies(d));
+      const watchedMovies = moviesResults.flatMap((r) => r.watched);
+      const watchlistMovies = moviesResults.flatMap((r) => r.watchlist);
+      const movieFavorites = moviesResults.flatMap((r) => r.favorites);
+      const moviesInvalid = moviesResults.reduce((n, r) => n + r.invalid, 0);
+
+      const failedReports = dataOf('failed').map((d) => normalizeTvTimeOutFailed(d));
+      const failedShows = failedReports.reduce((n, r) => n + r.total, 0);
+      if (failedShows > 0) {
+        this.logger.warn(
+          `Import ${importId} (tvtime-out): ${failedShows} show(s) could not be exported by TV Time Out ` +
+            `(server timeout) — missing from this archive: ${failedReports
+              .flatMap((r) => r.shows.map((s) => s.title ?? `tvdb:${s.tvdbId}`))
+              .slice(0, 20)
+              .join(', ')}`,
+        );
+      }
+
+      const totalCandidates =
+        episodes.length +
+        watchedMovies.length +
+        watchlistShows.length +
+        watchlistMovies.length +
+        showFavorites.length +
+        movieFavorites.length;
+      if (totalCandidates > IMPORT_LIMITS.MAX_ROWS) {
+        throw new Error(`Too many rows (${totalCandidates} > ${IMPORT_LIMITS.MAX_ROWS})`);
+      }
+
+      // ---- MATCHING ----
+      await this.setStatus(importId, 'MATCHING', { progress: 25 });
+      // Distinct shows keyed by strongest external id — one provider lookup per unique show.
+      const showMediaByKey = new Map<string, string>();
+      const hydrated = new Set<string>();
+      const structureGuarded = new Set<string>();
+      const matchShowIds = async (
+        ids: TraktIds,
+        title: string,
+        year: number | null,
+        hydrate: boolean,
+      ) => {
+        const k = mediaKey(ids, normTitle(title));
+        let m: { mediaId: string | null; confidence: number };
+        const cached = showMediaByKey.get(k);
+        if (cached) {
+          m = { mediaId: cached, confidence: 0.95 };
+        } else {
+          m = await this.matcher.matchByExternalIds(
+            ids,
+            'SHOW',
+            title,
+            normTitle(title),
+            year,
+            null,
+          );
+          if (m.mediaId && m.confidence >= 0.7) showMediaByKey.set(k, m.mediaId);
+        }
+        if (m.mediaId && m.confidence >= 0.7) {
+          await this.hydrationQueue
+            .enqueueClassifyCandidate({ mediaId: m.mediaId })
+            .catch(() => undefined);
+          if (hydrate && !hydrated.has(m.mediaId)) {
+            hydrated.add(m.mediaId);
+            await this.matcher.ensureShowHydrated(m.mediaId);
+            const fp = footprints.get(k);
+            if (fp)
+              await this.guardShowStructure(
+                m.mediaId,
+                fp.maxSeason,
+                fp.seasonEpisodes,
+                structureGuarded,
+              );
+          }
+          return m;
+        }
+        return { mediaId: null, confidence: m.confidence };
+      };
+
+      let matched = 0,
+        unmatched = 0,
+        needsReview = 0,
+        invalid = 0;
+      const batch: any[] = [];
+      const flush = async () => {
+        if (!batch.length) return;
+        await this.prisma.importItem.createMany({ data: batch.slice() });
+        batch.length = 0;
+      };
+      const pushItem = async (row: any) => {
+        batch.push(row);
+        if (batch.length >= 200) await flush();
+      };
+
+      // ---- Watched episodes ----
+      // Resolution chain: TVDB episode external id → S/E → TMDB /find recovery.
+      // Special episodes resolve ONLY via the external-id path: their S/E numbers
+      // live in a separate numbering space and would corrupt into regular episodes;
+      // an unresolved special is skipped, never staged.
+      let epIdx = 0;
+      for (const c of episodes) {
+        await this.reportProgress(importId, 25 + (45 * epIdx++) / Math.max(1, episodes.length));
+        const { mediaId } = await matchShowIds(c.showIds, c.showTitle, c.year, true);
+        let episodeId: string | null = null;
+        let confidence = 0;
+        if (mediaId) {
+          episodeId = await this.matcher.resolveEpisodeByExternalIds(mediaId, c.episodeIds);
+          if (!episodeId && !c.special) {
+            episodeId = await this.matcher.resolveEpisode(mediaId, c.season, c.episode);
+            confidence = episodeId ? 0.9 : 0.6;
+            if (!episodeId && c.episodeIds.tvdb != null) {
+              episodeId = await this.matcher.recoverEpisodeByTvdbId(mediaId, c.episodeIds.tvdb);
+            }
+          }
+          confidence = episodeId ? 0.95 : 0;
+        }
+        if (c.special && !episodeId) {
+          invalid++;
+          continue;
+        }
+        let status: string;
+        if (!mediaId) status = 'UNMATCHED';
+        else if (!episodeId) status = 'NEEDS_REVIEW';
+        else status = 'MATCHED';
+        if (status === 'MATCHED') matched++;
+        else if (status === 'UNMATCHED') unmatched++;
+        else needsReview++;
+        await pushItem({
+          importId,
+          rowNumber: 0,
+          sourceEntityType: 'WATCHED_EPISODE' as ImportEntityType,
+          targetEntityType: 'WATCHED_EPISODE' as ImportEntityType,
+          status,
+          rawData: {
+            title: c.showTitle,
+            year: c.year,
+            season: c.season,
+            episode: c.episode,
+            special: c.special,
+            showIds: c.showIds,
+            episodeIds: c.episodeIds,
+          } as any,
+          normalizedData: {
+            title: c.showTitle,
+            normTitle: normTitle(c.showTitle),
+            year: c.year,
+            season: c.season,
+            episode: c.episode,
+            watchedAt: c.watchedAt?.toISOString() ?? null,
+            watchCount: c.watchCount,
+          } as any,
+          matchedMediaId: mediaId,
+          matchedEpisodeId: episodeId,
+          confidenceScore: confidence,
+        });
+      }
+
+      // ---- Watched movies + watchlist + favorites (shared single-media staging) ----
+      const stageMediaItem = async (
+        entityType:
+          | 'WATCHED_MOVIE'
+          | 'WATCHLIST_SHOW'
+          | 'WATCHLIST_MOVIE'
+          | 'FAVORITE_SHOW'
+          | 'FAVORITE_MOVIE',
+        ids: TraktIds,
+        title: string,
+        year: number | null,
+        watchedAt: Date | null,
+        watchCount: number,
+      ) => {
+        const type = entityType.endsWith('_SHOW') ? 'SHOW' : 'MOVIE';
+        const m = await this.matcher.matchByExternalIds(
+          ids,
+          type,
+          title,
+          normTitle(title),
+          year,
+          null,
+        );
+        const cls = this.matcher.classify(m.confidence);
+        if (m.mediaId && cls === 'matched') {
+          await this.hydrationQueue
+            .enqueueClassifyCandidate({ mediaId: m.mediaId })
+            .catch(() => undefined);
+        }
+        const status = !m.mediaId
+          ? cls === 'unmatched'
+            ? 'UNMATCHED'
+            : 'NEEDS_REVIEW'
+          : cls === 'matched'
+            ? 'MATCHED'
+            : 'NEEDS_REVIEW';
+        if (status === 'MATCHED') matched++;
+        else if (status === 'UNMATCHED') unmatched++;
+        else needsReview++;
+        await pushItem({
+          importId,
+          rowNumber: 0,
+          sourceEntityType: entityType as ImportEntityType,
+          targetEntityType: entityType as ImportEntityType,
+          status,
+          rawData: { title, year, ids } as any,
+          normalizedData: {
+            title,
+            normTitle: normTitle(title),
+            year,
+            season: null,
+            episode: null,
+            watchedAt: watchedAt?.toISOString() ?? null,
+            watchCount,
+          } as any,
+          matchedMediaId: m.mediaId,
+          matchedEpisodeId: null,
+          confidenceScore: m.confidence,
+        });
+      };
+      const mediaStageTotal = Math.max(
+        1,
+        watchedMovies.length +
+          watchlistMovies.length +
+          watchlistShows.length +
+          showFavorites.length +
+          movieFavorites.length,
+      );
+      let mediaStageIdx = 0;
+      for (const c of watchedMovies) {
+        await this.reportProgress(importId, 70 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await stageMediaItem(
+          'WATCHED_MOVIE',
+          c.movieIds,
+          c.movieTitle,
+          c.year,
+          c.watchedAt,
+          c.watchCount,
+        );
+      }
+      for (const c of watchlistMovies) {
+        await this.reportProgress(importId, 70 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await stageMediaItem('WATCHLIST_MOVIE', c.ids, c.title, c.year, c.listedAt, 1);
+      }
+      for (const c of watchlistShows) {
+        await this.reportProgress(importId, 70 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await stageMediaItem('WATCHLIST_SHOW', c.ids, c.title, c.year, c.listedAt, 1);
+      }
+      for (const c of [...showFavorites, ...movieFavorites]) {
+        await this.reportProgress(importId, 70 + (15 * mediaStageIdx++) / mediaStageTotal);
+        await stageMediaItem(
+          c.type === 'movie' ? 'FAVORITE_MOVIE' : 'FAVORITE_SHOW',
+          c.ids,
+          c.title,
+          c.year,
+          c.listedAt,
+          1,
+        );
+      }
+      await flush();
+
+      await this.setStatus(importId, 'READY_FOR_REVIEW', {
+        totalFiles: parsed.length,
+        totalRows,
+        progress: 100,
+        ...(await this.statusCounts(importId)),
+        duplicateCount: 0,
+        conflictCount: 0,
+        invalidCount: invalid + seriesInvalid + moviesInvalid,
+        ratingsDetected: 0,
+        ratingsSkippedUnsupported: 0,
+        ratingsSkippedUnresolved: 0,
+        commentRowsDetected: 0,
+        topLevelCommentsDetected: 0,
+        commentRepliesSkipped: 0,
+        commentsSkippedInvalid: 0,
+        commentsSkippedUnresolved: 0,
+      });
+      this.logger.log(
+        `Import ${importId} (tvtime-out): staged episodes=${episodes.length} movies=${watchedMovies.length} watchlist=${watchlistShows.length + watchlistMovies.length} favorites=${showFavorites.length + movieFavorites.length} failedShows=${failedShows}`,
       );
     } catch (e) {
       this.logger.error(`Import ${importId} failed: ${(e as Error).message}`);

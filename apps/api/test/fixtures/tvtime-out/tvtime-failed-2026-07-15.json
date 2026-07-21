@@ -1,0 +1,11 @@
+{
+  "date": "2026-07-15",
+  "total_failed": 1,
+  "message": "These series could not be exported due to TV Time server timeout. Run the export again to retry.",
+  "shows": [
+    {
+      "title": "Alphas",
+      "tvdbId": 210841
+    }
+  ]
+}

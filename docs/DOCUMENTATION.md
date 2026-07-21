@@ -539,11 +539,21 @@ All endpoints under `/api`. Auth: `Authorization: Bearer <token>`.
 ## 11. Import System
 
 ### Supported Sources
-- **ZIP** containing CSV files (TVTime GDPR export), JSON files (Trakt GDPR export), or the mixed JSON+CSV layout (TVTime JSON GDPR export)
+- **ZIP** containing CSV files (TVTime GDPR export), JSON files (Trakt GDPR export), the mixed JSON+CSV layout (TVTime JSON GDPR export), or dated `tvtime-*` JSON files (TV Time Out browser-extension export)
 - **Standalone CSV** (generic)
-- **Standalone JSON** (flexible schema; Trakt-shaped filenames route to the Trakt pipeline, TVTime-shaped ones — `shows.json`/`movies.json`/`favorites.json`/`lists.json` — to the TVTime JSON pipeline)
+- **Standalone JSON** (flexible schema; Trakt-shaped filenames route to the Trakt pipeline, TVTime-shaped ones — `shows.json`/`movies.json`/`favorites.json`/`lists.json` — to the TVTime JSON pipeline, dated `tvtime-series-*`/`tvtime-movies-*` ones to the TV Time Out pipeline)
 
-The provider format is auto-detected (`isTraktArchive` first, then `isTvTimeJsonArchive`, on zip entry names / upload filename) and persisted as `Import.format` (`'tvtime' | 'trakt'`; the TVTime JSON export stays `'tvtime'`). The apply stage tags `Rating`/`Reaction`/`Comment`/`CustomList` records with `source = TVTIME | TRAKT` (Prisma `ListSource`), so both imports stay idempotent independently and never overwrite manual/local data.
+The provider format is auto-detected (`isTraktArchive` first, then `isTvTimeJsonArchive`, then `isTvTimeOutArchive`, on zip entry names / upload filename) and persisted as `Import.format` (`'tvtime' | 'trakt'`; the TVTime JSON and TV Time Out exports stay `'tvtime'` — same underlying account, shared conflict domain). The apply stage tags `Rating`/`Reaction`/`Comment`/`CustomList` records with `source = TVTIME | TRAKT` (Prisma `ListSource`), so both imports stay idempotent independently and never overwrite manual/local data.
+
+### TV Time Out Files Processed
+| File | Entity | Notes |
+|------|--------|-------|
+| `tvtime-series-*.json` | Watched episodes + watchlist + favorites | Every episode carries a TVDB id; `watchCount = max(1, watched_count, rewatch_count + 1)`; fully-unwatched shows → WATCHLIST_SHOW; specials resolve only via the TVDB episode external-id path |
+| `tvtime-movies-*.json` | Watched movies / watchlist / favorites | `is_watched=false` → WATCHLIST_MOVIE; `watchCount = rewatch_count + 1` |
+| `tvtime-failed-*.json` | — | Shows the extension couldn't export; WARN-logged only, never staged |
+| `tvtime-summary-*.html` | — | Unsupported + counted |
+
+No ratings/emotions/comments/lists exist in this format; show `status` is not imported.
 
 ### TVTime Files Processed
 | File | Entity | Rows |

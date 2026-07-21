@@ -1,0 +1,102 @@
+[
+  {
+    "uuid": "ff4c711e-44d9-43df-80f9-c2677559bc90",
+    "id": { "tvdb": 427464, "imdb": null },
+    "created_at": "2023-05-09T21:25:50Z",
+    "title": "The Walking Dead: Daryl Dixon",
+    "status": "continuing",
+    "is_favorite": false,
+    "_noEpisodeData": false,
+    "seasons": [
+      {
+        "number": 1,
+        "is_specials": false,
+        "episodes": [
+          {
+            "id": { "tvdb": 9465441, "imdb": null },
+            "number": 1,
+            "name": "L'anima perduta",
+            "special": false,
+            "is_watched": true,
+            "watched_at": "2025-08-24T15:17:37Z",
+            "rewatch_count": 0,
+            "watched_count": 1
+          },
+          {
+            "id": { "tvdb": 9898747, "imdb": null },
+            "number": 2,
+            "name": "Alouette",
+            "special": false,
+            "is_watched": true,
+            "watched_at": "2025-08-24T15:17:37Z",
+            "rewatch_count": 2,
+            "watched_count": 1
+          },
+          {
+            "id": { "tvdb": 9898748, "imdb": null },
+            "number": 3,
+            "name": "Parigi sara sempre Parigi",
+            "special": false,
+            "is_watched": false,
+            "watched_at": null,
+            "rewatch_count": 0,
+            "watched_count": 0
+          },
+          {
+            "id": { "tvdb": 9900001, "imdb": null },
+            "number": 9,
+            "name": "Behind the scenes",
+            "special": true,
+            "is_watched": true,
+            "watched_at": "2025-08-25T10:00:00Z",
+            "rewatch_count": 0,
+            "watched_count": 4
+          }
+        ]
+      },
+      {
+        "number": 0,
+        "is_specials": true,
+        "episodes": [
+          {
+            "id": { "tvdb": 9900002, "imdb": null },
+            "number": 1,
+            "name": "Special",
+            "special": false,
+            "is_watched": true,
+            "watched_at": "2025-08-26T10:00:00Z",
+            "rewatch_count": 0,
+            "watched_count": 1
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "uuid": "aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb",
+    "id": { "tvdb": 366524, "imdb": null },
+    "created_at": "2024-01-10T08:00:00Z",
+    "title": "The Bear",
+    "status": "not_started_yet",
+    "is_favorite": true,
+    "_noEpisodeData": false,
+    "seasons": [
+      {
+        "number": 1,
+        "is_specials": false,
+        "episodes": [
+          {
+            "id": { "tvdb": 8800001, "imdb": null },
+            "number": 1,
+            "name": "System",
+            "special": false,
+            "is_watched": false,
+            "watched_at": null,
+            "rewatch_count": 0,
+            "watched_count": 0
+          }
+        ]
+      }
+    ]
+  }
+]

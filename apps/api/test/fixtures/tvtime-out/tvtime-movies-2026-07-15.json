@@ -1,0 +1,24 @@
+[
+  {
+    "id": { "tvdb": 132202, "imdb": "tt10954600" },
+    "uuid": "ecb0109c-f53c-4d94-95fe-910ef8dda64a",
+    "created_at": "2023-02-17T23:34:11Z",
+    "title": "Ant-Man and the Wasp: Quantumania",
+    "year": 2023,
+    "watched_at": "2024-02-07T22:47:37Z",
+    "is_watched": true,
+    "is_favorite": true,
+    "rewatch_count": 1
+  },
+  {
+    "id": { "tvdb": 367574, "imdb": "tt37038661" },
+    "uuid": "f792bbc9-143b-49eb-a93c-9982a0ec62ba",
+    "created_at": "2025-08-04T15:28:16Z",
+    "title": "Fantasy Football ruined our lives",
+    "year": 2025,
+    "watched_at": null,
+    "is_watched": false,
+    "is_favorite": false,
+    "rewatch_count": 0
+  }
+]
