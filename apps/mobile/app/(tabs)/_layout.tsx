@@ -20,6 +20,9 @@ export default function TabsLayout() {
   const { tokens } = useAppearance();
   const insets = useSafeAreaInsets();
   usePushNotifications(!!user);
+  // Web push registration lives in its own hook (native skips web, web skips native).
+  // Registers on every app start so the device timezone backfills for pre-tz devices.
+  useWebPush(!!user);
 
   // Keep the tab bar clear of the Android system navigation/gesture bar: extend the
   // bar by the bottom safe-area inset and pad its content up above it. Fall back to
@@ -40,7 +43,11 @@ export default function TabsLayout() {
           description: t('common:welcomeDesc'),
           buttons: [
             { label: t('common:maybeLater'), variant: 'secondary' },
-            { label: t('common:goToImport'), variant: 'primary', onPress: () => router.push('/import') },
+            {
+              label: t('common:goToImport'),
+              variant: 'primary',
+              onPress: () => router.push('/import'),
+            },
           ],
         });
       }
@@ -60,9 +67,17 @@ export default function TabsLayout() {
           title: t('common:discordTitle'),
           description: t('common:discordDesc'),
           buttons: [
-            { label: t('common:never'), variant: 'danger', onPress: () => tokenStorage.setDiscordNeverShow() },
+            {
+              label: t('common:never'),
+              variant: 'danger',
+              onPress: () => tokenStorage.setDiscordNeverShow(),
+            },
             { label: t('common:later'), variant: 'secondary' },
-            { label: t('common:join'), variant: 'primary', onPress: () => WebBrowser.openBrowserAsync(DISCORD_URL) },
+            {
+              label: t('common:join'),
+              variant: 'primary',
+              onPress: () => WebBrowser.openBrowserAsync(DISCORD_URL),
+            },
           ],
         });
       }, 3000);
