@@ -1,10 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
   EpisodeLabel,
   MediaType,
   UpcomingBucket,
   WatchNextBucket,
+  type UpcomingGroupDto,
 } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -13,9 +14,14 @@ import { MediaMetadataService } from '../media-metadata/media-metadata.service';
 import { mapEpisode } from '../common/utils/mapper.util';
 import { localized } from '../common/utils/localization.util';
 import { paginate } from '../common/dto/pagination.dto';
+import { pastBucket } from './lib/past-buckets';
 
 /** Max items returned in the "Haven't watched for a while" (NOT_RECENTLY) rail. */
 const NOT_RECENTLY_LIMIT = 10;
+
+/** Past-episodes page size for the upcoming screen's infinite scroll-up. */
+const UPCOMING_PAST_PAGE_SIZE = 10;
+const UPCOMING_PAST_MAX_PAGE_SIZE = 50;
 
 @Injectable()
 export class LibraryService {
@@ -378,25 +384,112 @@ export class LibraryService {
     // TVmaze enrichment is handled by a nightly cron job (NotificationScheduler.refreshAirtimes).
     // This endpoint is a pure DB read — no external API calls.
 
-    // Include the past 7 days too (revealed by scrolling up); default lands on "Today".
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() - 7);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Past side: newest 10 aired episodes (scroll-up history, granular buckets),
+    // paginated further via /me/upcoming/past. Future side unchanged.
+    const pastWhere = {
+      airDate: { lt: today },
+      season: { show: { mediaId: { in: tracked } } },
+    };
+    const include = { season: { include: { show: { include: { media: { include: { show: true } } } } } } };
+    const [pastEpisodesDesc, pastTotal, futureEpisodes] = await Promise.all([
+      this.prisma.episode.findMany({
+        where: pastWhere,
+        include,
+        orderBy: [{ airDate: 'desc' }, { id: 'desc' }],
+        take: UPCOMING_PAST_PAGE_SIZE,
+      }),
+      this.prisma.episode.count({ where: pastWhere }),
+      this.prisma.episode.findMany({
+        where: { airDate: { gte: today }, season: { show: { mediaId: { in: tracked } } } },
+        include,
+        orderBy: [{ airDate: 'asc' }, { season: { number: 'asc' } }, { number: 'asc' }],
+        take: 200,
+      }),
+    ]);
+
+    // Display order is chronological (oldest on top → future at the bottom).
+    const pastItems = await this.mapUpcomingItems([...pastEpisodesDesc].reverse());
+    const futureItems = await this.mapUpcomingItems(futureEpisodes);
+    const items = [...pastItems, ...futureItems];
+
+    const oldest = pastEpisodesDesc[pastEpisodesDesc.length - 1];
+    const result = {
+      groups: this.groupUpcoming(items),
+      past: {
+        hasMore: pastTotal > pastEpisodesDesc.length,
+        cursor: oldest
+          ? { before: oldest.airDate!.toISOString(), beforeId: oldest.id }
+          : null,
+      },
+    };
+    await this.redis.set(cacheKey, result, 60);
+    return result;
+  }
+
+  /**
+   * Older past pages for the upcoming screen's infinite scroll-up. Cursor-based
+   * (airDate + episode id tiebreaker, descending) so newly hydrated old episodes
+   * never shift an offset. Groups are returned in ascending chronological order,
+   * ready to be prepended above the already-loaded past groups.
+   */
+  async upcomingPast(
+    userId: string,
+    opts: { before: string; beforeId: string; limit?: number },
+  ) {
+    const limit = Math.min(Math.max(opts.limit || UPCOMING_PAST_PAGE_SIZE, 1), UPCOMING_PAST_MAX_PAGE_SIZE);
+    const beforeDate = new Date(opts.before);
+    if (Number.isNaN(beforeDate.getTime()) || !opts.beforeId) {
+      throw new BadRequestException('Invalid cursor');
+    }
+
+    const cacheKey = `upcoming:past:${userId}:${currentLanguage()}:${beforeDate.toISOString()}:${opts.beforeId}:${limit}`;
+    const cached = await this.redis.get<any>(cacheKey);
+    if (cached) return cached;
+
+    const tracked = await this.trackedMediaIds(userId);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    // Clamp: never cross into today/future even with a bogus cursor.
+    const effectiveBefore = beforeDate < today ? beforeDate : today;
 
     const episodes = await this.prisma.episode.findMany({
       where: {
-        airDate: { gte: start },
+        airDate: { lt: today },
         season: { show: { mediaId: { in: tracked } } },
+        OR: [
+          { airDate: { lt: effectiveBefore } },
+          { airDate: effectiveBefore, id: { lt: opts.beforeId } },
+        ],
       },
       include: { season: { include: { show: { include: { media: { include: { show: true } } } } } } },
-      orderBy: [{ airDate: 'asc' }, { season: { number: 'asc' } }, { number: 'asc' }],
-      take: 200,
+      orderBy: [{ airDate: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
     });
 
+    const hasMore = episodes.length > limit;
+    const page = episodes.slice(0, limit);
+    const items = await this.mapUpcomingItems([...page].reverse());
+    const oldest = page[page.length - 1];
+    const result = {
+      groups: this.groupUpcoming(items),
+      hasMore,
+      cursor: oldest ? { before: oldest.airDate!.toISOString(), beforeId: oldest.id } : null,
+    };
+    await this.redis.set(cacheKey, result, 60);
+    return result;
+  }
+
+  /** Map episode rows to upcoming items (localized media + episode titles). Rows must
+   *  arrive in ascending chronological order. */
+  private async mapUpcomingItems(episodes: any[]) {
     const items = await this.localizeItems(
       episodes.map((e) => {
         const media = e.season.show.media;
-        const bucket = this.upcomingBucket(e.airDate!);
+        const past = pastBucket(e.airDate!);
+        const bucket = past ? past.key : this.upcomingBucket(e.airDate!);
         return {
           id: e.id,
           mediaType: MediaType.SHOW,
@@ -411,6 +504,8 @@ export class LibraryService {
           network: media.show?.network ?? null,
           label: this.episodeLabel(e, 0),
           bucket,
+          bucketParams: past?.params,
+          bucketLabel: past?.label,
           watched: false,
         };
       }) as any[],
@@ -431,11 +526,39 @@ export class LibraryService {
         if (f) it.episodeTitle = localized(f, 'titles', 'title') ?? it.episodeTitle;
       }
     }
+    return items;
+  }
 
-    const groups = this.groupByBucket(items);
-    const result = { groups };
-    await this.redis.set(cacheKey, result, 60);
-    return result;
+  /**
+   * Group chronologically-sorted items by bucket identity (key + params). Insertion
+   * order = chronological order because buckets are monotonic in time.
+   */
+  private groupUpcoming(items: any[]): UpcomingGroupDto[] {
+    const futureLabels: Record<string, string> = {
+      [UpcomingBucket.TODAY]: 'Today',
+      [UpcomingBucket.TOMORROW]: 'Tomorrow',
+      [UpcomingBucket.THIS_WEEK]: 'This Week',
+      [UpcomingBucket.LATER]: 'Later',
+    };
+    const groups: UpcomingGroupDto[] = [];
+    const byIdentity = new Map<string, UpcomingGroupDto>();
+    for (const it of items) {
+      const identity = `${it.bucket}|${JSON.stringify(it.bucketParams ?? null)}`;
+      let g = byIdentity.get(identity);
+      if (!g) {
+        g = {
+          key: it.bucket,
+          label: it.bucketLabel ?? futureLabels[it.bucket] ?? it.bucket,
+          ...(it.bucketParams ? { params: it.bucketParams } : {}),
+          items: [],
+        };
+        byIdentity.set(identity, g);
+        groups.push(g);
+      }
+      const { bucketParams: _p, bucketLabel: _l, ...item } = it;
+      g.items.push(item);
+    }
+    return groups;
   }
 
   async history(
@@ -568,30 +691,6 @@ export class LibraryService {
     if (diffDays === 1) return UpcomingBucket.TOMORROW;
     if (diffDays > 1 && diffDays <= 7) return UpcomingBucket.THIS_WEEK;
     return UpcomingBucket.LATER;
-  }
-
-  private groupByBucket(items: any[]) {
-    const order: string[] = [
-      'EARLIER',
-      UpcomingBucket.TODAY,
-      UpcomingBucket.TOMORROW,
-      UpcomingBucket.THIS_WEEK,
-      UpcomingBucket.LATER,
-    ];
-    const labels: Record<string, string> = {
-      EARLIER: 'Earlier this week',
-      [UpcomingBucket.TODAY]: 'Today',
-      [UpcomingBucket.TOMORROW]: 'Tomorrow',
-      [UpcomingBucket.THIS_WEEK]: 'This Week',
-      [UpcomingBucket.LATER]: 'Later',
-    };
-    return order
-      .map((key) => ({
-        key,
-        label: labels[key] ?? key,
-        items: items.filter((i) => i.bucket === key),
-      }))
-      .filter((g) => g.items.length > 0);
   }
 
   private episodeLabel(ep: any, watchedCount: number): EpisodeLabel | undefined {

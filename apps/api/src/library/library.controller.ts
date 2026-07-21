@@ -1,7 +1,8 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { MediaType } from '@tvwatch/shared';
-import { IsEnum, IsInt, IsOptional, Min } from 'class-validator';
+import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -31,6 +32,22 @@ class HistoryQueryDto {
   pageSize?: number = 20;
 }
 
+class UpcomingPastQueryDto {
+  @IsString()
+  @IsNotEmpty()
+  before!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  beforeId!: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  limit?: number;
+}
+
 @ApiTags('library')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
@@ -46,6 +63,13 @@ export class LibraryController {
   @Get('upcoming')
   upcoming(@CurrentUser('id') userId: string) {
     return this.library.upcoming(userId);
+  }
+
+  // Burst-by-design (infinite scroll-up pagination) — double the global 60/min.
+  @Throttle({ default: { limit: 120, ttl: 60_000 } })
+  @Get('upcoming/past')
+  upcomingPast(@CurrentUser('id') userId: string, @Query() q: UpcomingPastQueryDto) {
+    return this.library.upcomingPast(userId, q);
   }
 
   @Get('history')

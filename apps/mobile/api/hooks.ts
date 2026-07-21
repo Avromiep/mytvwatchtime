@@ -34,6 +34,9 @@ import type {
   ShowStatsDto,
   StatsSummaryDto,
   UpdateCommentDto,
+  UpcomingGroupDto,
+  UpcomingPastCursor,
+  UpcomingPastPageDto,
   UserBadgeDto,
   VoteSectionDto,
   ReactionVoteSectionDto,
@@ -42,7 +45,7 @@ import type {
   ExternalReviewDto,
 } from '@tvwatch/shared';
 import { applyVoteChange, MediaType } from '@tvwatch/shared';
-import { api } from './client';
+import { api, HttpError } from './client';
 import { applyWatchStateToItems } from './watch-next-optimistic';
 import { refreshWidgets } from '../widgets/sync';
 
@@ -89,7 +92,41 @@ export const useWatchNext = () =>
     queryFn: () => api.get<{ items: WatchNextItemDto[] }>('/me/watch-next'),
   });
 export const useUpcoming = () =>
-  useQuery({ queryKey: qk.upcoming, queryFn: () => api.get<{ groups: any[] }>('/me/upcoming') });
+  useQuery({
+    queryKey: qk.upcoming,
+    queryFn: () =>
+      api.get<{
+        groups: UpcomingGroupDto[];
+        past: { hasMore: boolean; cursor: UpcomingPastCursor | null };
+      }>('/me/upcoming'),
+  });
+
+/**
+ * Older past pages for the upcoming screen's infinite scroll-up. `enabled: false`
+ * so nothing loads until the user actually scrolls to the top — fetchNextPage
+ * (triggered by onStartReached) fetches the first page even while disabled.
+ * Callers must only trigger fetchNextPage when `initialCursor` is non-null
+ * (main endpoint's past.hasMore) or a fetched page returned hasMore.
+ */
+export const useUpcomingPast = (initialCursor: UpcomingPastCursor | null) =>
+  useInfiniteQuery({
+    queryKey: [...qk.upcoming, 'past'],
+    queryFn: ({ pageParam }) => {
+      if (!pageParam) throw new Error('No past cursor');
+      return api.get<UpcomingPastPageDto>('/me/upcoming/past', {
+        before: pageParam.before,
+        beforeId: pageParam.beforeId,
+      });
+    },
+    initialPageParam: initialCursor,
+    getNextPageParam: (last) => (last.hasMore ? last.cursor : undefined),
+    enabled: false,
+    gcTime: 5 * 60 * 1000,
+    staleTime: 30 * 1000,
+    // Never retry 4xx (429 throttle / 400 bad cursor) — one silent retry otherwise.
+    retry: (failureCount, error) =>
+      failureCount < 1 && !(error instanceof HttpError && error.status >= 400 && error.status < 500),
+  });
 export const useHistory = (p: { mediaType?: MediaType; page?: number }) =>
   useQuery({
     queryKey: qk.history(p),

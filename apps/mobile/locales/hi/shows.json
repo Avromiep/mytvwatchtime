@@ -18,5 +18,15 @@
   "tomorrow": "कल",
   "thisWeek": "इस सप्ताह",
   "nextWeek": "अगला सप्ताह",
-  "later": "बाद में"
+  "later": "बाद में",
+  "yesterday": "कल",
+  "earlierThisWeek": "इसी सप्ताह पहले",
+  "lastWeek": "पिछला सप्ताह",
+  "lastMonth": "पिछला महीना",
+  "pastMonthsAgo_one": "{{count}} महीना पहले",
+  "pastMonthsAgo_other": "{{count}} महीने पहले",
+  "pastYearsAgo_one": "1 साल पहले",
+  "pastYearsAgo_other": "{{count}} साल पहले",
+  "pastYearsMonthsAgo_one": "{{years}} साल और {{count}} महीना पहले",
+  "pastYearsMonthsAgo_other": "{{years}} साल और {{count}} महीने पहले"
 }

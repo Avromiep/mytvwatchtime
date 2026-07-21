@@ -18,5 +18,15 @@
   "tomorrow": "Domani",
   "thisWeek": "Questa settimana",
   "nextWeek": "Settimana prossima",
-  "later": "Più tardi"
+  "later": "Più tardi",
+  "yesterday": "Ieri",
+  "earlierThisWeek": "All’inizio di questa settimana",
+  "lastWeek": "La settimana scorsa",
+  "lastMonth": "Il mese scorso",
+  "pastMonthsAgo_one": "{{count}} mese fa",
+  "pastMonthsAgo_other": "{{count}} mesi fa",
+  "pastYearsAgo_one": "1 anno fa",
+  "pastYearsAgo_other": "{{count}} anni fa",
+  "pastYearsMonthsAgo_one": "{{years}} anno e {{count}} mese fa",
+  "pastYearsMonthsAgo_other": "{{years}} anno e {{count}} mesi fa"
 }

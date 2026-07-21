@@ -18,5 +18,15 @@
   "tomorrow": "明日",
   "thisWeek": "今週",
   "nextWeek": "来週",
-  "later": "後で"
+  "later": "後で",
+  "yesterday": "昨日",
+  "earlierThisWeek": "今週の初め",
+  "lastWeek": "先週",
+  "lastMonth": "先月",
+  "pastMonthsAgo_one": "{{count}}か月前",
+  "pastMonthsAgo_other": "{{count}}か月前",
+  "pastYearsAgo_one": "1年前",
+  "pastYearsAgo_other": "{{count}}年前",
+  "pastYearsMonthsAgo_one": "{{years}}年{{count}}か月前",
+  "pastYearsMonthsAgo_other": "{{years}}年{{count}}か月前"
 }

@@ -148,6 +148,17 @@ export enum UpcomingBucket {
   LATER = 'LATER',
 }
 
+/** Past-time buckets for the upcoming screen's scroll-up history (granular, calendar-based). */
+export enum UpcomingPastBucket {
+  YESTERDAY = 'YESTERDAY',
+  EARLIER_THIS_WEEK = 'EARLIER_THIS_WEEK',
+  LAST_WEEK = 'LAST_WEEK',
+  LAST_MONTH = 'LAST_MONTH',
+  MONTHS_AGO = 'MONTHS_AGO',
+  YEARS_AGO = 'YEARS_AGO',
+  YEARS_MONTHS_AGO = 'YEARS_MONTHS_AGO',
+}
+
 /** Near-term upcoming groups surfaced by compact UIs (home-screen widgets). */
 export const UPCOMING_NEAR_TERM_BUCKETS: readonly UpcomingBucket[] = [
   UpcomingBucket.TODAY,

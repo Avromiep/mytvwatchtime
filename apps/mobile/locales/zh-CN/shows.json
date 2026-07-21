@@ -18,5 +18,15 @@
   "tomorrow": "明天",
   "thisWeek": "本周",
   "nextWeek": "下周",
-  "later": "稍后"
+  "later": "稍后",
+  "yesterday": "昨天",
+  "earlierThisWeek": "本周早些时候",
+  "lastWeek": "上周",
+  "lastMonth": "上个月",
+  "pastMonthsAgo_one": "{{count}}个月前",
+  "pastMonthsAgo_other": "{{count}}个月前",
+  "pastYearsAgo_one": "1年前",
+  "pastYearsAgo_other": "{{count}}年前",
+  "pastYearsMonthsAgo_one": "{{years}}年{{count}}个月前",
+  "pastYearsMonthsAgo_other": "{{years}}年{{count}}个月前"
 }

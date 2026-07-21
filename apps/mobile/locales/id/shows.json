@@ -18,5 +18,15 @@
   "tomorrow": "Besok",
   "thisWeek": "Minggu ini",
   "nextWeek": "Minggu depan",
-  "later": "Nanti"
+  "later": "Nanti",
+  "yesterday": "Kemarin",
+  "earlierThisWeek": "Awal minggu ini",
+  "lastWeek": "Minggu lalu",
+  "lastMonth": "Bulan lalu",
+  "pastMonthsAgo_one": "{{count}} bulan yang lalu",
+  "pastMonthsAgo_other": "{{count}} bulan yang lalu",
+  "pastYearsAgo_one": "1 tahun yang lalu",
+  "pastYearsAgo_other": "{{count}} tahun yang lalu",
+  "pastYearsMonthsAgo_one": "{{years}} tahun {{count}} bulan yang lalu",
+  "pastYearsMonthsAgo_other": "{{years}} tahun {{count}} bulan yang lalu"
 }

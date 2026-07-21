@@ -18,5 +18,15 @@
   "tomorrow": "Yarın",
   "thisWeek": "Bu hafta",
   "nextWeek": "Gelecek hafta",
-  "later": "Daha sonra"
+  "later": "Daha sonra",
+  "yesterday": "Dün",
+  "earlierThisWeek": "Bu haftanın başlarında",
+  "lastWeek": "Geçen hafta",
+  "lastMonth": "Geçen ay",
+  "pastMonthsAgo_one": "{{count}} ay önce",
+  "pastMonthsAgo_other": "{{count}} ay önce",
+  "pastYearsAgo_one": "1 yıl önce",
+  "pastYearsAgo_other": "{{count}} yıl önce",
+  "pastYearsMonthsAgo_one": "{{years}} yıl ve {{count}} ay önce",
+  "pastYearsMonthsAgo_other": "{{years}} yıl ve {{count}} ay önce"
 }

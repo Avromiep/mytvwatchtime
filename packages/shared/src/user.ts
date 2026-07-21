@@ -1,6 +1,6 @@
 import { Paginated, PaginationQuery } from './common';
 import { EpisodeDto } from './media';
-import { EpisodeLabel, MediaType, UpcomingBucket, WatchNextBucket } from './enums';
+import { EpisodeLabel, MediaType, UpcomingBucket, UpcomingPastBucket, WatchNextBucket } from './enums';
 
 export interface WatchNextItemDto {
   showId: string;
@@ -37,14 +37,28 @@ export interface UpcomingItemDto {
   airTime?: string | null;
   network?: string | null;
   label?: EpisodeLabel;
-  bucket: UpcomingBucket;
+  bucket: UpcomingBucket | UpcomingPastBucket | string;
   watched?: boolean;
 }
 
 export interface UpcomingGroupDto {
-  key: UpcomingBucket;
+  key: UpcomingBucket | UpcomingPastBucket | string;
   label: string;
+  /** Interpolation params for localized labels (MONTHS_AGO count, YEARS_MONTHS_AGO years+months). */
+  params?: { count?: number; years?: number; months?: number };
   items: UpcomingItemDto[];
+}
+
+/** Cursor into the scroll-up past history of the upcoming screen. */
+export interface UpcomingPastCursor {
+  before: string; // ISO airDate of the oldest loaded past item
+  beforeId: string; // episode id tiebreaker
+}
+
+export interface UpcomingPastPageDto {
+  groups: UpcomingGroupDto[];
+  hasMore: boolean;
+  cursor: UpcomingPastCursor | null;
 }
 
 export interface HistoryItemDto {
