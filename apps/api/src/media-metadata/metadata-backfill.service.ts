@@ -124,6 +124,7 @@ export class MetadataBackfillService {
       nonEnglishBase,
       nonEnglishContent,
       bannerAsPoster,
+      missingRating,
     ] = await Promise.all([
       this.prisma.mediaItem.count(),
       this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
@@ -223,6 +224,16 @@ export class MetadataBackfillService {
         SELECT count(*)::bigint AS c FROM media_items m
         WHERE m.poster_url ~ '/banners/[^/]+$'
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB')`,
+      // Actionable rating backlog: no rating stored, has a provider id to resolve
+      // one from, and not already checked (and found unrated at the source) in the
+      // last 90 days. Mostly TVDB-hydrated rows — TVDB has no public 0–10 rating,
+      // so those are born unrated and reach TMDB's vote_average via cross-ids.
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c FROM media_items m
+        WHERE m.rating IS NULL
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider IN ('TMDB','THE_TVDB'))
+          AND (m.metadata_provenance->>'ratingCheckedAt' IS NULL
+               OR (m.metadata_provenance->>'ratingCheckedAt')::timestamptz < NOW() - INTERVAL '90 days')`,
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     return {
@@ -247,6 +258,7 @@ export class MetadataBackfillService {
       nonEnglishBase: toNum(nonEnglishBase as any),
       nonEnglishContent: toNum(nonEnglishContent as any),
       bannerAsPoster: toNum(bannerAsPoster as any),
+      missingRating: toNum(missingRating as any),
     };
   }
 
@@ -1062,6 +1074,169 @@ export class MetadataBackfillService {
       return { processed: candidates.length, succeeded, failed, rateLimited, sample };
     } finally {
       this.charIdFixRunning = false;
+    }
+  }
+
+  // ---- Rating backfill ----
+  private ratingFixRunning = false;
+
+  /**
+   * Fill `media_items.rating` for rows that have none — mostly TVDB-hydrated shows
+   * (anime/animation): TVDB exposes no public 0–10 rating (its `score` is a
+   * popularity rank), so their rows are born unrated. Ratings come from TMDB:
+   *  - row has a TMDB id → ONE light `/tv|movie/{id}` call (vote_average);
+   *  - TVDB-only row → TMDB `/find?external_source=tvdb_id` (authoritative, same
+   *    chain the import matcher trusts) → light base call; no match → IMDB id from
+   *    the TVDB extended record → `/find?external_source=imdb_id` → light base call.
+   * The cross-id is only READ (never attached). Rows the source genuinely has no
+   * rating for are remembered in metadata_provenance.ratingCheckedAt and skipped
+   * for 90 days so the nightly job drains instead of re-checking forever.
+   * Most-popular first, rate-limit early stop. User data untouched.
+   */
+  async backfillRatings(limit?: number): Promise<{
+    processed: number;
+    succeeded: number;
+    failed: number;
+    rateLimited: number;
+    noneAtSource: number;
+    sample: string[];
+  }> {
+    const empty = {
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      rateLimited: 0,
+      noneAtSource: 0,
+      sample: [] as string[],
+    };
+    if (this.ratingFixRunning) {
+      this.logger.log('Rating backfill already running — skipping');
+      return empty;
+    }
+    this.ratingFixRunning = true;
+    this.trackRepair('ratings', {
+      running: true,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      finishedAt: null,
+    });
+    try {
+      const take = Math.max(1, Math.min(limit ?? 500, 100000));
+      const candidates = await this.prisma.$queryRaw<
+        { id: string; title: string; type: MediaType; tmdb_id: string | null; tvdb_id: string | null }[]
+      >`
+        SELECT m.id, m.title, m.type,
+          (SELECT e.value FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB'
+             AND e.provider_entity_kind = (CASE WHEN m.type = 'SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind"
+             LIMIT 1) AS tmdb_id,
+          (SELECT e.value FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB'
+             AND e.provider_entity_kind = (CASE WHEN m.type = 'SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind"
+             LIMIT 1) AS tvdb_id
+        FROM media_items m
+        WHERE m.rating IS NULL
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider IN ('TMDB','THE_TVDB'))
+          AND (m.metadata_provenance->>'ratingCheckedAt' IS NULL
+               OR (m.metadata_provenance->>'ratingCheckedAt')::timestamptz < NOW() - INTERVAL '90 days')
+        ORDER BY m.popularity DESC
+        LIMIT ${take}
+      `;
+
+      this.trackRepair('ratings', { total: candidates.length });
+
+      let succeeded = 0;
+      let failed = 0;
+      let rateLimited = 0;
+      let noneAtSource = 0;
+      const sample: string[] = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const m = candidates[i];
+        this.trackRepair('ratings', {
+          processed: i + 1,
+          succeeded,
+          failed,
+          current: m.title,
+        });
+        try {
+          let rating: number | null = null;
+          // Resolve the TMDB id: stored external id, else the authoritative
+          // cross-id chain (tvdb_id find → imdb_id find via TVDB extended).
+          let tmdbId = m.tmdb_id ? Number(m.tmdb_id) : null;
+          if (this.tmdbProvider.enabled) {
+            if (!tmdbId && m.tvdb_id) {
+              const found = await this.tmdbProvider.findByExternalId(m.tvdb_id, 'tvdb_id');
+              tmdbId = (m.type === MediaType.SHOW ? found?.show?.tmdbId : found?.movie?.tmdbId) ?? null;
+              if (!tmdbId && this.tvdb.enabled) {
+                const imdbId = await this.tvdb.fetchImdbId(
+                  m.type === MediaType.SHOW ? 'show' : 'movie',
+                  Number(m.tvdb_id),
+                );
+                if (imdbId) {
+                  const foundImdb = await this.tmdbProvider.findByExternalId(imdbId, 'imdb_id');
+                  tmdbId =
+                    (m.type === MediaType.SHOW
+                      ? foundImdb?.show?.tmdbId
+                      : foundImdb?.movie?.tmdbId) ?? null;
+                }
+              }
+            }
+            if (tmdbId) {
+              const base =
+                m.type === MediaType.SHOW
+                  ? await this.tmdbProvider.localizedShowBase(tmdbId, 'en-US')
+                  : await this.tmdbProvider.localizedMovieBase(tmdbId, 'en-US');
+              rating = base.rating ?? null;
+            }
+          }
+          if (rating != null && rating > 0) {
+            await this.prisma.mediaItem.update({ where: { id: m.id }, data: { rating } });
+            succeeded++;
+            if (sample.length < 5) sample.push(`${m.title} (${rating.toFixed(1)})`);
+          } else {
+            noneAtSource++;
+            // Stamp ONLY definitive no-rating-at-source answers (a TMDB entity was
+            // resolved and carried no vote average). findByExternalId swallows
+            // errors into null, so an unresolved cross-id may just be a throttle
+            // wave — stamping those would wrongly skip them for 90 days.
+            if (tmdbId) {
+              await this.prisma.$executeRaw`
+                UPDATE media_items
+                SET metadata_provenance = jsonb_set(
+                      COALESCE(metadata_provenance, '{}'::jsonb),
+                      '{ratingCheckedAt}', to_jsonb(NOW()::text))
+                WHERE id = ${m.id}`;
+            }
+          }
+        } catch (e) {
+          if (this.isRateLimitError(e)) {
+            rateLimited++;
+            this.logger.warn(`Rating backfill rate-limited after ${i} rows — deferring the rest`);
+            break;
+          }
+          failed++;
+          if (failed <= 10)
+            this.logger.warn(`rating backfill failed for ${m.title}: ${(e as Error).message}`);
+        }
+        if ((i + 1) % 50 === 0) {
+          this.logger.log(
+            `Rating backfill progress: ${i + 1}/${candidates.length} (${succeeded} ok, ${noneAtSource} none-at-source, ${failed} fail)`,
+          );
+        }
+      }
+      this.trackRepair('ratings', {
+        running: false,
+        processed: candidates.length,
+        succeeded,
+        failed,
+        finishedAt: new Date(),
+      });
+      this.logger.log(
+        `Rating backfill: ${succeeded}/${candidates.length} rated, ${noneAtSource} none-at-source, ${failed} failed, ${rateLimited} rate-limited`,
+      );
+      return { processed: candidates.length, succeeded, failed, rateLimited, noneAtSource, sample };
+    } finally {
+      this.ratingFixRunning = false;
     }
   }
 

@@ -276,6 +276,7 @@ export class TmdbProvider {
       overview: s.overview ?? null,
       posterUrl: this.tmdb.img(s.poster_path, 'w342'),
       backdropUrl: this.tmdb.img(s.backdrop_path, 'w780'),
+      rating: s.vote_average ?? null,
     };
   }
 
@@ -286,6 +287,7 @@ export class TmdbProvider {
       overview: m.overview ?? null,
       posterUrl: this.tmdb.img(m.poster_path, 'w342'),
       backdropUrl: this.tmdb.img(m.backdrop_path, 'w780'),
+      rating: m.vote_average ?? null,
     };
   }
 

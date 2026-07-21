@@ -22,6 +22,7 @@ interface MetadataHealth {
   nonEnglishBase: number;
   nonEnglishContent: number;
   bannerAsPoster: number;
+  missingRating: number;
 }
 
 /** Live progress of one background repair job (from /admin/metadata-health/repair-progress). */
@@ -42,6 +43,7 @@ const REPAIR_LABELS: Record<string, string> = {
   'english-base': 'English base restore',
   'english-content': 'English content verify',
   'banner-posters': 'Banner poster repair',
+  ratings: 'Rating backfill',
 };
 
 /** One-line guidance per stat: what it means and what to do about it. */
@@ -69,6 +71,8 @@ const STAT_HINTS: Record<string, string> = {
     "Suspected wrong-language CONTENT with a lying/missing marker: the title an English user sees contains non-ASCII. Verify+Fix checks the most-popular suspects first against the provider's canonical English title and re-hydrates only real mismatches. Verified rows are remembered and leave this count (a title change re-arms them), so the number DRAINS as runs complete. Deep mode verifies every row — catches pure-ASCII foreign titles. A nightly Scheduled Job keeps it converged. No user data touched.",
   bannerAsPoster:
     'Rows whose poster is actually a TVDB BANNER (wide artwork in a poster slot) — legacy of a swapped TVDB artwork mapping. Repair re-hydrates them from TVDB, which re-picks the correct poster (type 2) and backdrop (type 3). Most-visible first, stops early on TVDB rate limits. No user data touched.',
+  missingRating:
+    'Rows with no community rating — mostly TVDB-hydrated shows (anime/animation): TVDB exposes no public 0–10 rating (its score is a popularity rank), so those rows are born unrated. Backfill resolves TMDB\u2019s vote_average per row: stored TMDB id, else the tvdb_id \u2192 TMDB /find chain, else the IMDB id from TVDB \u2192 /find. One light call per hop, most-popular first, stopping early on rate limits. Rows with no rating at the source are remembered and skipped for 90 days, so the nightly Scheduled Job keeps this drained. No user data touched.',
 };
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -104,6 +108,9 @@ export default function MetadataHealthPage() {
   const [repairingBanner, setRepairingBanner] = useState(false);
   const [bannerResult, setBannerResult] = useState<string | null>(null);
   const [bannerCount, setBannerCount] = useState('500');
+  const [repairingRatings, setRepairingRatings] = useState(false);
+  const [ratingResult, setRatingResult] = useState<string | null>(null);
+  const [ratingCount, setRatingCount] = useState('500');
   const [castCount, setCastCount] = useState('500');
   const [repairs, setRepairs] = useState<Record<string, RepairProgress>>({});
   const [batchCount, setBatchCount] = useState('200');
@@ -269,6 +276,22 @@ export default function MetadataHealthPage() {
       .finally(() => setRepairingBanner(false));
   };
 
+  const runRatingBackfill = () => {
+    setRepairingRatings(true);
+    setRatingResult(null);
+    const n = Math.max(1, Number(ratingCount) || 500);
+    api
+      .post(`/admin/backfill-ratings/run?count=${n}`)
+      .then(() => {
+        setRatingResult(
+          `Rating backfill started (${n} rows). Watch the progress panel above; stats refresh in 60s.`,
+        );
+        setTimeout(() => load(), 60000);
+      })
+      .catch(() => setRatingResult('Rating backfill failed to start.'))
+      .finally(() => setRepairingRatings(false));
+  };
+
   if (!canView) return <p className="p-6 text-sm text-zinc-500">Admins only.</p>;
 
   const pct = (n: number) => (stats && stats.total > 0 ? Math.round((n / stats.total) * 100) : 0);
@@ -363,6 +386,11 @@ export default function MetadataHealthPage() {
       {bannerResult && (
         <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-800 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-200">
           {bannerResult}
+        </div>
+      )}
+      {ratingResult && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          {ratingResult}
         </div>
       )}
 
@@ -609,6 +637,32 @@ export default function MetadataHealthPage() {
                     className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
                   >
                     {repairingBanner ? 'Starting…' : 'Fix Banner Posters'}
+                  </button>
+                </div>
+              }
+            />
+            <MetricCard
+              label="Missing Rating"
+              value={stats.missingRating}
+              sub="no community rating — mostly TVDB-hydrated rows"
+              hint={STAT_HINTS.missingRating}
+              highlight={stats.missingRating > 0}
+              action={
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={ratingCount}
+                    onChange={(e) => setRatingCount(e.target.value)}
+                    className="w-20 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+                    title="Rows per run"
+                  />
+                  <button
+                    onClick={runRatingBackfill}
+                    disabled={repairingRatings}
+                    className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    {repairingRatings ? 'Starting…' : 'Backfill Ratings'}
                   </button>
                 </div>
               }

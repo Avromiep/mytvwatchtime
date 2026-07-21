@@ -159,6 +159,18 @@ export class AdminController {
     };
   }
 
+  @Post('backfill-ratings/run')
+  @RequireRoles('ADMIN')
+  runBackfillRatings(@Query('count') count?: string) {
+    const n = count ? Number(count) : undefined;
+    this.metadataBackfill.backfillRatings(n).catch((e) => {
+      console.error('[Rating backfill] FAILED:', (e as Error)?.message ?? e);
+    });
+    return {
+      message: `Rating backfill started (${n ?? 500} rows max). Check API logs for progress + results.`,
+    };
+  }
+
   @Post('tmdb-changes/run')
   @RequireRoles('ADMIN')
   runTmdbChanges(@Query('start') start?: string) {

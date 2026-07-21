@@ -219,6 +219,23 @@ export class TvdbProvider {
     return this.client.enabled;
   }
 
+  /** IMDB id from the extended record — one light call, no hydration. Used by the
+   *  rating backfill as the fallback cross-id when TMDB /find has no tvdb_id entry. */
+  async fetchImdbId(kind: 'show' | 'movie', tvdbId: number): Promise<string | null> {
+    if (!this.client.enabled) return null;
+    if (kind === 'show') {
+      const res = await this.client.get<{ data: { imdbId?: string } }>(`/series/${tvdbId}/extended`);
+      return res.data?.imdbId || null;
+    }
+    const res = await this.client.get<{ data: { remoteIds?: TvdbRemoteId[] } }>(
+      `/movies/${tvdbId}/extended`,
+    );
+    const hit = (res.data?.remoteIds ?? []).find(
+      (r) => (r.sourceName || '').toUpperCase() === 'IMDB',
+    );
+    return hit?.id || null;
+  }
+
   async searchShows(
     query: string,
     page = 1,
@@ -389,6 +406,9 @@ export class TvdbProvider {
         s.originalNetwork?.name ??
         null,
       runtimeMinutes: s.runtime ?? null,
+      // TVDB exposes NO public 0–10 rating (its `score` is a popularity rank,
+      // e.g. 1413329) — ratings for TVDB-hydrated rows come from TMDB via the
+      // rating backfill (tvdb_id → TMDB /find → vote_average).
       rating: null,
       popularity: 0,
       trailerUrl: null,
@@ -611,6 +631,7 @@ export class TvdbProvider {
       releaseDate,
       releaseYear,
       runtimeMinutes: m.runtime ?? null,
+      // No public 0–10 rating on TVDB (see getShow note).
       rating: null,
       popularity: 0,
       trailerUrl: null,
