@@ -54,5 +54,8 @@
     "themeUpdated": "Tema güncellendi",
     "languageUpdated": "Dil güncellendi",
     "backendUpdated": "Backend URL'si kaydedildi. Yeniden yükleniyor…"
-  }
+  },
+  "poweredBy": "Sağlayıcı",
+  "metadataAttribution": "Meta veriler TMDB ve TheTVDB tarafından sağlanmaktadır.",
+  "tvdbSubscribe": "TheTVDB'ye abone olmayı düşünün"
 }

@@ -152,6 +152,12 @@ export default function ListDetailScreen() {
               <Pressable key={item.id} onPress={() => router.push(`/${item.mediaType === 'SHOW' ? 'show' : 'movie'}/${item.mediaId}`)} style={{ flex: 1, marginHorizontal: 2, marginBottom: 12 }}>
                 <View style={{ position: 'relative' }}>
                   <Image source={item.posterUrl ? { uri: item.posterUrl } : undefined} style={{ width: '100%', height: 160, borderRadius: radius.sm, backgroundColor: tokens.surfaceElevated }} contentFit="cover" transition={150} />
+                  {item.rating != null && item.rating > 0 ? (
+                    <View style={{ position: 'absolute', top: 4, left: 4, flexDirection: 'row', alignItems: 'center', backgroundColor: tokens.mediaScrim, borderRadius: radius.sm, paddingHorizontal: 4, paddingVertical: 2 }}>
+                      <Ionicons name="star" size={10} color={tokens.warning} />
+                      <T variant="micro" style={{ color: tokens.mediaText, marginLeft: 2 }}>{item.rating.toFixed(1)}</T>
+                    </View>
+                  ) : null}
                   {isOwner ? (
                     <Pressable onPress={() => onRemove(item.id)} style={{ position: 'absolute', top: 4, right: 4, backgroundColor: tokens.mediaScrim, borderRadius: 12, width: 24, height: 24, alignItems: 'center', justifyContent: 'center' }}>
                       <Ionicons name="close" size={14} color={tokens.mediaText} />

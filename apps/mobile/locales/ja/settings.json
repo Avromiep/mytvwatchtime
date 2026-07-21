@@ -40,5 +40,8 @@
     "languageUpdated": "言語を更新しました",
     "backendUpdated": "バックエンドURLを保存しました。再読み込み中…"
   },
-  "deleteAccountDesc": "アカウントと個人データは完全に削除されます。コメントは「削除されたユーザー」として引き続き表示されます。"
+  "deleteAccountDesc": "アカウントと個人データは完全に削除されます。コメントは「削除されたユーザー」として引き続き表示されます。",
+  "poweredBy": "提供",
+  "metadataAttribution": "メタデータは TMDB と TheTVDB から提供されています。",
+  "tvdbSubscribe": "TheTVDB のサブスクリプションをご検討ください"
 }

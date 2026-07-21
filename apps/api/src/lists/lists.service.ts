@@ -211,6 +211,7 @@ export class ListsService {
         title: i.media.title,
         posterUrl: i.media.posterUrl,
         backdropUrl: i.media.backdropUrl,
+        rating: i.media.rating ?? null,
       })),
       total,
       page,

@@ -22,6 +22,12 @@ import { showToast } from '../lib/toast';
 
 const API_BASE = (Constants.expoConfig?.extra as any)?.apiBaseUrl || 'http://localhost:4000/api';
 
+// Provider attribution (same logos as the public site footer). TMDB only serves
+// their logo as SVG — expo-image renders it on native + web.
+const TMDB_LOGO =
+  'https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg';
+const TVDB_LOGO = 'https://www.thetvdb.com/images/attribution/logo1.png';
+
 export default function SettingsScreen() {
   const { data: me } = useMe();
   const update = useUpdateProfile();
@@ -218,6 +224,27 @@ export default function SettingsScreen() {
 
         <Button title={t('settings:logout')} variant="ghost" icon="log-out-outline" onPress={logout} />
         <Button title={t('settings:deleteAccount')} variant="danger" icon="trash-outline" onPress={del} />
+
+        {/* Provider attribution — mirrors the public site footer */}
+        <View style={{ alignItems: 'center', marginTop: spacing.md }}>
+          <T variant="caption" muted>{t('settings:poweredBy')}</T>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginTop: spacing.sm }}>
+            <Pressable onPress={() => WebBrowser.openBrowserAsync('https://www.themoviedb.org')} hitSlop={8}>
+              <Image source={{ uri: TMDB_LOGO }} style={{ width: 48, height: 48 }} contentFit="contain" transition={150} />
+            </Pressable>
+            <Pressable onPress={() => WebBrowser.openBrowserAsync('https://thetvdb.com')} hitSlop={8}>
+              <Image source={{ uri: TVDB_LOGO }} style={{ width: 110, height: 32 }} contentFit="contain" transition={150} />
+            </Pressable>
+          </View>
+          <T variant="micro" muted style={{ marginTop: spacing.sm, textAlign: 'center' }}>
+            {t('settings:metadataAttribution')}
+          </T>
+          <Pressable onPress={() => WebBrowser.openBrowserAsync('https://thetvdb.com/subscribe')} hitSlop={8} style={{ marginTop: spacing.xs }}>
+            <T variant="micro" style={{ color: tokens.primary, textAlign: 'center', textDecorationLine: 'underline' }}>
+              {t('settings:tvdbSubscribe')}
+            </T>
+          </Pressable>
+        </View>
       </ScrollView>
     </Screen>
   );

@@ -54,5 +54,8 @@
     "themeUpdated": "थीम अपडेट की गई",
     "languageUpdated": "भाषा अपडेट की गई",
     "backendUpdated": "बैकएंड URL सहेजा गया। रीलोड हो रहा है…"
-  }
+  },
+  "poweredBy": "द्वारा संचालित",
+  "metadataAttribution": "मेटाडेटा TMDB और TheTVDB द्वारा प्रदान किया गया।",
+  "tvdbSubscribe": "TheTVDB की सदस्यता लेने पर विचार करें"
 }

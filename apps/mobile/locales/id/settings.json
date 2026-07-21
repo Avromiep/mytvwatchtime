@@ -54,5 +54,8 @@
     "themeUpdated": "Tema diperbarui",
     "languageUpdated": "Bahasa diperbarui",
     "backendUpdated": "URL backend disimpan. Memuat ulang…"
-  }
+  },
+  "poweredBy": "Didukung oleh",
+  "metadataAttribution": "Metadata disediakan oleh TMDB dan TheTVDB.",
+  "tvdbSubscribe": "Pertimbangkan untuk berlangganan TheTVDB"
 }

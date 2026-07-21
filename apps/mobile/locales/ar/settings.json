@@ -54,5 +54,8 @@
     "themeUpdated": "تم تحديث المظهر",
     "languageUpdated": "تم تحديث اللغة",
     "backendUpdated": "تم حفظ عنوان الخادم. جارٍ إعادة التحميل…"
-  }
+  },
+  "poweredBy": "مدعوم من",
+  "metadataAttribution": "البيانات الوصفية مقدمة من TMDB وTheTVDB.",
+  "tvdbSubscribe": "فكّر في الاشتراك في TheTVDB"
 }

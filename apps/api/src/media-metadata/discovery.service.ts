@@ -286,9 +286,18 @@ export class DiscoveryService {
         page,
         hasMore: false,
       };
+    const g = genre?.trim();
+    if (g) {
+      const win = await this.trendingWindow('show', g, page * pageSize);
+      const items = await this.fetchListDtos(
+        win.ids.slice((page - 1) * pageSize, page * pageSize),
+        userId,
+        pageSize,
+      );
+      return { items, page, hasMore: win.ids.length > page * pageSize || !win.exhausted };
+    }
     const entries = await this.cachedTrendingEntries('show', page);
-    const ids = await this.applyGenreToEntries(entries, genre);
-    const listItems = await this.fetchListDtos(ids, userId, pageSize);
+    const listItems = await this.fetchListDtos(entries.map((e) => e.id), userId, pageSize);
     return { items: listItems, page, hasMore: entries.length === 20 };
   }
 
@@ -299,10 +308,55 @@ export class DiscoveryService {
         page,
         hasMore: false,
       };
+    const g = genre?.trim();
+    if (g) {
+      const win = await this.trendingWindow('movie', g, page * pageSize);
+      const items = await this.fetchListDtos(
+        win.ids.slice((page - 1) * pageSize, page * pageSize),
+        userId,
+        pageSize,
+      );
+      return { items, page, hasMore: win.ids.length > page * pageSize || !win.exhausted };
+    }
     const entries = await this.cachedTrendingEntries('movie', page);
-    const ids = await this.applyGenreToEntries(entries, genre);
-    const listItems = await this.fetchListDtos(ids, userId, pageSize);
+    const listItems = await this.fetchListDtos(entries.map((e) => e.id), userId, pageSize);
     return { items: listItems, page, hasMore: entries.length === 20 };
+  }
+
+  /**
+   * Genre-filtered trending window: a genre chip applied to a single 20-item
+   * trending page leaves only a handful of cards (and an unscrollable see-all —
+   * short content never fires onEndReached), so filtered results are accumulated
+   * across upstream pages (cap 10) and cached per (kind, lang, genre). The window
+   * expands on demand when deeper pages are requested.
+   */
+  private async trendingWindow(
+    kind: 'show' | 'movie',
+    genre: string,
+    target: number,
+  ): Promise<{ ids: string[]; upstreamPages: number; exhausted: boolean }> {
+    const key = `trending:filtered:v1:${kind}:${currentLanguage()}:${genre.toLowerCase()}`;
+    const win = (await this.redis.get<{ ids: string[]; upstreamPages: number; exhausted: boolean }>(key))
+      ?? { ids: [], upstreamPages: 0, exhausted: false };
+    let rounds = 0;
+    while (win.ids.length < target && !win.exhausted && rounds < 5) {
+      if (win.upstreamPages >= 10) {
+        win.exhausted = true;
+        break;
+      }
+      const entries = await this.cachedTrendingEntries(kind, win.upstreamPages + 1);
+      win.upstreamPages += 1;
+      rounds += 1;
+      if (!entries.length) {
+        win.exhausted = true;
+        break;
+      }
+      win.ids.push(...(await this.applyGenreToEntries(entries, genre)));
+      if (entries.length < 20) win.exhausted = true;
+    }
+    win.ids = [...new Set(win.ids)];
+    await this.redis.set(key, win, 300);
+    return win;
   }
 
   private async applyGenreToEntries(
@@ -398,18 +452,40 @@ export class DiscoveryService {
         ? this.trendingMovies(userId, 1, 20, g)
         : { items: await this.topDb(MediaType.MOVIE, 20, userId, g ? ({ genre: g } as DiscoverQueryDto) : undefined), page: 1, hasMore: false },
     ]);
-    const topForYou = userId ? await this.recommendedForYou(userId, g) : trendingShows.items.slice(0, 10);
+    const topForYou = userId
+      ? (await this.forYou(userId, 1, 10, g)).items
+      : trendingShows.items.slice(0, 10);
     return { topForYou, trendingShows: trendingShows.items, trendingMovies: trendingMovies.items };
   }
 
   /**
-   * Personalized "Top shows for you". Affinity comes from the user's genres
+   * Paginated "Top shows for you": the full ranked suggestion list is cached per
+   * (user, genre, lang) for 5 min, so both the Explore carousel (page 1, size 10)
+   * and the see-all (20/page, infinite scroll) page through ONE ranking ordered
+   * best-first. Anonymous users get trending shows.
+   */
+  async forYou(userId: string | undefined, page = 1, pageSize = 20, genre?: string) {
+    if (!userId) return this.trendingShows(undefined, page, pageSize, genre);
+    const key = `foryou:v1:${userId}:${genre?.trim().toLowerCase() || 'all'}:${currentLanguage()}`;
+    let ids = await this.redis.get<string[]>(key);
+    if (!ids) {
+      ids = await this.rankForYouIds(userId, genre?.trim() || undefined);
+      await this.redis.set(key, ids, 300);
+    }
+    const items = await this.fetchListDtos(ids.slice((page - 1) * pageSize, page * pageSize), userId, pageSize);
+    return { items, page, hasMore: ids.length > page * pageSize };
+  }
+
+  /**
+   * Personalized "Top shows for you" ranking. Affinity comes from the user's genres
    * (history ×2, favorites ×1) AND the TMDB keywords of what they watch/love;
    * candidates are then ranked by affinity + community rating + recency, so
    * fresh well-rated matches beat old catalog filler. Anything the user already
-   * watched, watchlisted, or favorited is excluded.
+   * watched, watchlisted, or favorited is excluded. With a genre filter active the
+   * pool is that genre's whole catalog (affinity still drives the ranking), so a
+   * filter never starves the section. Returns the ranked ids (cap 300).
    */
-  private async recommendedForYou(userId: string, genre?: string) {
+  private async rankForYouIds(userId: string, genre?: string): Promise<string[]> {
     // Score genres: watch history counts double, favorites +1 each.
     // Aggregates in SQL — the old findMany pulled every mediaGenre row for the
     // user's entire history/favorites (thousands of rows) on every Discover open.
@@ -436,7 +512,8 @@ export class DiscoveryService {
     for (const r of favGenres) scores.set(r.name, (scores.get(r.name) ?? 0) + r.c);
     const topGenres = [...scores.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
     const genreNames = topGenres.map(([name]) => name);
-    if (genreNames.length === 0) return [];
+    // No taste signal at all: only a genre-filtered browse can still rank by rating+recency.
+    if (genreNames.length === 0 && !genre) return [];
 
     // Keyword affinity: frequency of TMDB keywords over the user's watched +
     // favorited shows/movies (persisted at hydration) — catches taste signals
@@ -476,12 +553,11 @@ export class DiscoveryService {
       where: {
         type: MediaType.SHOW,
         posterUrl: { not: null },
-        AND: [
-          { genres: { some: { genre: { name: { in: genreNames } } } } },
-          ...(genre
-            ? [{ genres: { some: { genre: { slug: { equals: genre, mode: 'insensitive' as const } } } } }]
-            : []),
-        ],
+        // Genre filter active: the pool is that genre's catalog (affinity only ranks).
+        // Otherwise: the pool is the user's affinity genres.
+        genres: genre
+          ? { some: { genre: { slug: { equals: genre, mode: 'insensitive' } } } }
+          : { some: { genre: { name: { in: genreNames } } } },
         id: { notIn: excludedIds },
       },
       include: {
@@ -489,7 +565,7 @@ export class DiscoveryService {
         show: { select: { keywords: true, yearStart: true } },
       },
       orderBy: { popularity: 'desc' },
-      take: 150,
+      take: 600,
     });
 
     // Rank: genre affinity (rank-weighted) + keyword affinity (capped) +
@@ -518,7 +594,8 @@ export class DiscoveryService {
       return { id: m.id, score };
     });
     scored.sort((a, b) => b.score - a.score);
-    return this.fetchListDtos(scored.slice(0, 10).map((s) => s.id), userId);
+    // Cap the cached ranking at 300 — plenty of scroll depth, bounded Redis payload.
+    return scored.slice(0, 300).map((s) => s.id);
   }
 
   private async discoverViaDb(type: MediaType, q: DiscoverQueryDto, userId?: string) {

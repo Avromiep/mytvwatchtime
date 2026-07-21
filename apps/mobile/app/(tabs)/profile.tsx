@@ -306,6 +306,12 @@ function ShowsRow({ items, kind = 'shows' }: { items: any[]; kind?: 'shows' | 'm
           <Pressable style={{ marginRight: spacing.md }}>
             <View style={{ borderRadius: radius.md, overflow: 'hidden' }}>
               <PosterImage uri={it.images?.poster ?? it.posterUrl} style={{ width: 110, height: 165 }} />
+              {it.rating != null && it.rating > 0 ? (
+                <View style={{ position: 'absolute', top: 4, left: 4, flexDirection: 'row', alignItems: 'center', backgroundColor: tokens.mediaScrim, borderRadius: radius.sm, paddingHorizontal: 4, paddingVertical: 2 }}>
+                  <Ionicons name="star" size={10} color={tokens.warning} />
+                  <T variant="micro" style={{ color: tokens.mediaText, marginLeft: 2 }}>{it.rating.toFixed(1)}</T>
+                </View>
+              ) : null}
               {it.userProgress !== undefined ? (
                 <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: 4 }}>
                   <ProgressBar value={it.userProgress} color={it.userProgress >= 1 ? tokens.watched : tokens.primary} />

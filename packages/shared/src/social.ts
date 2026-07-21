@@ -231,6 +231,8 @@ export interface CustomListDto extends CustomListSummaryDto {
     mediaId: string;
     title: string;
     posterUrl?: string | null;
+    /** TMDB vote average (1..10) — null until the row carries a rating. */
+    rating?: number | null;
   }[];
 }
 

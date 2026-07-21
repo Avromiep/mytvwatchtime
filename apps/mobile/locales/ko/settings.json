@@ -54,5 +54,8 @@
     "themeUpdated": "테마가 업데이트되었습니다",
     "languageUpdated": "언어가 업데이트되었습니다",
     "backendUpdated": "백엔드 URL이 저장되었습니다. 다시 로드하는 중…"
-  }
+  },
+  "poweredBy": "제공",
+  "metadataAttribution": "메타데이터는 TMDB 및 TheTVDB에서 제공합니다.",
+  "tvdbSubscribe": "TheTVDB 구독을 고려해 보세요"
 }

@@ -54,5 +54,8 @@
     "themeUpdated": "Tema atualizado",
     "languageUpdated": "Idioma atualizado",
     "backendUpdated": "URL do backend salva. Recarregando…"
-  }
+  },
+  "poweredBy": "Fornecido por",
+  "metadataAttribution": "Metadados fornecidos por TMDB e TheTVDB.",
+  "tvdbSubscribe": "Considere assinar o TheTVDB"
 }

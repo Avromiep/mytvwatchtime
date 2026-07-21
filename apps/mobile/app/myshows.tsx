@@ -11,7 +11,7 @@ import { useAppearance } from '../context/PreferencesProvider';
 import { spacing } from '../theme/theme';
 import { useTranslation } from 'react-i18next';
 
-interface StatusItem { id: string; title: string; posterUrl?: string | null; progress: number }
+interface StatusItem { id: string; title: string; posterUrl?: string | null; progress: number; rating?: number | null }
 type SectionKey = 'watching' | 'notStarted' | 'finished';
 
 interface FlatRow {
@@ -101,7 +101,7 @@ export default function MyShowsScreen() {
       <View style={styles.cardRow}>
         {cards.map((it) => (
           <View key={it.id} style={{ width: cellW, marginRight: gap, marginBottom: gap }}>
-            <PosterCard id={it.id} kind="shows" title={it.title} poster={it.posterUrl} progress={it.progress} width={cellW} style={{ marginRight: 0 }} />
+            <PosterCard id={it.id} kind="shows" title={it.title} poster={it.posterUrl} progress={it.progress} rating={it.rating} width={cellW} style={{ marginRight: 0 }} />
           </View>
         ))}
         {Array.from({ length: fillCount }).map((_, i) => (

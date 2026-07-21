@@ -591,6 +591,7 @@ export class LibraryService {
         mediaId: r.mediaId,
         title: r.media.title,
         posterUrl: r.media.posterUrl,
+        rating: r.media.rating ?? null,
         episodeId: r.episodeId,
         seasonNumber: r.seasonNumber,
         episodeNumber: r.episodeNumber,
@@ -618,18 +619,18 @@ export class LibraryService {
 
   async showsByStatus(userId: string) {
     // Same 30s user+lang cache pattern as watchNext/upcoming (busted by tracking writes).
-    const cacheKey = `showsprogress:${userId}:${currentLanguage()}`;
+    const cacheKey = `showsprogress:v2:${userId}:${currentLanguage()}`;
     const cached = await this.redis.get<any>(cacheKey);
     if (cached) return cached;
 
     const [statuses, watchlist] = await Promise.all([
       this.prisma.userShowStatus.findMany({
         where: { userId },
-        include: { media: { select: { id: true, title: true, posterUrl: true, backdropUrl: true } } },
+        include: { media: { select: { id: true, title: true, posterUrl: true, backdropUrl: true, rating: true } } },
       }),
       this.prisma.watchlistItem.findMany({
         where: { userId, media: { type: MediaType.SHOW } },
-        include: { media: { select: { id: true, title: true, posterUrl: true, backdropUrl: true } } },
+        include: { media: { select: { id: true, title: true, posterUrl: true, backdropUrl: true, rating: true } } },
         orderBy: { createdAt: 'desc' },
       }),
     ]);
@@ -657,7 +658,7 @@ export class LibraryService {
       const w = s.watchedCount ?? 0;
       const airedTotal = airedMap.get(s.mediaId) ?? 0;
       const progress = airedTotal > 0 ? w / airedTotal : 0;
-      const item = { id: s.media.id, title: s.media.title, posterUrl: s.media.posterUrl, progress, lastWatchedAt: s.lastWatchedAt };
+      const item = { id: s.media.id, title: s.media.title, posterUrl: s.media.posterUrl, rating: s.media.rating ?? null, progress, lastWatchedAt: s.lastWatchedAt };
       if (w > 0 && progress < 1) watching.push(item);
       else if (airedTotal > 0 && w >= airedTotal) finished.push(item);
     }
@@ -667,7 +668,7 @@ export class LibraryService {
     const progressedIds = new Set([...watching.map((i) => i.id), ...finished.map((i) => i.id)]);
     const notStarted = watchlist
       .filter((w) => !progressedIds.has(w.mediaId))
-      .map((w) => ({ id: w.media.id, title: w.media.title, posterUrl: w.media.posterUrl, progress: 0, addedAt: w.createdAt }));
+      .map((w) => ({ id: w.media.id, title: w.media.title, posterUrl: w.media.posterUrl, rating: w.media.rating ?? null, progress: 0, addedAt: w.createdAt }));
 
     const [watchingL, finishedL, notStartedL] = await Promise.all([
       this.localizeItems(watching, (i) => i.id),

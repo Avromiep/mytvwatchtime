@@ -11,7 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { useWindowDimensions } from 'react-native';
 import { spacing } from '../../theme/theme';
 
-interface MovieItem { id: string; title: string; posterUrl?: string | null; progress?: number; watched?: boolean }
+interface MovieItem { id: string; title: string; posterUrl?: string | null; progress?: number; watched?: boolean; rating?: number | null }
 type SectionKey = 'watchlist' | 'watched' | 'favorites';
 
 interface FlatRow {
@@ -50,13 +50,13 @@ export default function MoviesScreen() {
   const watchedIds = new Set(watched.items.map((h: any) => h.mediaId));
   const watchlistItems: MovieItem[] = watchlist.items
     .filter((m: any) => !watchedIds.has(m.id))
-    .map((m: any) => ({ id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl }));
+    .map((m: any) => ({ id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, rating: m.rating ?? null }));
   const watchedItems: MovieItem[] = watched.items.map((h: any) => ({
-    id: h.mediaId, title: h.title, posterUrl: h.posterUrl, watched: true, progress: 1,
+    id: h.mediaId, title: h.title, posterUrl: h.posterUrl, watched: true, progress: 1, rating: h.rating ?? null,
   }));
   const favoriteItems = favorites.items.map((m: any) => {
     const watched = watchedIds.has(m.id);
-    return { id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, watched, progress: watched ? 1 : undefined };
+    return { id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, watched, progress: watched ? 1 : undefined, rating: m.rating ?? null };
   });
 
   const sections: { key: SectionKey; title: string; empty: string; items: MovieItem[] }[] = [
@@ -112,7 +112,7 @@ export default function MoviesScreen() {
       <View style={styles.cardRow}>
         {cards.map((it) => (
           <View key={it.id} style={{ width: cellW, marginRight: gap, marginBottom: gap }}>
-            <PosterCard id={it.id} kind="movies" title={it.title} poster={it.posterUrl} progress={it.progress} width={cellW} style={{ marginRight: 0 }} />
+            <PosterCard id={it.id} kind="movies" title={it.title} poster={it.posterUrl} progress={it.progress} rating={it.rating} width={cellW} style={{ marginRight: 0 }} />
           </View>
         ))}
         {Array.from({ length: fillCount }).map((_, i) => (

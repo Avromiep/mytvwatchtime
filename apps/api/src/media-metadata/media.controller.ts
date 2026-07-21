@@ -60,6 +60,18 @@ export class MediaController {
     return this.discovery.discoverSections(userId, genre);
   }
 
+  /** Paginated personalized suggestions (see-all for "Top shows for you"). */
+  @Get('discover/for-you')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  forYou(
+    @Query('page') page = '1',
+    @Query('genre') genre: string | undefined,
+    @CurrentUser('id') userId?: string,
+  ) {
+    return this.discovery.forYou(userId, parseInt(page), 20, genre);
+  }
+
   /** Catalog genres (most-used first) — filter chip lists in explore/search/see-all. */
   @Get('genres')
   genres() {

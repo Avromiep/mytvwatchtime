@@ -5,8 +5,7 @@ import { MediaType } from '@tvwatch/shared';
 import { Header } from '../components/Header';
 import { PosterCard, cardProgress } from '../components/cards';
 import { Chip, EmptyState, Screen, Spinner } from '../components/primitives';
-import { useDiscoverSections, useAllFavorites, useAllWatchlist, useGenres } from '../api/hooks';
-import { useAuth } from '../context/AuthContext';
+import { useAllFavorites, useAllWatchlist, useGenres } from '../api/hooks';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAppearance } from '../context/PreferencesProvider';
@@ -48,40 +47,43 @@ export default function MoreScreen() {
   const kind: 'shows' | 'movies' = isMovies ? 'movies' : 'shows';
   const isTrending = tab === 'trending-shows' || tab === 'trending-movies';
   const trendingType = tab === 'trending-movies' ? 'movies' : 'shows';
+  // Server-paged sections: trending + "Top shows for you" (both paginate, best-first).
+  const pagedPath =
+    tab === 'top-for-you' ? '/discover/for-you' : isTrending ? `/trending/${trendingType}` : null;
 
   const cols = useColumns();
   const screenWidth = Dimensions.get('window').width;
   const containerW = Math.min(screenWidth - spacing.lg * 2, 1200);
   const cardW = Math.floor((containerW - spacing.md * (cols - 1)) / cols);
 
-  // --- Pagination for trending ---
+  // --- Pagination for server-paged sections ---
   const [page, setPage] = useState(1);
   const [allItems, setAllItems] = useState<any[]>([]);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
   const pageQuery = useQuery({
-    queryKey: ['trending-page', trendingType, page, genre ?? ''],
+    queryKey: ['more-page', pagedPath, page, genre ?? ''],
     queryFn: () =>
-      api.get<{ items: any[]; hasMore: boolean }>(`/trending/${trendingType}`, {
+      api.get<{ items: any[]; hasMore: boolean }>(pagedPath!, {
         page,
         genre: genre || undefined,
       }),
-    enabled: isTrending,
+    enabled: !!pagedPath,
     staleTime: 60000,
   });
 
   useEffect(() => {
-    if (!isTrending || !pageQuery.data) return;
+    if (!pagedPath || !pageQuery.data) return;
     const newItems = pageQuery.data.items ?? [];
     setAllItems((prev) => (page === 1 ? newItems : [...prev, ...newItems]));
     setHasMore(pageQuery.data.hasMore ?? false);
     setLoadingMore(false);
-  }, [pageQuery.data, page, isTrending]);
+  }, [pageQuery.data, page, pagedPath]);
 
   // Reset when tab or genre filter changes
   useEffect(() => {
-    if (isTrending) {
+    if (pagedPath) {
       setAllItems([]);
       setPage(1);
       setHasMore(true);
@@ -96,8 +98,6 @@ export default function MoreScreen() {
   }, [hasMore, loadingMore, pageQuery.isFetching]);
 
   // --- Collection hooks (auto-paged to the end — see-alls show exactly what the user has) ---
-  const { user } = useAuth();
-  const sections = useDiscoverSections(user?.id, genre);
   const watchlistShows = useAllWatchlist(MediaType.SHOW, genre);
   const watchlistMovies = useAllWatchlist(MediaType.MOVIE, genre);
   const favShows = useAllFavorites(MediaType.SHOW, genre);
@@ -106,15 +106,11 @@ export default function MoreScreen() {
   // --- Collect items ---
   let items: any[] = [];
   let loading = false;
-  if (isTrending) {
+  if (pagedPath) {
     items = allItems;
     loading = page === 1 && allItems.length === 0 && pageQuery.isLoading;
   } else {
     switch (tab) {
-      case 'top-for-you':
-        items = sections.data?.topForYou ?? [];
-        loading = sections.isLoading;
-        break;
       case 'watchlist-shows':
         items = watchlistShows.items;
         loading = watchlistShows.isLoading;
@@ -143,10 +139,12 @@ export default function MoreScreen() {
   return (
     <Screen>
       <Header title={title} showBack />
+      {/* flexShrink: 0 — on web the default flex-shrink: 1 let the growing grid
+          squeeze this row smaller with every paginated append. */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        style={{ flexGrow: 0, marginBottom: spacing.sm }}
+        style={{ flexGrow: 0, flexShrink: 0, marginBottom: spacing.sm }}
         contentContainerStyle={{ paddingHorizontal: spacing.lg }}
       >
         <Chip label={t('common:all')} active={!genre} onPress={() => setGenre(null)} />
@@ -173,10 +171,10 @@ export default function MoreScreen() {
             alignSelf: 'center',
           }}
           ListEmptyComponent={<EmptyState title={t('common:nothingHereYet')} icon="film-outline" />}
-          onEndReached={isTrending ? loadMore : undefined}
+          onEndReached={pagedPath ? loadMore : undefined}
           onEndReachedThreshold={0.5}
           ListFooterComponent={
-            isTrending && loadingMore ? (
+            pagedPath && loadingMore ? (
               <ActivityIndicator color={tokens.primary} style={{ padding: spacing.lg }} />
             ) : null
           }

@@ -123,7 +123,7 @@ export default function ExploreScreen() {
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          style={{ marginTop: spacing.sm }}
+          style={{ marginTop: spacing.sm, flexGrow: 0, flexShrink: 0 }}
         >
           <Chip
             label={t('common:all')}
