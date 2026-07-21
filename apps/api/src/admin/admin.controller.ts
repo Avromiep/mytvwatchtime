@@ -134,6 +134,19 @@ export class AdminController {
     };
   }
 
+  @Post('repair-english-content/run')
+  @RequireRoles('ADMIN')
+  runRepairEnglishContent(@Query('count') count?: string, @Query('deep') deep?: string) {
+    const n = count ? Number(count) : undefined;
+    const d = deep === '1' || deep === 'true';
+    this.metadataBackfill.repairNonEnglishContent(n, d).catch((e) => {
+      console.error('[English content repair] FAILED:', (e as Error)?.message ?? e);
+    });
+    return {
+      message: `English-content verify+repair started (${n ?? 200} rows${d ? ', deep scan' : ''}). Check API logs for progress + results.`,
+    };
+  }
+
   @Post('tmdb-changes/run')
   @RequireRoles('ADMIN')
   runTmdbChanges(@Query('start') start?: string) {

@@ -139,6 +139,7 @@ describe('MetadataBackfillService.repairNonEnglishBase', () => {
         findMany: jest.fn(async () => candidates),
         update: jest.fn(async () => ({})),
       },
+      $executeRaw: jest.fn(async () => 0),
     };
     const meta = mockMeta();
     const service = new MetadataBackfillService(
@@ -962,6 +963,7 @@ describe('MetadataBackfillService — repair progress tracking', () => {
         ]),
         update: jest.fn(async () => ({})),
       },
+      $executeRaw: jest.fn(async () => 0),
     };
     const service = new MetadataBackfillService(
       prisma,
@@ -987,5 +989,149 @@ describe('MetadataBackfillService — repair progress tracking', () => {
         finishedAt: expect.any(Date),
       }),
     );
+  });
+});
+
+describe('MetadataBackfillService.repairNonEnglishContent', () => {
+  function make(rows: any[], providerTitle: string | null) {
+    const prisma = mockPrisma();
+    prisma.$executeRaw = jest.fn(async () => 0);
+    prisma.$queryRaw.mockResolvedValue(rows.map((r) => ({ id: r.id })));
+    prisma.mediaItem.findMany.mockResolvedValue(rows);
+    const meta = mockMeta();
+    const tmdbProvider = {
+      enabled: true,
+      localizedShowBase: jest.fn(async () =>
+        providerTitle == null ? null : { title: providerTitle },
+      ),
+      localizedMovieBase: jest.fn(async () =>
+        providerTitle == null ? null : { title: providerTitle },
+      ),
+    };
+    const redis = { get: jest.fn(async () => ''), set: jest.fn(async () => undefined) };
+    const service = new MetadataBackfillService(
+      prisma,
+      meta,
+      {} as any,
+      redis as any,
+      {} as any,
+      {} as any,
+      tmdbProvider as any,
+      {} as any,
+    );
+    return { service, prisma, meta, redis };
+  }
+
+  const row = (over: Record<string, any> = {}) => ({
+    id: 'm1',
+    title: 'Chirurgové',
+    titles: null,
+    type: 'SHOW',
+    contentClassification: null,
+    show: { keywords: [] },
+    movie: null,
+    externalIds: [{ provider: 'TMDB', value: '1416', providerEntityKind: 'SERIES' }],
+    genres: [],
+    ...over,
+  });
+
+  it('re-hydrates rows whose English-visible title differs from the provider', async () => {
+    const { service, prisma, meta } = make([row()], "Grey's Anatomy");
+
+    const res = await service.repairNonEnglishContent();
+
+    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'm1' },
+      data: { metadataRefreshedAt: null },
+    });
+    expect(meta.ensureShowFull).toHaveBeenCalledWith(1416);
+    expect(res).toEqual(
+      expect.objectContaining({ processed: 1, verified: 0, fixed: 1, failed: 0 }),
+    );
+    expect(res.sample[0]).toContain("Grey's Anatomy");
+  });
+
+  it('verifies and skips legit non-ASCII English titles (Pokémon false alarm)', async () => {
+    const { service, meta } = make([row({ id: 'm2', title: 'Pokémon' })], 'Pokémon');
+
+    const res = await service.repairNonEnglishContent();
+
+    expect(meta.ensureShowFull).not.toHaveBeenCalled();
+    expect(res).toEqual(
+      expect.objectContaining({ processed: 1, verified: 1, fixed: 0, failed: 0 }),
+    );
+  });
+
+  it("the 'en' override slot wins over a foreign base (already displays English)", async () => {
+    const { service, meta } = make(
+      [row({ titles: { en: "Grey's Anatomy", cs: 'Chirurgové' } })],
+      "Grey's Anatomy",
+    );
+
+    const res = await service.repairNonEnglishContent();
+
+    expect(meta.ensureShowFull).not.toHaveBeenCalled();
+    expect(res.verified).toBe(1);
+  });
+
+  it('unverifiable rows (provider gives no title) count as failed, never guessed', async () => {
+    const { service, meta } = make([row()], null);
+
+    const res = await service.repairNonEnglishContent();
+
+    expect(meta.ensureShowFull).not.toHaveBeenCalled();
+    expect(res).toEqual(
+      expect.objectContaining({ processed: 1, verified: 0, fixed: 0, failed: 1 }),
+    );
+  });
+
+  it('comparison is punctuation/case-insensitive (curly quotes are not a mismatch)', async () => {
+    const { service, meta } = make([row({ title: 'Grey’s Anatomy' })], "Grey's Anatomy");
+
+    const res = await service.repairNonEnglishContent();
+
+    expect(meta.ensureShowFull).not.toHaveBeenCalled();
+    expect(res.verified).toBe(1);
+  });
+
+  it('deep mode pages with its own cursor and wraps at the end of the catalog', async () => {
+    const { service, redis } = make([row()], "Grey's Anatomy");
+
+    await service.repairNonEnglishContent(10, true); // 1 row < take → wrap
+
+    expect(redis.set).toHaveBeenCalledWith('EN_CONTENT_DEEP_CURSOR', '', 86400 * 30);
+  });
+
+  it('remembers verified rows in metadata_provenance so they leave the suspect pool', async () => {
+    const { service, prisma } = make([row({ id: 'm2', title: 'Pokémon' })], 'Pokémon');
+
+    await service.repairNonEnglishContent();
+
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    const [parts, ...vals] = (prisma.$executeRaw as jest.Mock).mock.calls[0];
+    expect(parts.join('?')).toContain('enContentVerifiedTitle');
+    expect(vals).toContain('Pokémon');
+  });
+
+  it('suspect selection skips remembered rows and orders by popularity', async () => {
+    const { service, prisma } = make([row()], "Grey's Anatomy");
+
+    await service.repairNonEnglishContent();
+
+    const [parts] = (prisma.$queryRaw as jest.Mock).mock.calls[0];
+    const sql = parts.join(' ');
+    expect(sql).toContain('enContentVerifiedTitle');
+    expect(sql).toContain('ORDER BY m.popularity DESC');
+  });
+
+  it("marks viewers' stats snapshots stale after a title fix (profile marathons refresh)", async () => {
+    const { service, prisma } = make([row()], "Grey's Anatomy");
+
+    await service.repairNonEnglishContent();
+
+    const calls = (prisma.$executeRaw as jest.Mock).mock.calls;
+    const staleWrite = calls.find((c) => c[0].join(' ').includes('user_stats_summary'));
+    expect(staleWrite).toBeTruthy();
+    expect(staleWrite![0].join(' ')).toContain('stale = true');
   });
 });

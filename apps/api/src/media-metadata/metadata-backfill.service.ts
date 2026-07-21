@@ -122,6 +122,7 @@ export class MetadataBackfillService {
       movieDataOnShows,
       multiTvdbIds,
       nonEnglishBase,
+      nonEnglishContent,
     ] = await Promise.all([
       this.prisma.mediaItem.count(),
       this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
@@ -196,11 +197,23 @@ export class MetadataBackfillService {
       // Rows EXPLICITLY marked as non-English base (title_locale set and != 'en') — the
       // only cheap SQL signal for wrong-language bases. Rows with an UNSET marker are
       // not counted (most have a fine English base title and just predate the overrides
-      // structure). Rows marked 'en' with wrong content are SQL-undetectable; the repair
-      // heals them too when run, but they can't be counted here.
+      // structure). Rows marked 'en' with wrong content can't be counted here — see the
+      // content-based suspect stat below.
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
         WHERE m.title_locale IS NOT NULL AND m.title_locale != 'en'`,
+      // Content-based suspects STILL NEEDING verification: the title an English user
+      // SEES ('en' override → base) contains non-ASCII — catches wrong-language bases
+      // whose marker LIES ('en'/unset), which the marker stat above cannot see. Rows
+      // already verified as English (remembered in metadata_provenance) are excluded;
+      // a title change re-enters the row. The verify+repair checks each against the
+      // provider's real English title before touching anything.
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c FROM media_items m
+        WHERE COALESCE(NULLIF(m.titles->>'en',''), m.title) ~ '[^ -~]'
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
+          AND COALESCE(NULLIF(m.titles->>'en',''), m.title)
+                IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'`,
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     return {
@@ -223,6 +236,7 @@ export class MetadataBackfillService {
       movieDataOnShows: toNum(movieDataOnShows as any),
       multiTvdbIds: toNum(multiTvdbIds as any),
       nonEnglishBase: toNum(nonEnglishBase as any),
+      nonEnglishContent: toNum(nonEnglishContent as any),
     };
   }
 
@@ -1249,36 +1263,7 @@ export class MetadataBackfillService {
           current: m.title,
         });
         try {
-          // Force a full re-hydration: the standard path rewrites the English base.
-          await this.prisma.mediaItem.update({
-            where: { id: m.id },
-            data: { metadataRefreshedAt: null },
-          });
-          const tmdbExt = m.externalIds.find(
-            (e) => e.provider === 'TMDB' && e.providerEntityKind !== 'EPISODE',
-          );
-          const tvdbExt = m.externalIds.find((e) => e.provider === 'THE_TVDB');
-          // Source rules: ANIME (classifier verdict / anime keyword / Animation genre) is
-          // TVDB-authoritative (TMDB anime structures are wrong; it never refreshes from
-          // TMDB). Everything else is TMDB-first, TVDB fallback for TVDB-only rows.
-          if (this.isAnimeMedia(m)) {
-            if (tvdbExt) {
-              await this.meta.ensureShowFullTvdb(Number(tvdbExt.value));
-            } else {
-              // No TVDB id yet: the anime repair resolves it (cross-id → strict title+year),
-              // force-hydrates from TVDB and remaps the structure.
-              await this.fixAnimeShowFromTvdb(m.id);
-            }
-          } else if (tmdbExt) {
-            if (m.type === 'SHOW') await this.meta.ensureShowFull(Number(tmdbExt.value));
-            else await this.meta.ensureMovieFull(Number(tmdbExt.value));
-          } else if (tvdbExt) {
-            if (m.type === 'SHOW') await this.meta.ensureShowFullTvdb(Number(tvdbExt.value));
-            else await this.meta.ensureMovieFullTvdb(Number(tvdbExt.value));
-          } else {
-            failed++; // nothing to hydrate from
-            continue;
-          }
+          await this.forceEnglishRehydrate(m);
           succeeded++;
           if (sample.length < 5) sample.push(m.title);
         } catch (e) {
@@ -1306,6 +1291,280 @@ export class MetadataBackfillService {
       return { processed: candidates.length, succeeded, failed, sample };
     } finally {
       this.enBaseFixRunning = false;
+    }
+  }
+
+  /**
+   * Force a full re-hydration that rewrites the English base (+ 'en' override slot).
+   * Shared by the marker-driven and content-driven English-base repairs.
+   * Source rules: ANIME (classifier verdict / anime keyword / Animation genre) is
+   * TVDB-authoritative (TMDB anime structures are wrong; it never refreshes from TMDB).
+   * Everything else is TMDB-first, TVDB fallback for TVDB-only rows.
+   */
+  private async forceEnglishRehydrate(m: {
+    id: string;
+    type: string;
+    contentClassification?: string | null;
+    show?: { keywords?: unknown } | null;
+    movie?: { keywords?: unknown } | null;
+    externalIds: { provider: string; value: string; providerEntityKind: string }[];
+    genres?: { genre: { slug: string; name: string } }[];
+  }): Promise<void> {
+    // Clear the freshness stamp so the standard hydration path runs a full re-fetch.
+    await this.prisma.mediaItem.update({
+      where: { id: m.id },
+      data: { metadataRefreshedAt: null },
+    });
+    const tmdbExt = m.externalIds.find(
+      (e) => e.provider === 'TMDB' && e.providerEntityKind !== 'EPISODE',
+    );
+    const tvdbExt = m.externalIds.find((e) => e.provider === 'THE_TVDB');
+    if (this.isAnimeMedia(m)) {
+      if (tvdbExt) {
+        await this.meta.ensureShowFullTvdb(Number(tvdbExt.value));
+      } else {
+        // No TVDB id yet: the anime repair resolves it (cross-id → strict title+year),
+        // force-hydrates from TVDB and remaps the structure.
+        await this.fixAnimeShowFromTvdb(m.id);
+      }
+    } else if (tmdbExt) {
+      if (m.type === 'SHOW') await this.meta.ensureShowFull(Number(tmdbExt.value));
+      else await this.meta.ensureMovieFull(Number(tmdbExt.value));
+    } else if (tvdbExt) {
+      if (m.type === 'SHOW') await this.meta.ensureShowFullTvdb(Number(tvdbExt.value));
+      else await this.meta.ensureMovieFullTvdb(Number(tvdbExt.value));
+    } else {
+      throw new Error('no external ids to hydrate from');
+    }
+    // The title just changed language: every user with watch history on this row has a
+    // stats snapshot (marathons/genres/networks) baked with the OLD title — mark those
+    // snapshots stale so the next profile view recomputes them (SWR). Without this the
+    // repair is invisible on profile pages until the user's next watch action.
+    await this.prisma.$executeRaw`
+      UPDATE user_stats_summary s
+      SET stale = true
+      WHERE EXISTS (
+        SELECT 1 FROM watch_history h WHERE h.user_id = s.user_id AND h.media_id = ${m.id}
+      )`;
+  }
+
+  // ---- Non-English CONTENT (wrong-language base with a lying or missing marker) ----
+  private enContentFixRunning = false;
+
+  /** The title an English user SEES: the 'en' override slot first, then the base column. */
+  private englishVisibleTitle(m: { title: string; titles?: unknown }): string {
+    const t = m.titles;
+    const en = t && typeof t === 'object' ? (t as Record<string, unknown>).en : undefined;
+    return typeof en === 'string' && en.trim() ? en.trim() : m.title;
+  }
+
+  /** Loose title comparison: case/space/quote-insensitive (punctuation variants are the
+   *  same title — anything stricter would flag false mismatches). */
+  private normTitleForCompare(s: string): string {
+    return s.trim().toLowerCase().replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ');
+  }
+
+  /** The provider's canonical English title in ONE light call (TMDB localized base /
+   *  TVDB English payload). null = unverifiable right now (no ids, provider down). */
+  private async resolveProviderEnglishTitle(m: {
+    type: string;
+    externalIds: { provider: string; value: string; providerEntityKind: string }[];
+  }): Promise<string | null> {
+    const tmdbExt = m.externalIds.find(
+      (e) => e.provider === 'TMDB' && e.providerEntityKind !== 'EPISODE',
+    );
+    if (tmdbExt && this.tmdbProvider.enabled) {
+      const base =
+        m.type === 'SHOW'
+          ? await this.tmdbProvider.localizedShowBase(Number(tmdbExt.value), 'en-US')
+          : await this.tmdbProvider.localizedMovieBase(Number(tmdbExt.value), 'en-US');
+      return base?.title?.trim() || null;
+    }
+    const tvdbExt = m.externalIds.find((e) => e.provider === 'THE_TVDB');
+    if (tvdbExt && this.tvdb.enabled) {
+      const d =
+        m.type === 'SHOW'
+          ? await this.tvdb.getShow(Number(tvdbExt.value), 'en')
+          : await this.tvdb.getMovie(Number(tvdbExt.value), 'en');
+      return d?.title?.trim() || null;
+    }
+    return null;
+  }
+
+  /**
+   * Content-based English repair — the blind spot of the marker stat: rows whose base
+   * title is the WRONG language even though title_locale says 'en' (or is unset). This
+   * is what English users actually complain about.
+   *
+   * Normal mode scans SUSPECTS (the English-visible title contains non-ASCII),
+   * most-popular first — what users actually see gets verified first. Deep mode verifies
+   * EVERY row with external ids — the only way to catch wrong-language titles that are
+   * pure ASCII (e.g. Italian) — paging the catalog with a wrapping Redis id-cursor.
+   *
+   * CONVERGENCE: a row verified as already-English is remembered
+   * (metadata_provenance.enContentVerifiedTitle) and skipped until its English-visible
+   * title changes — legit non-ASCII titles (Pokémon) are verified ONCE, not every run,
+   * and new/changed contamination re-enters the pool automatically. Every candidate is
+   * VERIFIED against the provider's canonical English title; only real mismatches are
+   * re-hydrated. User data untouched.
+   */
+  async repairNonEnglishContent(
+    limit?: number,
+    deep?: boolean,
+  ): Promise<{
+    processed: number;
+    verified: number;
+    fixed: number;
+    failed: number;
+    sample: string[];
+  }> {
+    const empty = { processed: 0, verified: 0, fixed: 0, failed: 0, sample: [] as string[] };
+    if (this.enContentFixRunning) {
+      this.logger.log('English-content repair already running — skipping');
+      return empty;
+    }
+    this.enContentFixRunning = true;
+    this.trackRepair('english-content', {
+      running: true,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      finishedAt: null,
+    });
+    try {
+      const take = Math.max(1, Math.min(limit ?? 200, 100000));
+      let ids: { id: string }[];
+      if (deep) {
+        const cursorKey = 'EN_CONTENT_DEEP_CURSOR';
+        const cursor = (await this.redis.get<string>(cursorKey)) ?? '';
+        ids = await this.prisma.$queryRaw<{ id: string }[]>`
+          SELECT m.id FROM media_items m
+          WHERE m.id > ${cursor}
+            AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
+            AND COALESCE(NULLIF(m.titles->>'en',''), m.title)
+                  IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
+          ORDER BY m.id
+          LIMIT ${take}`;
+        // End of the catalog reached → next deep run wraps to the beginning.
+        await this.redis.set(
+          cursorKey,
+          ids.length < take ? '' : (ids[ids.length - 1]?.id ?? cursor),
+          86400 * 30,
+        );
+      } else {
+        // Suspects, most-popular first. No cursor: verified (remembered) and fixed rows
+        // leave the pool, so every run advances through NEW suspects only.
+        ids = await this.prisma.$queryRaw<{ id: string }[]>`
+          SELECT m.id FROM media_items m
+          WHERE COALESCE(NULLIF(m.titles->>'en',''), m.title) ~ '[^ -~]'
+            AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
+            AND COALESCE(NULLIF(m.titles->>'en',''), m.title)
+                  IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
+          ORDER BY m.popularity DESC, m.id
+          LIMIT ${take}`;
+      }
+      if (ids.length === 0) {
+        this.trackRepair('english-content', {
+          running: false,
+          processed: 0,
+          total: 0,
+          succeeded: 0,
+          failed: 0,
+          finishedAt: new Date(),
+        });
+        return empty;
+      }
+      const candidates = await this.prisma.mediaItem.findMany({
+        where: { id: { in: ids.map((r) => r.id) } },
+        select: {
+          id: true,
+          title: true,
+          titles: true,
+          type: true,
+          contentClassification: true,
+          show: { select: { keywords: true } },
+          movie: { select: { keywords: true } },
+          externalIds: { select: { provider: true, value: true, providerEntityKind: true } },
+          genres: { select: { genre: { select: { slug: true, name: true } } } },
+        },
+      });
+      // Process in the SELECT's order (popularity for suspects, id for deep) —
+      // findMany doesn't preserve the IN order.
+      const order = new Map(ids.map((r, idx) => [r.id, idx]));
+      candidates.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+      this.trackRepair('english-content', { total: candidates.length });
+
+      let verified = 0;
+      let fixed = 0;
+      let failed = 0;
+      const sample: string[] = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const m = candidates[i];
+        this.trackRepair('english-content', {
+          processed: i + 1,
+          succeeded: fixed,
+          failed,
+          current: m.title,
+        });
+        try {
+          const providerTitle = await this.resolveProviderEnglishTitle(m);
+          if (!providerTitle) {
+            failed++; // unverifiable right now — never guess
+            if (failed <= 10)
+              this.logger.warn(
+                `English-content verify: no provider English title for "${m.title}" (${m.id}) — providers: ${m.externalIds.map((e) => e.provider).join(',') || 'none'}`,
+              );
+            continue;
+          }
+          const visible = this.englishVisibleTitle(m);
+          if (this.normTitleForCompare(providerTitle) === this.normTitleForCompare(visible)) {
+            verified++;
+            // Remember the verified title: the row leaves the suspect pool until its
+            // English-visible title changes (new contamination re-arms it). This is what
+            // makes repeated runs converge instead of re-verifying Pokémon forever.
+            await this.prisma.$executeRaw`
+              UPDATE media_items
+              SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
+                    || jsonb_build_object('enContentVerifiedTitle', ${visible}::text,
+                                          'enContentVerifiedAt', ${new Date().toISOString()}::text)
+              WHERE id = ${m.id}`;
+            continue;
+          }
+          await this.forceEnglishRehydrate(m);
+          fixed++;
+          if (sample.length < 5) sample.push(`${m.title} → ${providerTitle}`);
+        } catch (e) {
+          failed++;
+          // First failures are WARN-visible (prod runs at info level); the rest stay debug.
+          if (failed <= 10)
+            this.logger.warn(
+              `English-content repair failed for "${m.title}" (${m.id}): ${(e as Error).message}`,
+            );
+          else
+            this.logger.debug(
+              `English-content repair failed for "${m.title}": ${(e as Error).message}`,
+            );
+        }
+        if ((i + 1) % 25 === 0) {
+          this.logger.log(
+            `English-content repair progress: ${i + 1}/${candidates.length} (${verified} already ok, ${fixed} fixed, ${failed} failed)`,
+          );
+        }
+      }
+      this.trackRepair('english-content', {
+        running: false,
+        processed: candidates.length,
+        succeeded: fixed,
+        failed,
+        finishedAt: new Date(),
+      });
+      this.logger.log(
+        `English-content repair: ${candidates.length} checked — ${verified} already English, ${fixed} re-hydrated, ${failed} failed`,
+      );
+      return { processed: candidates.length, verified, fixed, failed, sample };
+    } finally {
+      this.enContentFixRunning = false;
     }
   }
 

@@ -30,6 +30,11 @@ const DEFAULTS: { name: string; label: string; schedule: string }[] = [
   { name: 'tmdb_changes', label: 'TMDB Changes Sync', schedule: '0 5 * * *' },
   { name: 'anime_tvdb_rehydrate', label: 'Anime TVDB Rehydration', schedule: '0 6 * * *' },
   {
+    name: 'english_content_verify',
+    label: 'English Content Verify',
+    schedule: '0 8 * * *',
+  },
+  {
     name: 'scheduled_hydrations',
     label: 'Scheduled Hydrations Sync',
     schedule: CronExpression.EVERY_HOUR,
@@ -89,6 +94,11 @@ export class CronManagerService implements OnModuleInit {
       label: 'Anime TVDB Rehydration',
       defaultSchedule: '0 6 * * *',
       fn: () => this.metadataBackfill.rehydrateAnimeFromTvdb(),
+    });
+    this.handlers.set('english_content_verify', {
+      label: 'English Content Verify',
+      defaultSchedule: '0 8 * * *',
+      fn: () => this.metadataBackfill.repairNonEnglishContent(2000),
     });
     this.handlers.set('scheduled_hydrations', {
       label: 'Scheduled Hydrations Sync',

@@ -20,6 +20,7 @@ interface MetadataHealth {
   movieDataOnShows: number;
   multiTvdbIds: number;
   nonEnglishBase: number;
+  nonEnglishContent: number;
 }
 
 /** Live progress of one background repair job (from /admin/metadata-health/repair-progress). */
@@ -38,6 +39,7 @@ const REPAIR_LABELS: Record<string, string> = {
   'anime-rehydrate': 'Anime → TVDB rehydration',
   'tvdb-id-conflicts': 'TVDB ID conflict repair',
   'english-base': 'English base restore',
+  'english-content': 'English content verify',
 };
 
 /** One-line guidance per stat: what it means and what to do about it. */
@@ -61,6 +63,8 @@ const STAT_HINTS: Record<string, string> = {
     'Rows carrying more than one TVDB id — merge leftovers (harmless) or id poisoning from an old bug (one id belongs to a DIFFERENT show, mis-routing matches). Repair verifies each id via TMDB and detaches only the wrong ones. User history is never deleted.',
   nonEnglishBase:
     "Rows explicitly marked as having a non-English base title (title_locale ≠ en). Repair re-hydrates them with a proper English base and restores the 'en' override. Rows with an unset marker are NOT counted (most have a fine English base already). No user data touched.",
+  nonEnglishContent:
+    "Suspected wrong-language CONTENT with a lying/missing marker: the title an English user sees contains non-ASCII. Verify+Fix checks the most-popular suspects first against the provider's canonical English title and re-hydrates only real mismatches. Verified rows are remembered and leave this count (a title change re-arms them), so the number DRAINS as runs complete. Deep mode verifies every row — catches pure-ASCII foreign titles. A nightly Scheduled Job keeps it converged. No user data touched.",
 };
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -89,6 +93,10 @@ export default function MetadataHealthPage() {
   const [repairingEnBase, setRepairingEnBase] = useState(false);
   const [enBaseResult, setEnBaseResult] = useState<string | null>(null);
   const [enBaseCount, setEnBaseCount] = useState('200');
+  const [repairingEnContent, setRepairingEnContent] = useState(false);
+  const [enContentResult, setEnContentResult] = useState<string | null>(null);
+  const [enContentCount, setEnContentCount] = useState('500');
+  const [enContentDeep, setEnContentDeep] = useState(false);
   const [castCount, setCastCount] = useState('500');
   const [repairs, setRepairs] = useState<Record<string, RepairProgress>>({});
   const [batchCount, setBatchCount] = useState('200');
@@ -222,6 +230,22 @@ export default function MetadataHealthPage() {
       .finally(() => setRepairingEnBase(false));
   };
 
+  const runEnContentRepair = () => {
+    setRepairingEnContent(true);
+    setEnContentResult(null);
+    const n = Math.max(1, Number(enContentCount) || 500);
+    api
+      .post(`/admin/repair-english-content/run?count=${n}${enContentDeep ? '&deep=1' : ''}`)
+      .then(() => {
+        setEnContentResult(
+          `English-content verify+repair started (${n} rows${enContentDeep ? ', deep scan' : ''}). Watch the progress panel above; stats refresh in 60s.`,
+        );
+        setTimeout(() => load(), 60000);
+      })
+      .catch(() => setEnContentResult('English-content repair failed to start.'))
+      .finally(() => setRepairingEnContent(false));
+  };
+
   if (!canView) return <p className="p-6 text-sm text-zinc-500">Admins only.</p>;
 
   const pct = (n: number) => (stats && stats.total > 0 ? Math.round((n / stats.total) * 100) : 0);
@@ -306,6 +330,11 @@ export default function MetadataHealthPage() {
       {enBaseResult && (
         <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-800 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-200">
           {enBaseResult}
+        </div>
+      )}
+      {enContentResult && (
+        <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-200">
+          {enContentResult}
         </div>
       )}
 
@@ -492,6 +521,40 @@ export default function MetadataHealthPage() {
                     className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
                   >
                     {repairingEnBase ? 'Starting…' : 'Restore English Base'}
+                  </button>
+                </div>
+              }
+            />
+            <MetricCard
+              label="Non-English Content (suspected)"
+              value={stats.nonEnglishContent}
+              sub="unverified suspects — most-visible first"
+              hint={STAT_HINTS.nonEnglishContent}
+              highlight={stats.nonEnglishContent > 0}
+              action={
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={enContentCount}
+                    onChange={(e) => setEnContentCount(e.target.value)}
+                    className="w-20 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+                    title="Rows per run"
+                  />
+                  <label className="flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+                    <input
+                      type="checkbox"
+                      checked={enContentDeep}
+                      onChange={(e) => setEnContentDeep(e.target.checked)}
+                    />
+                    deep (all rows)
+                  </label>
+                  <button
+                    onClick={runEnContentRepair}
+                    disabled={repairingEnContent}
+                    className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    {repairingEnContent ? 'Starting…' : 'Verify & Fix English'}
                   </button>
                 </div>
               }
