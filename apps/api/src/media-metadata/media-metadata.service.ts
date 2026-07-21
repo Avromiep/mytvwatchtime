@@ -648,6 +648,42 @@ export class MediaMetadataService {
     return mediaId;
   }
 
+  /**
+   * TVDB exposes no public 0–10 rating, so TVDB-hydrated rows are born unrated.
+   * When the row ALSO carries a TMDB id, fill the rating with ONE light TMDB base
+   * call (vote_average). Best-effort and self-limiting: only runs while the row
+   * has no rating. This makes every TVDB-hydration-driven repair (anime rehydrate,
+   * character-ids, banner posters, type-mismatch recreation) also heal ratings.
+   */
+  private async fillRatingFromTmdbIfMissing(mediaId: string, type: MediaType) {
+    try {
+      const kind = type === MediaType.SHOW ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
+      const media = await this.prisma.mediaItem.findUnique({
+        where: { id: mediaId },
+        select: {
+          rating: true,
+          externalIds: {
+            where: { provider: ExternalProvider.TMDB, providerEntityKind: kind },
+            select: { value: true },
+            take: 1,
+          },
+        },
+      });
+      if (!media || media.rating != null || !this.tmdb.enabled) return;
+      const tmdbIdRaw = media.externalIds[0]?.value;
+      if (!tmdbIdRaw) return;
+      const base =
+        type === MediaType.SHOW
+          ? await this.tmdb.localizedShowBase(Number(tmdbIdRaw), 'en-US')
+          : await this.tmdb.localizedMovieBase(Number(tmdbIdRaw), 'en-US');
+      if (base.rating != null && base.rating > 0) {
+        await this.prisma.mediaItem.update({ where: { id: mediaId }, data: { rating: base.rating } });
+      }
+    } catch (e) {
+      this.logger.debug(`rating fill skipped for ${mediaId}: ${(e as Error).message}`);
+    }
+  }
+
   async ensureShowFullTvdb(
     tvdbId: number,
     userId?: string,
@@ -681,6 +717,7 @@ export class MediaMetadataService {
     // classification enqueue — the anime evidence (genres/origin/keywords) does not
     // change from a same-provider cast refresh, and the enqueue storm saturates Jikan.
     if (!opts?.skipClassification) await this.scheduleClassification(mediaId);
+    await this.fillRatingFromTmdbIfMissing(mediaId, MediaType.SHOW);
     return mediaId;
   }
 
@@ -706,6 +743,7 @@ export class MediaMetadataService {
       mediaId = existing!.id;
     }
     await this.scheduleClassification(mediaId);
+    await this.fillRatingFromTmdbIfMissing(mediaId, MediaType.MOVIE);
     return mediaId;
   }
 
