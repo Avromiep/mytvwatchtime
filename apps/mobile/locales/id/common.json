@@ -81,5 +81,6 @@
   "today": "Hari ini",
   "tomorrow": "Besok",
   "thisWeek": "Minggu ini",
-  "nextWeek": "Minggu depan"
+  "nextWeek": "Minggu depan",
+  "deletedUser": "Pengguna dihapus"
 }

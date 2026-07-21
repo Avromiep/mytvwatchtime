@@ -41,7 +41,7 @@
   "logout": "Keluar",
   "deleteAccount": "Hapus akun",
   "deleteAccountConfirm": "Hapus akun",
-  "deleteAccountDesc": "Tindakan ini menghapus akun dan data Anda secara permanen.",
+  "deleteAccountDesc": "Ini menghapus akun dan data pribadi Anda secara permanen. Komentar Anda tetap terlihat dengan identitas Pengguna dihapus.",
   "privacyUpdateFailed": "Tidak dapat memperbarui privasi. Silakan coba lagi.",
   "permissionNeeded": "Izin diperlukan",
   "allowPhotoAccess": "Izinkan akses ke foto",

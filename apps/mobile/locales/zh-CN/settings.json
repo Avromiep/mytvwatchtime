@@ -41,7 +41,7 @@
   "logout": "退出登录",
   "deleteAccount": "删除账号",
   "deleteAccountConfirm": "删除账户",
-  "deleteAccountDesc": "这将永久删除你的账户和数据。",
+  "deleteAccountDesc": "这将永久删除您的帐户和个人数据。您的评论将以已删除用户身份继续显示。",
   "privacyUpdateFailed": "无法更新隐私设置，请重试。",
   "permissionNeeded": "需要权限",
   "allowPhotoAccess": "请允许访问照片",

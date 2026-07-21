@@ -4,6 +4,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, ListSource } from '@prisma/client';
 import { COMMENT_SPOILER_THRESHOLD, MediaType } from '@tvwatch/shared';
 import { shadowEmail, shadowUsername } from './lib/shadow-user';
+import { DELETED_USER_EMAIL } from '../users/lib/deleted-user';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingService } from '../common/setting.service';
 import { CommentImageProcessor } from '../comment-images/comment-image.processor';
@@ -1799,17 +1800,30 @@ export class ImportService {
 
     // ---- Dedupe by (source, sourceKey) GLOBALLY. A source comment id identifies ONE
     // comment worldwide: if the real author already imported it (or another user's
-    // archive carried it as a blob reply under a shadow), never create a second copy. ----
+    // archive carried it as a blob reply under a shadow), never create a second copy.
+    // RECLAIM exception: comments whose author DELETED their account live under the
+    // system deleted-user account — when the same person re-registers and re-imports,
+    // their own comments return to them instead of being dropped as duplicates. ----
     const keys = [
       ...new Set(commentItems.map((it: any) => normOf(it).sourceKey).filter(Boolean)),
     ] as string[];
     const existing = keys.length
       ? await this.prisma.comment.findMany({
           where: { source, sourceKey: { in: keys } },
-          select: { sourceKey: true },
+          select: { id: true, userId: true, sourceKey: true },
         })
       : [];
     const have = new Set(existing.map((c: any) => c.sourceKey as string));
+    const existingByKey = new Map(existing.map((c: any) => [c.sourceKey as string, c]));
+    const deletedUserId = existing.length
+      ? ((
+          await this.prisma.user.findUnique({
+            where: { email: DELETED_USER_EMAIL },
+            select: { id: true },
+          })
+        )?.id ?? null)
+      : null;
+    const reclaimIds: string[] = [];
 
     // ---- Parents: in-batch creations + DB comments by (source, sourceKey). ----
     // The raw parent reference (parent comment uuid) maps to the parent's staged sourceKey
@@ -1925,7 +1939,14 @@ export class ImportService {
           continue;
         }
         if (sourceKey && have.has(sourceKey)) {
-          skipped++;
+          const existingRow = existingByKey.get(sourceKey);
+          // Reclaim only OWNER-authored candidates: blob replies by others (shadow
+          // candidates) must never be moved to the importing user.
+          if (norm.authorIsOwner && deletedUserId && existingRow?.userId === deletedUserId) {
+            reclaimIds.push(existingRow.id);
+          } else {
+            skipped++;
+          }
           appliedIds.push(it.id);
           continue;
         }
@@ -2004,6 +2025,20 @@ export class ImportService {
       });
     }
 
+    // Reclaim the owner's comments that survived a previous account deletion under the
+    // system deleted-user account (guarded by userId so concurrent imports can't steal
+    // rows another import already reclaimed). No audit rows — rollback must not delete
+    // these pre-existing comments.
+    if (reclaimIds.length) {
+      await this.prisma.comment.updateMany({
+        where: { id: { in: reclaimIds }, userId: deletedUserId! },
+        data: { userId },
+      });
+      this.logger.log(
+        `Import ${importId}: reclaimed ${reclaimIds.length} comment(s) from a previously deleted account`,
+      );
+    }
+
     // Link older strays whose parents just arrived (incl. parents imported by OTHER users).
     await this.reconcileCommentParents(createdParents);
 
@@ -2017,9 +2052,9 @@ export class ImportService {
 
     await this.prisma.import.update({
       where: { id: importId },
-      data: { commentsImported: { increment: created } },
+      data: { commentsImported: { increment: created + reclaimIds.length } },
     });
-    return { created, skipped };
+    return { created: created + reclaimIds.length, skipped };
   }
 
   /**

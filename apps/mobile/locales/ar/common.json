@@ -81,5 +81,6 @@
   "today": "اليوم",
   "tomorrow": "غداً",
   "thisWeek": "هذا الأسبوع",
-  "nextWeek": "الأسبوع المقبل"
+  "nextWeek": "الأسبوع المقبل",
+  "deletedUser": "مستخدم محذوف"
 }

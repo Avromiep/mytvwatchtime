@@ -50,6 +50,9 @@ export interface PublicUserDto {
   followersCount: number;
   commentsCount: number;
   createdAt: string;
+  /** True for the system "Deleted user" account (comments of deleted accounts) — render a
+   *  localized "Deleted user" name and suppress profile links/avatar. */
+  isDeletedUser?: boolean;
 }
 
 export interface CurrentUserDto extends PublicUserDto {

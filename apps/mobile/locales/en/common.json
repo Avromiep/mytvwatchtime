@@ -59,8 +59,6 @@
   "tryAgain": "Try again",
   "pleaseTryAgain": "Please try again",
   "failed": "Failed",
-  "cancel": "Cancel",
-  "clear": "Clear",
   "maybeLater": "Maybe later",
   "later": "Later",
   "never": "Never",
@@ -85,5 +83,6 @@
   "image": "Image",
   "processing": "Processing…",
   "nothingHereYet": "Nothing here yet",
-  "browse": "Browse"
+  "browse": "Browse",
+  "deletedUser": "Deleted user"
 }

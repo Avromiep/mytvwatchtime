@@ -41,7 +41,7 @@
   "logout": "Cerrar sesión",
   "deleteAccount": "Eliminar cuenta",
   "deleteAccountConfirm": "Eliminar cuenta",
-  "deleteAccountDesc": "Esto elimina permanentemente tu cuenta y tus datos.",
+  "deleteAccountDesc": "Esto elimina permanentemente tu cuenta y tus datos personales. Tus comentarios seguirán visibles con la identidad Usuario eliminado.",
   "privacyUpdateFailed": "No se pudo actualizar la privacidad. Inténtalo de nuevo.",
   "permissionNeeded": "Permiso necesario",
   "allowPhotoAccess": "Permite el acceso a las fotos",

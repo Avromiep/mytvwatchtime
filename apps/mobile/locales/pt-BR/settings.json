@@ -41,7 +41,7 @@
   "logout": "Sair",
   "deleteAccount": "Excluir conta",
   "deleteAccountConfirm": "Excluir conta",
-  "deleteAccountDesc": "Isso exclui permanentemente sua conta e seus dados.",
+  "deleteAccountDesc": "Isso exclui permanentemente sua conta e seus dados pessoais. Seus comentários permanecem visíveis sob a identidade Usuário excluído.",
   "privacyUpdateFailed": "Não foi possível atualizar a privacidade. Tente novamente.",
   "permissionNeeded": "Permissão necessária",
   "allowPhotoAccess": "Permita o acesso às fotos",

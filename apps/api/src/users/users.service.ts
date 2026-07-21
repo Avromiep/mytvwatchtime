@@ -2,8 +2,14 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
-import { mapCurrentUser, mapPublicUser, dtoThemeToDb, dtoLangToDb } from '../common/utils/mapper.util';
+import {
+  mapCurrentUser,
+  mapPublicUser,
+  dtoThemeToDb,
+  dtoLangToDb,
+} from '../common/utils/mapper.util';
 import { DeviceRegisterDto, UpdateProfileDto } from './dto/user.dto';
+import { anonymizeAndDeleteUser, RESERVED_USERNAMES } from './lib/deleted-user';
 
 @Injectable()
 export class UsersService {
@@ -52,6 +58,9 @@ export class UsersService {
 
   async updateMe(userId: string, dto: UpdateProfileDto) {
     if (dto.username) {
+      if (RESERVED_USERNAMES.has(dto.username.toLowerCase())) {
+        throw new ConflictException('This username is reserved');
+      }
       const taken = await this.prisma.user.findFirst({
         where: { username: dto.username, NOT: { id: userId } },
       });
@@ -70,8 +79,12 @@ export class UsersService {
         avatarUrl: dto.avatarUrl ?? null,
         coverUrl: dto.coverUrl ?? null,
         isPrivate: dto.isPrivate ?? false,
-        ...(dto.themePreference ? { themePreference: dtoThemeToDb(dto.themePreference) as any } : {}),
-        ...(dto.languagePreference ? { languagePreference: dtoLangToDb(dto.languagePreference) as any } : {}),
+        ...(dto.themePreference
+          ? { themePreference: dtoThemeToDb(dto.themePreference) as any }
+          : {}),
+        ...(dto.languagePreference
+          ? { languagePreference: dtoLangToDb(dto.languagePreference) as any }
+          : {}),
       },
       update: {
         displayName: dto.displayName,
@@ -79,8 +92,12 @@ export class UsersService {
         avatarUrl: dto.avatarUrl,
         coverUrl: dto.coverUrl,
         isPrivate: dto.isPrivate,
-        ...(dto.themePreference ? { themePreference: dtoThemeToDb(dto.themePreference) as any } : {}),
-        ...(dto.languagePreference ? { languagePreference: dtoLangToDb(dto.languagePreference) as any } : {}),
+        ...(dto.themePreference
+          ? { themePreference: dtoThemeToDb(dto.themePreference) as any }
+          : {}),
+        ...(dto.languagePreference
+          ? { languagePreference: dtoLangToDb(dto.languagePreference) as any }
+          : {}),
       },
     });
     return this.getMe(userId);
@@ -90,9 +107,9 @@ export class UsersService {
     // Evict the JWT existence cache BEFORE the row delete so in-flight requests
     // re-check the DB instead of racing through on the stale positive entry.
     await this.redis.del(`auth:user:${userId}`);
-    // Idempotent: a retried delete (double-tap / client retry after a timeout)
-    // is a success — the account is already gone, which is the desired end state.
-    await this.prisma.user.deleteMany({ where: { id: userId } });
+    // Anonymize-and-delete: comments move to the system "Deleted user" account (threads
+    // survive); everything personal cascades. Idempotent — already gone = success.
+    await anonymizeAndDeleteUser(this.prisma, userId);
     return { ok: true };
   }
 
@@ -110,7 +127,15 @@ export class UsersService {
           pushAuth: dto.pushAuth,
           active: true,
         },
-        update: { userId, platform: dto.platform, appVersion: dto.appVersion, timezone: dto.timezone, pushP256dh: dto.pushP256dh, pushAuth: dto.pushAuth, active: true },
+        update: {
+          userId,
+          platform: dto.platform,
+          appVersion: dto.appVersion,
+          timezone: dto.timezone,
+          pushP256dh: dto.pushP256dh,
+          pushAuth: dto.pushAuth,
+          active: true,
+        },
       });
       return { id: device.id };
     } catch (e) {
@@ -148,7 +173,12 @@ export class UsersService {
     });
 
     const followingIds = new Set(
-      (await this.prisma.follow.findMany({ where: { followerId: userId }, select: { targetId: true } })).map(f => f.targetId),
+      (
+        await this.prisma.follow.findMany({
+          where: { followerId: userId },
+          select: { targetId: true },
+        })
+      ).map((f) => f.targetId),
     );
 
     return users.map((u) => ({
@@ -170,7 +200,11 @@ export class UsersService {
     const [followersCount, followingCount, isFollowing] = await Promise.all([
       this.prisma.follow.count({ where: { targetId: user.id } }),
       this.prisma.follow.count({ where: { followerId: user.id } }),
-      viewerId ? this.prisma.follow.findUnique({ where: { followerId_targetId: { followerId: viewerId, targetId: user.id } } }) : null,
+      viewerId
+        ? this.prisma.follow.findUnique({
+            where: { followerId_targetId: { followerId: viewerId, targetId: user.id } },
+          })
+        : null,
     ]);
 
     return {
@@ -189,22 +223,30 @@ export class UsersService {
   }
 
   async getFollows(userId: string, type: 'followers' | 'following', viewerId?: string) {
-    const follows = type === 'followers'
-      ? await this.prisma.follow.findMany({
-          where: { targetId: userId },
-          include: { follower: { include: { profile: true } } },
-          orderBy: { createdAt: 'desc' },
-          take: 100,
-        })
-      : await this.prisma.follow.findMany({
-          where: { followerId: userId },
-          include: { target: { include: { profile: true } } },
-          orderBy: { createdAt: 'desc' },
-          take: 100,
-        });
+    const follows =
+      type === 'followers'
+        ? await this.prisma.follow.findMany({
+            where: { targetId: userId },
+            include: { follower: { include: { profile: true } } },
+            orderBy: { createdAt: 'desc' },
+            take: 100,
+          })
+        : await this.prisma.follow.findMany({
+            where: { followerId: userId },
+            include: { target: { include: { profile: true } } },
+            orderBy: { createdAt: 'desc' },
+            take: 100,
+          });
 
     const viewerFollowing = viewerId
-      ? new Set((await this.prisma.follow.findMany({ where: { followerId: viewerId }, select: { targetId: true } })).map(f => f.targetId))
+      ? new Set(
+          (
+            await this.prisma.follow.findMany({
+              where: { followerId: viewerId },
+              select: { targetId: true },
+            })
+          ).map((f) => f.targetId),
+        )
       : new Set<string>();
 
     return follows.map((f: any) => {

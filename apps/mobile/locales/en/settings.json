@@ -41,7 +41,7 @@
   "logout": "Log out",
   "deleteAccount": "Delete account",
   "deleteAccountConfirm": "Delete account",
-  "deleteAccountDesc": "This permanently deletes your account and data.",
+  "deleteAccountDesc": "This permanently deletes your account and personal data. Your comments stay visible under a Deleted user identity.",
   "privacyUpdateFailed": "Could not update privacy. Please try again.",
   "permissionNeeded": "Permission needed",
   "allowPhotoAccess": "Please allow photo access",

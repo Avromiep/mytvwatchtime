@@ -41,7 +41,7 @@
   "logout": "Çıkış yap",
   "deleteAccount": "Hesabı sil",
   "deleteAccountConfirm": "Hesabı sil",
-  "deleteAccountDesc": "Bu işlem hesabını ve verilerini kalıcı olarak siler.",
+  "deleteAccountDesc": "Bu, hesabınızı ve kişisel verilerinizi kalıcı olarak siler. Yorumlarınız Silinmiş kullanıcı kimliğiyle görünür kalır.",
   "privacyUpdateFailed": "Gizlilik ayarı güncellenemedi. Lütfen tekrar dene.",
   "permissionNeeded": "İzin gerekli",
   "allowPhotoAccess": "Lütfen fotoğraflara erişime izin ver",

@@ -41,7 +41,7 @@
   "logout": "Se déconnecter",
   "deleteAccount": "Supprimer le compte",
   "deleteAccountConfirm": "Supprimer le compte",
-  "deleteAccountDesc": "Cette action supprime définitivement votre compte et vos données.",
+  "deleteAccountDesc": "Cela supprime définitivement votre compte et vos données personnelles. Vos commentaires restent visibles sous une identité Utilisateur supprimé.",
   "privacyUpdateFailed": "Impossible de mettre à jour la confidentialité. Veuillez réessayer.",
   "permissionNeeded": "Autorisation requise",
   "allowPhotoAccess": "Veuillez autoriser l’accès aux photos",

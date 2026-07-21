@@ -7,6 +7,7 @@ import type { CommentDto, CommentListRefDto, CommentMediaRefDto } from '@tvwatch
 import { PosterImage, T, APP_ICON } from '../primitives';
 import { CommentMedia } from './CommentMedia';
 import {
+  authorDisplayName,
   formatRelativeShort,
   THREAD_AVATAR,
   THREAD_CENTER_Y,
@@ -76,13 +77,13 @@ export function NodeContent({
       {/* Header: avatar · username · time */}
       <View style={styles.headerRow}>
         <Pressable
-          onPress={() => handlers.onPressAuthor?.(comment)}
+          onPress={() => !comment.author?.isDeletedUser && handlers.onPressAuthor?.(comment)}
           hitSlop={6}
           accessibilityRole="button"
-          accessibilityLabel={comment.author?.username}
+          accessibilityLabel={authorDisplayName(comment.author, t)}
         >
           <PosterImage
-            uri={comment.author?.avatarUrl}
+            uri={comment.author?.isDeletedUser ? null : comment.author?.avatarUrl}
             fallback={APP_ICON}
             style={{ width: THREAD_AVATAR, height: THREAD_AVATAR, borderRadius: THREAD_AVATAR / 2 }}
           />
@@ -93,7 +94,7 @@ export function NodeContent({
             style={{ fontWeight: '700', color: tokens.textPrimary }}
             numberOfLines={1}
           >
-            {comment.author?.username}
+            {authorDisplayName(comment.author, t)}
           </T>
           <T variant="micro" muted style={{ marginLeft: spacing.xs }} numberOfLines={1}>
             · {formatRelativeShort(comment.createdAt, t, resolvedLocale)}

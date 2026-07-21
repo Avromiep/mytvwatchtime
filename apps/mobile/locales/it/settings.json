@@ -41,7 +41,7 @@
   "logout": "Esci",
   "deleteAccount": "Elimina account",
   "deleteAccountConfirm": "Elimina account",
-  "deleteAccountDesc": "Questa operazione elimina definitivamente il tuo account e i tuoi dati.",
+  "deleteAccountDesc": "Questo elimina definitivamente il tuo account e i tuoi dati personali. I tuoi commenti restano visibili con l’identità Utente eliminato.",
   "privacyUpdateFailed": "Impossibile aggiornare la privacy. Riprova.",
   "permissionNeeded": "Autorizzazione necessaria",
   "allowPhotoAccess": "Consenti l’accesso alle foto",

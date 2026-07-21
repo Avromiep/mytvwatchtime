@@ -81,5 +81,6 @@
   "today": "今天",
   "tomorrow": "明天",
   "thisWeek": "本周",
-  "nextWeek": "下周"
+  "nextWeek": "下周",
+  "deletedUser": "已删除用户"
 }

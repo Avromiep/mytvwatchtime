@@ -96,6 +96,11 @@
 - Self-hosted: `PUSH_MODE=relay` sends through public server's `/api/push/relay` endpoint.
 - Episode notifications spread across afternoon (noon→3pm→4pm...), computed **per user in their device timezone** (devices register with `timezone` from `Intl.DateTimeFormat().resolvedOptions().timeZone`; latest active device wins, then `NotificationPreference.timezone`, then server tz). "Today" is the user's local day (`common/utils/timezone.util.ts` — Intl-based, DST-safe). Devices re-register on every app start, which also backfills tz for pre-feature users — including WEB (`useWebPush` re-registers even when a PushSubscription already exists; the old early-return left pre-tz web devices at tz=NULL forever). A slot that already passed fires +10min when it's before 21:00 local, and DEFERS to the next day's first spread slot (user tz) at/after 21:00 local (`catchUpPushAt`) — notifications are NEVER skipped and never land as midnight "airs today" pushes (quiet-hours prefs exist but are NOT enforced anywhere).
 
+## Account deletion (anonymize-and-delete)
+- Both paths (`DataDeletionService.confirmDeletion`, `UsersService.deleteMe`) call `anonymizeAndDeleteUser` (`apps/api/src/users/lib/deleted-user.ts`): the user's COMMENTS are reassigned to ONE deterministic system account (`deleted-user@system.local` / username `deleted-user`) and everything else cascades away as before. Reassigning first also fixes the `comments.parent_id` NoAction FK failure that made deletion fail for users whose comments had replies. Denormalized `likesCount`/`spoilerCount` on surviving comments are decremented for the deleted user's cascaded likes/reports. Never delete a user row directly — use the helper.
+- Clients render the system account via `PublicUserDto.isDeletedUser` (set in `mapPublicUser`): localized `common:deletedUser` label (shared `authorDisplayName` in mobile `components/comments/thread-utils.ts`), no profile navigation, no avatar. The username `deleted-user` is reserved at registration and profile update (`RESERVED_USERNAMES`).
+- RECLAIM: if the same person re-registers and re-imports, `applyComments` returns their comments — a staged OWNER-authored candidate whose (source, sourceKey) exists under the deleted-user account is reassigned to the importing user instead of dedupe-skipped (guarded by `userId` in the update; third-party/shadow candidates never reclaim; no audit rows so rollback can't delete the pre-existing comments).
+
 ## Self-hosted backend support
 - Mobile app has a "Self-hosted backend" checkbox on login/register.
 - When checked: hides social login, shows URL input, stores URL in SecureStore.
@@ -189,7 +194,7 @@ In the final response, provide a concise checklist stating which items were appl
 - `apps/api/src/media-metadata/discovery.service.ts` — merged TMDb + TVDB search with Redis cache
 - `apps/api/src/social/moderation.service.ts` — block/report/admin moderation
 - `apps/api/src/users/export.service.ts` — data export (JSON, 24h expiry)
-- `apps/api/src/data-deletion/data-deletion.service.ts` — email-based account deletion
+- `apps/api/src/data-deletion/data-deletion.service.ts` — email-based account deletion (anonymize-and-delete via `users/lib/deleted-user.ts`)
 - `apps/mobile/api/client.ts` — HTTP client with auth + self-hosted URL + `SITE_URL`
 - `apps/mobile/api/hooks.ts` — all React Query hooks (50+); `useEpisodeVotes` = per-section optimistic vote mutations
 - `apps/mobile/components/cards.tsx` — PosterCard, EpisodeCard, grids

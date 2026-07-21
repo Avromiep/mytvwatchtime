@@ -17,6 +17,7 @@ import type {
 } from '@tvwatch/shared';
 import { MediaType } from '@tvwatch/shared';
 import { localized } from './localization.util';
+import { isDeletedUserAccount } from '../../users/lib/deleted-user';
 
 type AnyRecord = Record<string, any>;
 
@@ -134,7 +135,7 @@ export function mapMovie(media: AnyRecord, userId?: string): MovieDto {
     addedCount: media.addedCount ?? 0,
     inWatchlist: !!(media.watchlist?.length || media._inWatchlist),
     favorite: !!(media.favorites?.length || media._favorite),
-    watched: userStatus?.watched ?? (media._watched ?? false),
+    watched: userStatus?.watched ?? media._watched ?? false,
     watchedAt: userStatus?.watchedAt ? new Date(userStatus.watchedAt).toISOString() : null,
     watchCount: userStatus?.watchCount ?? 0,
     trailerUrl: media.trailerUrl ?? null,
@@ -161,14 +162,11 @@ export function mapMediaCardLite(media: AnyRecord, userId?: string): MediaCardLi
     favorite: !!(media.favorites?.length || media._favorite),
     ...(media.type === MediaType.SHOW
       ? { userProgress: total > 0 ? Math.min(1, (userShow?.watchedCount ?? 0) / total) : 0 }
-      : { watched: userMovie?.watched ?? (media._watched ?? false) }),
+      : { watched: userMovie?.watched ?? media._watched ?? false }),
   };
 }
 
-export function mapEpisode(
-  ep: AnyRecord,
-  userStatus?: AnyRecord,
-): EpisodeDto {
+export function mapEpisode(ep: AnyRecord, userStatus?: AnyRecord): EpisodeDto {
   return {
     id: ep.id,
     seasonId: ep.seasonId,
@@ -190,13 +188,13 @@ export function mapEpisode(
 }
 
 export function mapSeason(season: AnyRecord, userId?: string): SeasonSummaryDto {
-  const watched = userId ? season._watchedCount ?? 0 : 0;
+  const watched = userId ? (season._watchedCount ?? 0) : 0;
   return {
     id: season.id,
     number: season.number,
     title: localized(season, 'titles', 'title') ?? season.title,
     posterUrl: localized(season, 'posterUrls', 'posterUrl') ?? null,
-    episodeCount: season.episodeCount ?? (season.episodes?.length ?? 0),
+    episodeCount: season.episodeCount ?? season.episodes?.length ?? 0,
     watchedCount: watched,
     airedCount: season.airedCount ?? 0,
   };
@@ -215,6 +213,9 @@ export function mapPublicUser(user: AnyRecord): PublicUserDto {
     followersCount: user._followersCount ?? 0,
     commentsCount: user._commentsCount ?? 0,
     createdAt: new Date(user.createdAt).toISOString(),
+    // System deleted-user account (comments of deleted accounts) — clients render a
+    // localized "Deleted user" name and suppress profile links.
+    isDeletedUser: isDeletedUserAccount(user),
   };
 }
 

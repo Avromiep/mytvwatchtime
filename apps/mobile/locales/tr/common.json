@@ -81,5 +81,6 @@
   "today": "Bugün",
   "tomorrow": "Yarın",
   "thisWeek": "Bu hafta",
-  "nextWeek": "Gelecek hafta"
+  "nextWeek": "Gelecek hafta",
+  "deletedUser": "Silinmiş kullanıcı"
 }

@@ -81,5 +81,6 @@
   "today": "오늘",
   "tomorrow": "내일",
   "thisWeek": "이번 주",
-  "nextWeek": "다음 주"
+  "nextWeek": "다음 주",
+  "deletedUser": "삭제된 사용자"
 }

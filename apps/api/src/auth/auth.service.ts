@@ -17,6 +17,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { EmailService } from '../common/email.service';
 import type { JwtPayload } from './jwt.strategy';
 import { EmailLoginDto, EmailRegisterDto, SocialLoginDto } from './dto/auth.dto';
+import { RESERVED_USERNAMES } from '../users/lib/deleted-user';
 import type { AuthSessionDto } from '@tvwatch/shared';
 
 function uid(len = 6): string {
@@ -48,6 +49,9 @@ export class AuthService {
   }
 
   async register(dto: EmailRegisterDto): Promise<AuthSessionDto> {
+    if (RESERVED_USERNAMES.has(dto.username.toLowerCase())) {
+      throw new ConflictException('This username is reserved');
+    }
     const exists = await this.prisma.user.findFirst({
       where: { OR: [{ email: dto.email }, { username: dto.username }] },
     });
@@ -80,7 +84,13 @@ export class AuthService {
         profile: { create: { displayName: dto.username } },
       },
     });
-    return this.issueSession(user.id, user.username, user.email, user.role, user.mustChangePassword);
+    return this.issueSession(
+      user.id,
+      user.username,
+      user.email,
+      user.role,
+      user.mustChangePassword,
+    );
   }
 
   async login(dto: EmailLoginDto): Promise<AuthSessionDto> {
@@ -91,7 +101,14 @@ export class AuthService {
     if (!user || !user.passwordHash) throw new UnauthorizedException('Invalid credentials');
     const ok = await argon2.verify(user.passwordHash, dto.password);
     if (!ok) throw new UnauthorizedException('Invalid credentials');
-    return this.issueSession(user.id, user.username, user.email, user.role, user.mustChangePassword, dto.rememberMe === true);
+    return this.issueSession(
+      user.id,
+      user.username,
+      user.email,
+      user.role,
+      user.mustChangePassword,
+      dto.rememberMe === true,
+    );
   }
 
   async changePassword(userId: string, oldPassword: string, newPassword: string): Promise<void> {
@@ -158,7 +175,14 @@ export class AuthService {
     });
   }
 
-  async socialLogin(dto: { provider: any; token?: string; authorizationCode?: string; nonce?: string; username?: string; redirectUri?: string }): Promise<AuthSessionDto> {
+  async socialLogin(dto: {
+    provider: any;
+    token?: string;
+    authorizationCode?: string;
+    nonce?: string;
+    username?: string;
+    redirectUri?: string;
+  }): Promise<AuthSessionDto> {
     const profile = dto.token
       ? dto.provider === 'GOOGLE'
         ? await this.verifyGoogle(dto.token)
@@ -166,10 +190,14 @@ export class AuthService {
           ? await this.verifyApple(dto.token)
           : dto.provider === 'FACEBOOK'
             ? await this.verifyFacebook(dto.token)
-            : (() => { throw new UnauthorizedException('Unsupported provider'); })()
+            : (() => {
+                throw new UnauthorizedException('Unsupported provider');
+              })()
       : dto.authorizationCode && dto.redirectUri
         ? await this.exchangeCode(dto.provider, dto.authorizationCode, dto.redirectUri)
-        : (() => { throw new UnauthorizedException('Token or authorization code required'); })();
+        : (() => {
+            throw new UnauthorizedException('Token or authorization code required');
+          })();
 
     const existing = await this.prisma.userAuthProvider.findUnique({
       where: { provider_providerUid: { provider: dto.provider, providerUid: profile.providerUid } },
@@ -193,7 +221,13 @@ export class AuthService {
         },
       });
     }
-    return this.issueSession(user.id, user.username, user.email, user.role, user.mustChangePassword);
+    return this.issueSession(
+      user.id,
+      user.username,
+      user.email,
+      user.role,
+      user.mustChangePassword,
+    );
   }
 
   async refresh(refreshToken: string): Promise<AuthSessionDto> {
@@ -213,7 +247,13 @@ export class AuthService {
     if (payload.kind !== 'refresh') throw new UnauthorizedException('Invalid refresh token');
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user) throw new NotFoundException('User not found');
-    return this.issueSession(user.id, user.username, user.email, user.role, user.mustChangePassword);
+    return this.issueSession(
+      user.id,
+      user.username,
+      user.email,
+      user.role,
+      user.mustChangePassword,
+    );
   }
 
   async issueSession(
@@ -265,7 +305,11 @@ export class AuthService {
       { ...payload, kind },
       {
         secret: this.config.get<string>('jwt.secret')!,
-        expiresIn: ttlOverride ?? (kind === 'access' ? this.config.get<string>('jwt.accessTtl') : this.config.get<string>('jwt.refreshTtl')),
+        expiresIn:
+          ttlOverride ??
+          (kind === 'access'
+            ? this.config.get<string>('jwt.accessTtl')
+            : this.config.get<string>('jwt.refreshTtl')),
       },
     );
   }
@@ -293,7 +337,11 @@ export class AuthService {
   }
 
   /** Exchange an authorization code for tokens, then verify. */
-  private async exchangeCode(provider: string, code: string, redirectUri: string): Promise<SocialProfile> {
+  private async exchangeCode(
+    provider: string,
+    code: string,
+    redirectUri: string,
+  ): Promise<SocialProfile> {
     if (provider === 'GOOGLE') {
       const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
@@ -328,7 +376,7 @@ export class AuthService {
     try {
       const { sub, email } = await appleSignin.verifyIdToken(idToken, {
         audience: this.config.get<string>('auth.apple.clientId'),
-    });
+      });
       if (!sub) throw new UnauthorizedException('Invalid Apple token');
       return { providerUid: sub, email };
     } catch (e) {

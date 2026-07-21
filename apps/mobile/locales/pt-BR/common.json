@@ -81,5 +81,6 @@
   "today": "Hoje",
   "tomorrow": "Amanhã",
   "thisWeek": "Esta semana",
-  "nextWeek": "Próxima semana"
+  "nextWeek": "Próxima semana",
+  "deletedUser": "Usuário excluído"
 }

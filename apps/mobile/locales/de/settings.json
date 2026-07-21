@@ -41,7 +41,7 @@
   "logout": "Abmelden",
   "deleteAccount": "Konto löschen",
   "deleteAccountConfirm": "Konto löschen",
-  "deleteAccountDesc": "Dadurch werden dein Konto und deine Daten dauerhaft gelöscht.",
+  "deleteAccountDesc": "Dadurch werden dein Konto und deine persönlichen Daten dauerhaft gelöscht. Deine Kommentare bleiben unter der Identität Gelöschter Nutzer sichtbar.",
   "privacyUpdateFailed": "Die Privatsphäre-Einstellung konnte nicht aktualisiert werden. Bitte versuche es erneut.",
   "permissionNeeded": "Berechtigung erforderlich",
   "allowPhotoAccess": "Bitte erlaube den Zugriff auf Fotos",

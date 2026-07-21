@@ -1,4 +1,4 @@
-import type { CommentDto, MyCommentContextDto } from '@tvwatch/shared';
+import type { CommentDto, MyCommentContextDto, PublicUserDto } from '@tvwatch/shared';
 import { formatDateTime } from '@tvwatch/shared';
 import type { TFunction } from 'i18next';
 
@@ -12,6 +12,15 @@ export function threadContextLabel(
     return t(`groups:names.${ctx.groupId ?? ctx.label}`, { defaultValue: ctx.label });
   }
   return ctx.label;
+}
+
+/** Comment author display name — the system deleted-user account renders localized. */
+export function authorDisplayName(
+  author: Pick<PublicUserDto, 'username' | 'isDeletedUser'> | null | undefined,
+  t: TFunction,
+): string {
+  if (!author) return '';
+  return author.isDeletedUser ? t('common:deletedUser') : author.username;
 }
 
 /**

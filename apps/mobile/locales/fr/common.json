@@ -28,5 +28,6 @@
   "later": "Plus tard",
   "watch": "Regarder",
   "rewatch": "Regarder de nouveau",
-  "unwatch": "Marquer comme non vu"
+  "unwatch": "Marquer comme non vu",
+  "deletedUser": "Utilisateur supprimé"
 }

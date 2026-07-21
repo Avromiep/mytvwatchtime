@@ -1,4 +1,5 @@
 import { ImportService } from './import.service';
+import { DELETED_USER_EMAIL } from '../users/lib/deleted-user';
 
 /**
  * Full-thread comment import: shadow authors, deferred parent linkage, reconciliation.
@@ -254,6 +255,46 @@ describe('ImportService.applyComments — shadow users + parent reconciliation',
     expect(res.created).toBe(0);
     expect(res.skipped).toBe(1);
     expect(commentCreates).toHaveLength(0);
+  });
+
+  it('reclaims owner comments that survived a previous account deletion', async () => {
+    // The user deleted their account (comments moved to the system deleted-user account),
+    // re-registered, and re-imports the same archive: their own comments come back.
+    const ownerItem = {
+      ...parentItem,
+      id: 'it-owner',
+      normalizedData: {
+        ...parentItem.normalizedData,
+        sourceAuthorId: 'owner-ext',
+        authorIsOwner: true,
+      },
+    };
+    const { service, commentCreates, comments } = makeService({
+      users: new Map([[DELETED_USER_EMAIL, { id: 'deleted-sys', email: DELETED_USER_EMAIL }]]),
+      existingComments: [
+        { id: 'old-c', userId: 'deleted-sys', source: 'TVTIME', sourceKey: 'tvtime|parent-1' },
+      ],
+    });
+    const res = await (service as any).applyComments('u1', 'imp1', [ownerItem], 'TVTIME');
+    expect(res.created).toBe(1); // the reclaim counts as imported
+    expect(res.skipped).toBe(0);
+    expect(commentCreates).toHaveLength(0); // no second copy
+    expect(comments.find((c) => c.id === 'old-c').userId).toBe('u1');
+  });
+
+  it('never reclaims third-party (shadow) comments to the importing user', async () => {
+    // Another user's archive carries the SAME comment as a blob reply — it must stay with
+    // the deleted-user account, not move to the importer.
+    const { service, comments } = makeService({
+      users: new Map([[DELETED_USER_EMAIL, { id: 'deleted-sys', email: DELETED_USER_EMAIL }]]),
+      existingComments: [
+        { id: 'old-c', userId: 'deleted-sys', source: 'TVTIME', sourceKey: 'tvtime|parent-1' },
+      ],
+    });
+    const res = await (service as any).applyComments('u-other', 'imp1', [parentItem], 'TVTIME');
+    expect(res.created).toBe(0);
+    expect(res.skipped).toBe(1);
+    expect(comments.find((c) => c.id === 'old-c').userId).toBe('deleted-sys');
   });
 });
 

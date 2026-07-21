@@ -7,6 +7,7 @@ import type { CommentDto, CommentListRefDto, CommentMediaRefDto } from '@tvwatch
 import { formatDateTime } from '@tvwatch/shared';
 import { PosterImage, T, APP_ICON } from '../primitives';
 import { CommentMedia } from './CommentMedia';
+import { authorDisplayName } from './thread-utils';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
 
@@ -81,14 +82,14 @@ export function CommentCard({
           onPress={(e) => {
             stop(e);
             if (isReview) openReviewSource();
-            else onPressAuthor?.(comment);
+            else if (!author?.isDeletedUser) onPressAuthor?.(comment);
           }}
           hitSlop={6}
           accessibilityRole="button"
-          accessibilityLabel={author?.username}
+          accessibilityLabel={authorDisplayName(author, t)}
         >
           <PosterImage
-            uri={author?.avatarUrl}
+            uri={author?.isDeletedUser ? null : author?.avatarUrl}
             fallback={APP_ICON}
             style={{ width: avatar, height: avatar, borderRadius: avatar / 2 }}
           />
@@ -97,7 +98,7 @@ export function CommentCard({
         <View style={styles.nameCol}>
           <View style={styles.nameRow}>
             <T variant="caption" style={{ fontWeight: '700', color: tokens.textPrimary }}>
-              {author?.username}
+              {authorDisplayName(author, t)}
             </T>
             {isReview ? (
               <Pressable

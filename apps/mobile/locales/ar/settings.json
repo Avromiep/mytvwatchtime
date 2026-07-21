@@ -41,7 +41,7 @@
   "logout": "تسجيل الخروج",
   "deleteAccount": "حذف الحساب",
   "deleteAccountConfirm": "حذف الحساب",
-  "deleteAccountDesc": "يؤدي هذا إلى حذف حسابك وبياناتك نهائيًا.",
+  "deleteAccountDesc": "يؤدي هذا إلى حذف حسابك وبياناتك الشخصية نهائيًا. تظل تعليقاتك مرئية بهوية مستخدم محذوف.",
   "privacyUpdateFailed": "تعذر تحديث إعداد الخصوصية. يرجى المحاولة مرة أخرى.",
   "permissionNeeded": "الإذن مطلوب",
   "allowPhotoAccess": "يرجى السماح بالوصول إلى الصور",
