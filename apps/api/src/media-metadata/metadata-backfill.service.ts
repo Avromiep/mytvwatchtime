@@ -2126,6 +2126,17 @@ export class MetadataBackfillService {
       let fixed = 0;
       let failed = 0;
       const sample: string[] = [];
+      const failureReasons = new Map<string, number>();
+      const recordFailureReason = (reason: string) => {
+        failureReasons.set(reason, (failureReasons.get(reason) ?? 0) + 1);
+      };
+      const classifyFailureReason = (error: unknown): string => {
+        const message = String((error as Error)?.message ?? error);
+        if (/429|rate.?limit|throttl/i.test(message)) return 'provider rate-limited/throttled';
+        if (/timeout|timed out|ETIMEDOUT/i.test(message)) return 'provider timeout';
+        if (/cached 404|not.?found|\b404\b/i.test(message)) return 'provider not found/404';
+        return message.slice(0, 120) || 'unknown error';
+      };
       for (let i = 0; i < candidates.length; i++) {
         const m = candidates[i];
         this.trackRepair('english-content', {
@@ -2138,6 +2149,7 @@ export class MetadataBackfillService {
           const providerBase = await this.resolveProviderEnglishBase(m);
           if (!providerBase) {
             failed++; // unverifiable right now — never guess
+            recordFailureReason('no provider English base');
             await this.stampEnglishContentRepairFailure(m.id, 'no provider English base').catch(
               () => undefined,
             );
@@ -2176,6 +2188,7 @@ export class MetadataBackfillService {
           };
           if (refreshedEp.hasSuspect) {
             failed++;
+            recordFailureReason('episode text still suspicious after rehydrate');
             await this.stampEnglishContentRepairFailure(
               m.id,
               'episode text still suspicious after rehydrate',
@@ -2196,6 +2209,7 @@ export class MetadataBackfillService {
           if (sample.length < 5) sample.push(`${m.title} → ${providerBase.title}`);
         } catch (e) {
           failed++;
+          recordFailureReason(classifyFailureReason(e));
           await this.stampEnglishContentRepairFailure(m.id, e).catch(() => undefined);
           // First failures are WARN-visible (prod runs at info level); the rest stay debug.
           if (failed <= 10)
@@ -2223,6 +2237,14 @@ export class MetadataBackfillService {
       this.logger.log(
         `English-content repair: ${candidates.length} checked — ${verified} already English, ${fixed} re-hydrated, ${failed} failed`,
       );
+      if (failureReasons.size > 0) {
+        const summary = [...failureReasons.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .map(([reason, count]) => `${reason}: ${count}`)
+          .join('; ');
+        this.logger.warn(`English-content repair failure summary: ${summary}`);
+      }
       return { processed: candidates.length, verified, fixed, failed, sample };
     } finally {
       this.enContentFixRunning = false;
