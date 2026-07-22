@@ -1263,6 +1263,7 @@ describe('MetadataBackfillService.repairNonEnglishContent', () => {
     expect(sql).toContain('enContentVerifiedOverview');
     expect(sql).toContain('enContentVerifiedEpisodeFingerprint');
     expect(sql).toContain('episodes e');
+    expect(sql).toContain('regexp_replace');
     expect(sql).toContain('ORDER BY m.popularity DESC');
   });
 

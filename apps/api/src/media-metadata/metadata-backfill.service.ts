@@ -263,8 +263,8 @@ export class MetadataBackfillService {
               JOIN episodes e ON e.season_id = s.id
               WHERE sh.media_id = m.id
                 AND (
-                  COALESCE(NULLIF(e.titles->>'en',''), e.title) ~ '[^ -~]'
-                  OR COALESCE(NULLIF(e.overviews->>'en',''), e.overview, '') ~ '[^ -~]'
+                  length(regexp_replace(COALESCE(NULLIF(e.titles->>'en',''), e.title), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
+                  OR length(regexp_replace(COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
                 )
             )
           )
@@ -1911,8 +1911,8 @@ export class MetadataBackfillService {
       SELECT sh.media_id AS "mediaId",
              count(e.id)::text || ':' || COALESCE(max(e.updated_at)::text, '') AS "fingerprint",
              bool_or(
-               COALESCE(NULLIF(e.titles->>'en',''), e.title) ~ '[^ -~]'
-               OR COALESCE(NULLIF(e.overviews->>'en',''), e.overview, '') ~ '[^ -~]'
+               length(regexp_replace(COALESCE(NULLIF(e.titles->>'en',''), e.title), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
+               OR length(regexp_replace(COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
              ) AS "hasSuspect"
       FROM shows sh
       JOIN seasons s ON s.show_id = sh.id
@@ -2054,8 +2054,8 @@ export class MetadataBackfillService {
                 JOIN episodes e ON e.season_id = s.id
                 WHERE sh.media_id = m.id
                   AND (
-                    COALESCE(NULLIF(e.titles->>'en',''), e.title) ~ '[^ -~]'
-                    OR COALESCE(NULLIF(e.overviews->>'en',''), e.overview, '') ~ '[^ -~]'
+                    length(regexp_replace(COALESCE(NULLIF(e.titles->>'en',''), e.title), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
+                    OR length(regexp_replace(COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
                   )
               )
             )
