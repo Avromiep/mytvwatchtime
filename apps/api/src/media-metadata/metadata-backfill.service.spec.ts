@@ -1190,6 +1190,32 @@ describe('MetadataBackfillService.repairNonEnglishContent', () => {
     expect(verifiedWrite.slice(1)).toContain('FBI agents investigate unexplained cases.');
   });
 
+  it('does not count a row as fixed when the stored overview remains wrong after rehydrate', async () => {
+    const staleOverview = 'Agent Fox Mulder a agentka Dana Scullyová vyšetřují Akta X.';
+    const { service, prisma, meta } = make(
+      [row({ title: 'The X-Files', overview: staleOverview })],
+      { title: 'The X-Files', overview: 'FBI agents investigate unexplained cases.' },
+    );
+    prisma.mediaItem.findUnique.mockResolvedValue({
+      title: 'The X-Files',
+      titles: { en: 'The X-Files' },
+      overview: staleOverview,
+      overviews: null,
+    });
+
+    const res = await service.repairNonEnglishContent();
+
+    expect(meta.ensureShowFull).toHaveBeenCalledWith(1416);
+    expect(res).toEqual(
+      expect.objectContaining({ processed: 1, verified: 0, fixed: 0, failed: 1 }),
+    );
+    const failureWrite = (prisma.$executeRaw as jest.Mock).mock.calls.find((c) =>
+      c[0].join(' ').includes('enContentRepairFailedAt'),
+    );
+    expect(failureWrite).toBeTruthy();
+    expect(failureWrite.slice(1)).toContain('overview still differs after rehydrate');
+  });
+
   it('verifies and skips legit non-ASCII English titles (Pokémon false alarm)', async () => {
     const { service, meta } = make([row({ id: 'm2', title: 'Pokémon' })], 'Pokémon');
 

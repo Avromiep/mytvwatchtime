@@ -1954,6 +1954,26 @@ export class MetadataBackfillService {
       WHERE id = ${mediaId}`;
   }
 
+  private async readEnglishVisibleContent(
+    mediaId: string,
+    fallback: { title: string; overview?: string | null },
+  ): Promise<{ title: string; overview: string }> {
+    const fresh = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      select: { title: true, titles: true, overview: true, overviews: true },
+    });
+    const source = fresh ?? {
+      title: fallback.title,
+      titles: null,
+      overview: fallback.overview ?? null,
+      overviews: null,
+    };
+    return {
+      title: this.englishVisibleTitle(source),
+      overview: this.englishVisibleOverview(source),
+    };
+  }
+
   private async stampEnglishContentRepairFailure(mediaId: string, error: unknown): Promise<void> {
     const message = String((error as Error)?.message ?? error).slice(0, 300);
     await this.prisma.$executeRaw`
@@ -2195,23 +2215,33 @@ export class MetadataBackfillService {
             fingerprint: ep.fingerprint,
             hasSuspect: false,
           };
-          if (refreshedEp.hasSuspect) {
+          const refreshedContent = await this.readEnglishVisibleContent(m.id, providerBase);
+          const refreshedTitleMatches =
+            this.normTitleForCompare(providerBase.title) ===
+            this.normTitleForCompare(refreshedContent.title);
+          const refreshedOverviewMatches =
+            !refreshedContent.overview ||
+            (!!providerBase.overview &&
+              this.normTitleForCompare(providerBase.overview) ===
+                this.normTitleForCompare(refreshedContent.overview));
+          const stillWrongReasons = [
+            !refreshedTitleMatches ? 'title still differs after rehydrate' : null,
+            !refreshedOverviewMatches ? 'overview still differs after rehydrate' : null,
+            refreshedEp.hasSuspect ? 'episode text still suspicious after rehydrate' : null,
+          ].filter(Boolean) as string[];
+          if (stillWrongReasons.length > 0) {
             failed++;
-            recordFailureReason('episode text still suspicious after rehydrate');
-            await this.stampEnglishContentRepairFailure(
-              m.id,
-              'episode text still suspicious after rehydrate',
-            ).catch(() => undefined);
+            const reason = stillWrongReasons.join('; ');
+            recordFailureReason(reason);
+            await this.stampEnglishContentRepairFailure(m.id, reason).catch(() => undefined);
             if (failed <= 10)
-              this.logger.warn(
-                `English-content repair: episode text still suspicious after rehydrate for "${m.title}" (${m.id})`,
-              );
+              this.logger.warn(`English-content repair: ${reason} for "${m.title}" (${m.id})`);
             continue;
           }
           await this.stampEnglishContentVerified(
             m.id,
-            providerBase.title,
-            providerBase.overview,
+            refreshedContent.title,
+            refreshedContent.overview,
             refreshedEp.fingerprint,
           );
           fixed++;
