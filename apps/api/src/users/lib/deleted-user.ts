@@ -13,6 +13,9 @@ export const DELETED_USER_USERNAME = 'deleted-user';
 /** Usernames that may never be registered or claimed (system identities). */
 export const RESERVED_USERNAMES = new Set([DELETED_USER_USERNAME]);
 
+/** Emails that may never be registered or authenticated (system identities). */
+export const RESERVED_USER_EMAILS = new Set([DELETED_USER_EMAIL]);
+
 /** True when a user row (or DTO source row) is the system deleted-user account. */
 export function isDeletedUserAccount(u: {
   email?: string | null;

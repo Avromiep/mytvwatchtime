@@ -59,7 +59,7 @@
   "characterVotes": "Character votes",
   "favorites": "Favorites",
   "lists": "Lists",
-  "resolveByName": "Resolve by name",
+  "resolveByName": "Attempt to resolve",
   "resolveByNameResult": "Resolved {{resolved}} of {{examined}} items",
   "resolveByNameNone": "No items could be resolved by name",
   "noItems": "No items in this view.",

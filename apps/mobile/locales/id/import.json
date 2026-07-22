@@ -32,7 +32,7 @@
   "characterVotes": "Suara karakter",
   "favorites": "Favorit",
   "lists": "Daftar",
-  "resolveByName": "Cocokkan berdasarkan nama",
+  "resolveByName": "Coba cocokkan",
   "resolveByNameResult": "{{resolved}} dari {{examined}} item tercocokkan",
   "resolveByNameNone": "Tidak ada item yang bisa dicocokkan berdasarkan nama",
   "noItems": "Tidak ada item dalam tampilan ini.",

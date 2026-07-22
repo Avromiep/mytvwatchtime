@@ -32,7 +32,7 @@
   "characterVotes": "Votes de personnages",
   "favorites": "Favoris",
   "lists": "Listes",
-  "resolveByName": "Résoudre par nom",
+  "resolveByName": "Tenter de résoudre",
   "resolveByNameResult": "{{resolved}} éléments sur {{examined}} résolus",
   "resolveByNameNone": "Aucun élément n'a pu être résolu par nom",
   "noItems": "Aucun élément dans cette vue.",

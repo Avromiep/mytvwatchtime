@@ -32,7 +32,7 @@
   "characterVotes": "キャラクター投票",
   "favorites": "お気に入り",
   "lists": "リスト",
-  "resolveByName": "名前で解決",
+  "resolveByName": "解決を試す",
   "resolveByNameResult": "{{examined}}件中{{resolved}}件を解決しました",
   "resolveByNameNone": "名前で解決できる項目はありませんでした",
   "noItems": "この表示には項目がありません。",

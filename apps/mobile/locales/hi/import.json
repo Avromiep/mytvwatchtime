@@ -32,7 +32,7 @@
   "characterVotes": "चरित्र वोट",
   "favorites": "पसंदीदा",
   "lists": "सूचियाँ",
-  "resolveByName": "नाम से सुलझाएँ",
+  "resolveByName": "हल करने का प्रयास करें",
   "resolveByNameResult": "{{examined}} में से {{resolved}} आइटम सुलझाए गए",
   "resolveByNameNone": "नाम से कोई आइटम नहीं सुलझाया जा सका",
   "noItems": "इस दृश्य में कोई आइटम नहीं है।",

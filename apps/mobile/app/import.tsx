@@ -422,7 +422,7 @@ function ReviewItems({
   onResolve: (item: any) => void;
 }) {
   const { t } = useTranslation(['import', 'common']);
-  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
+  const [statusFilter, setStatusFilter] = useState<string | undefined>('needs_review');
   const [entityFilter, setEntityFilter] = useState<string | undefined>(undefined);
   const q = useImportItems(importId, statusFilter, entityFilter);
   const resolveByName = useResolveByName(importId);

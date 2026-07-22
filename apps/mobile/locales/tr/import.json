@@ -32,7 +32,7 @@
   "characterVotes": "Karakter oyları",
   "favorites": "Favoriler",
   "lists": "Listeler",
-  "resolveByName": "Ada göre çöz",
+  "resolveByName": "Çözmeyi dene",
   "resolveByNameResult": "{{examined}} öğeden {{resolved}} tanesi çözüldü",
   "resolveByNameNone": "Ada göre çözülebilen öğe yok",
   "noItems": "Bu görünümde öğe yok.",

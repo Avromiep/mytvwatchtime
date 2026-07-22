@@ -32,7 +32,7 @@
   "characterVotes": "Charakter-Stimmen",
   "favorites": "Favoriten",
   "lists": "Listen",
-  "resolveByName": "Nach Name auflösen",
+  "resolveByName": "Zuordnen versuchen",
   "resolveByNameResult": "{{resolved}} von {{examined}} Einträgen aufgelöst",
   "resolveByNameNone": "Es konnten keine Einträge per Name aufgelöst werden",
   "noItems": "Keine Elemente in dieser Ansicht.",

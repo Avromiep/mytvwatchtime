@@ -32,7 +32,7 @@
   "characterVotes": "أصوات الشخصيات",
   "favorites": "المفضلة",
   "lists": "القوائم",
-  "resolveByName": "الحل بالاسم",
+  "resolveByName": "محاولة الحل",
   "resolveByNameResult": "تم حل {{resolved}} من {{examined}} عناصر",
   "resolveByNameNone": "تعذر حل أي عنصر بالاسم",
   "noItems": "لا توجد عناصر في هذا العرض.",

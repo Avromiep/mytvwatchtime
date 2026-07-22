@@ -17,7 +17,11 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { EmailService } from '../common/email.service';
 import type { JwtPayload } from './jwt.strategy';
 import { EmailLoginDto, EmailRegisterDto, SocialLoginDto } from './dto/auth.dto';
-import { RESERVED_USERNAMES } from '../users/lib/deleted-user';
+import {
+  isDeletedUserAccount,
+  RESERVED_USER_EMAILS,
+  RESERVED_USERNAMES,
+} from '../users/lib/deleted-user';
 import type { AuthSessionDto } from '@tvwatch/shared';
 
 function uid(len = 6): string {
@@ -49,8 +53,11 @@ export class AuthService {
   }
 
   async register(dto: EmailRegisterDto): Promise<AuthSessionDto> {
-    if (RESERVED_USERNAMES.has(dto.username.toLowerCase())) {
-      throw new ConflictException('This username is reserved');
+    if (
+      RESERVED_USERNAMES.has(dto.username.toLowerCase()) ||
+      RESERVED_USER_EMAILS.has(dto.email.toLowerCase())
+    ) {
+      throw new ConflictException('This account identity is reserved');
     }
     const exists = await this.prisma.user.findFirst({
       where: { OR: [{ email: dto.email }, { username: dto.username }] },
@@ -98,7 +105,9 @@ export class AuthService {
       where: { email: dto.email },
       include: { authProviders: true },
     });
-    if (!user || !user.passwordHash) throw new UnauthorizedException('Invalid credentials');
+    if (!user || isDeletedUserAccount(user) || !user.passwordHash) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
     const ok = await argon2.verify(user.passwordHash, dto.password);
     if (!ok) throw new UnauthorizedException('Invalid credentials');
     return this.issueSession(
@@ -126,17 +135,18 @@ export class AuthService {
   async forgotPassword(emailAddr: string): Promise<{ sent: boolean }> {
     const user = await this.prisma.user.findUnique({
       where: { email: emailAddr.toLowerCase() },
-      select: { id: true },
+      select: { id: true, email: true, username: true },
     });
 
     const token = randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    const resetUserId = user && !isDeletedUserAccount(user) ? user.id : null;
 
     await this.prisma.passwordReset.create({
-      data: { email: emailAddr.toLowerCase(), userId: user?.id ?? null, token, expiresAt },
+      data: { email: emailAddr.toLowerCase(), userId: resetUserId, token, expiresAt },
     });
 
-    if (user) {
+    if (resetUserId) {
       const siteUrl = this.config.get<string>('site.url') || 'https://tvwatchtime.org';
       const link = `${siteUrl}/reset-password?token=${token}`;
       if (this.email.enabled) {
@@ -163,6 +173,12 @@ export class AuthService {
     if (reset.usedAt) throw new BadRequestException('This reset link has already been used');
     if (reset.expiresAt < new Date()) throw new BadRequestException('This reset link has expired');
     if (!reset.userId) throw new BadRequestException('Invalid reset link');
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: reset.userId },
+      select: { email: true, username: true },
+    });
+    if (!user || isDeletedUserAccount(user)) throw new BadRequestException('Invalid reset link');
 
     const passwordHash = await argon2.hash(newPassword);
     await this.prisma.user.update({
@@ -207,6 +223,9 @@ export class AuthService {
     let user = existing?.user;
     if (!user) {
       const email = profile.email || `${dto.provider}_${profile.providerUid}@social.local`;
+      if (RESERVED_USER_EMAILS.has(email.toLowerCase())) {
+        throw new UnauthorizedException('Invalid social profile');
+      }
       const baseName = dto.username || profile.name || `user_${uid(6)}`;
       const username = await this.ensureUniqueUsername(baseName);
       user = await this.prisma.user.create({
@@ -247,6 +266,7 @@ export class AuthService {
     if (payload.kind !== 'refresh') throw new UnauthorizedException('Invalid refresh token');
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user) throw new NotFoundException('User not found');
+    if (isDeletedUserAccount(user)) throw new UnauthorizedException('Invalid refresh token');
     return this.issueSession(
       user.id,
       user.username,
@@ -274,6 +294,7 @@ export class AuthService {
       include: { profile: true, authProviders: true },
     });
     if (!user) throw new NotFoundException('User not found');
+    if (isDeletedUserAccount(user)) throw new UnauthorizedException('Invalid credentials');
     const followersCount = await this.prisma.follow.count({ where: { targetId: userId } });
     const followingCount = await this.prisma.follow.count({ where: { followerId: userId } });
     const commentsCount = await this.prisma.comment.count({ where: { userId } });
