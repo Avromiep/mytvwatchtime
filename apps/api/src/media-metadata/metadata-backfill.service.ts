@@ -125,6 +125,7 @@ export class MetadataBackfillService {
       nonEnglishContent,
       bannerAsPoster,
       missingRating,
+      animeTvdbUnresolvable,
     ] = await Promise.all([
       this.prisma.mediaItem.count(),
       this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
@@ -147,6 +148,8 @@ export class MetadataBackfillService {
       // has a TMDB episode external id and no TVDB one; fresh rows carry both after the
       // union upsert, so partially-switched shows are still counted. The animation genre
       // matches slug OR English name (localized genre rows exist from non-en hydrations).
+      // Rows whose TVDB id recently proved UNRESOLVABLE (animeTvdbNoId stamp < 30d) are
+      // excluded — they are parked, not actionable.
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
           JOIN shows sh ON sh.media_id = m.id
           WHERE m.type='SHOW'
@@ -157,7 +160,8 @@ export class MetadataBackfillService {
                         JOIN episode_external_ids ee ON ee.episode_id = e.id AND ee.provider = 'TMDB'
                         WHERE s.show_id = sh.id
                           AND NOT EXISTS (SELECT 1 FROM episode_external_ids tv
-                                          WHERE tv.episode_id = e.id AND tv.provider = 'THE_TVDB'))`,
+                                          WHERE tv.episode_id = e.id AND tv.provider = 'THE_TVDB'))
+            AND COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '1970-01-01')::timestamptz < NOW() - INTERVAL '30 days'`,
       // Same set, but missing the series-level TVDB id (the fix needs a cross-id lookup).
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
           JOIN shows sh ON sh.media_id = m.id
@@ -170,7 +174,8 @@ export class MetadataBackfillService {
                         WHERE s.show_id = sh.id
                           AND NOT EXISTS (SELECT 1 FROM episode_external_ids tv
                                           WHERE tv.episode_id = e.id AND tv.provider = 'THE_TVDB'))
-            AND NOT EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id AND x.provider = 'THE_TVDB')`,
+            AND NOT EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id AND x.provider = 'THE_TVDB')
+            AND COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '1970-01-01')::timestamptz < NOW() - INTERVAL '30 days'`,
       // Cross-type contamination: a MOVIE row carrying a shows row (or the reverse) —
       // two entities merged into one record by a cross-namespace id confusion.
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
@@ -234,6 +239,11 @@ export class MetadataBackfillService {
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider IN ('TMDB','THE_TVDB'))
           AND (m.metadata_provenance->>'ratingCheckedAt' IS NULL
                OR (m.metadata_provenance->>'ratingCheckedAt')::timestamptz < NOW() - INTERVAL '90 days')`,
+      // Animation rows PARKED as unresolvable (no trustworthy TVDB id) in the last
+      // 30 days — informational; excluded from animeOnTmdb so it stays actionable.
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c FROM media_items m
+        WHERE COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '1970-01-01')::timestamptz >= NOW() - INTERVAL '30 days'`,
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     return {
@@ -259,6 +269,7 @@ export class MetadataBackfillService {
       nonEnglishContent: toNum(nonEnglishContent as any),
       bannerAsPoster: toNum(bannerAsPoster as any),
       missingRating: toNum(missingRating as any),
+      animeTvdbUnresolvable: toNum(animeTvdbUnresolvable as any),
     };
   }
 
@@ -442,6 +453,15 @@ export class MetadataBackfillService {
    *
    * When TVDB rate-limits us the batch stops early — remaining shows stay on TMDB until
    * the next cron run or a manual "Fix Anime → TVDB" click.
+   *
+   * CONVERGENCE: rows whose TVDB id can't be resolved (no stored id, TMDB has no
+   * cross-id, strict title+year search fails, or the cross-id is claimed by a
+   * duplicate) can NEVER succeed and used to be re-attempted EVERY run (~60 rows ×
+   * provider calls = 1.5h runs and hourly collisions with the overlap guard). They
+   * are remembered in metadata_provenance.animeTvdbNoId ({at, stale}) and skipped
+   * for 30 days — re-armed early only if their stale-row count grows (new TMDB
+   * contamination). Repeat failures are strike-counted (animeTvdbFail) and skipped
+   * after 5 strikes within 30 days.
    */
   async rehydrateAnimeFromTvdb(limit?: number): Promise<{
     processed: number;
@@ -479,9 +499,20 @@ export class MetadataBackfillService {
       finishedAt: null,
     });
     try {
+      const noIdRearmThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      // Rows whose TVDB id recently proved unresolvable — excluded from candidates.
+      // (Raw pre-query: a Prisma NOT JSON-path filter falls into SQL three-valued
+      // logic and would wrongly exclude every row WITHOUT the stamp.)
+      const recentlyStamped = (
+        await this.prisma.$queryRaw<{ id: string }[]>`
+          SELECT id FROM media_items
+          WHERE COALESCE(metadata_provenance #>> '{animeTvdbNoId,at}', '') > ${noIdRearmThreshold}
+        `
+      ).map((r) => r.id);
       const candidates = await this.prisma.mediaItem.findMany({
         where: {
           type: 'SHOW',
+          id: { notIn: recentlyStamped },
           genres: {
             some: {
               genre: {
@@ -507,7 +538,7 @@ export class MetadataBackfillService {
         },
         orderBy: { title: 'asc' },
         take: Math.max(1, Math.min(limit ?? 1000, 100000)),
-        select: { id: true, title: true },
+        select: { id: true, title: true, metadataProvenance: true },
       });
 
       this.trackRepair('anime-rehydrate', { total: candidates.length });
@@ -520,6 +551,17 @@ export class MetadataBackfillService {
       const sample: string[] = [];
       for (let i = 0; i < candidates.length; i++) {
         const m = candidates[i];
+        // Strike-counted failures: skip after 5 strikes within 30 days (a row that
+        // throws every run otherwise burns a repair slot forever).
+        const failMark = (m.metadataProvenance as any)?.animeTvdbFail;
+        if (
+          failMark?.count >= 5 &&
+          typeof failMark.at === 'string' &&
+          failMark.at > noIdRearmThreshold
+        ) {
+          this.trackRepair('anime-rehydrate', { processed: i + 1, succeeded, failed });
+          continue;
+        }
         this.trackRepair('anime-rehydrate', {
           processed: i + 1,
           succeeded,
@@ -544,9 +586,13 @@ export class MetadataBackfillService {
             break;
           }
           failed++;
-          this.logger.debug(
-            `anime tvdb rehydration failed for ${m.title}: ${(e as Error).message}`,
-          );
+          // WARN (not debug): a persistent per-row failure must be identifiable in
+          // prod logs — the run report only shows the count.
+          if (failed <= 10)
+            this.logger.warn(
+              `anime tvdb rehydration failed for "${m.title}" (${m.id}): ${(e as Error).message}`,
+            );
+          await this.stampAnimeTvdbFail(m.id, m.metadataProvenance as any);
         }
         if ((i + 1) % 25 === 0) {
           this.logger.log(
@@ -628,13 +674,38 @@ export class MetadataBackfillService {
     const keptBefore = (media.metadataProvenance as any)?.animeTvdbKeptUnmapped;
     if (typeof keptBefore === 'number' && staleRows <= keptBefore) return notFixed;
 
+    // Skip when the TVDB id recently proved UNRESOLVABLE for this row — every detail
+    // view / cron run would otherwise redo the cross-id lookups for a row that can't
+    // succeed. Re-arms after 30 days (providers add cross-ids eventually) or early
+    // when the stale count grows (new TMDB contamination to rescue).
+    const noIdMark = (media.metadataProvenance as any)?.animeTvdbNoId;
+    if (
+      noIdMark &&
+      typeof noIdMark.at === 'string' &&
+      Date.now() - new Date(noIdMark.at).getTime() < 30 * 24 * 60 * 60 * 1000 &&
+      (typeof noIdMark.stale !== 'number' || staleRows <= noIdMark.stale)
+    ) {
+      return notFixed;
+    }
+
     const tvdbId = await this.resolveAnimeTvdbId({
       id: media.id,
       title: media.title,
       externalIds: media.externalIds as unknown as { provider: ExternalProvider; value: string }[],
       show: media.show,
     });
-    if (!tvdbId) return notFixed;
+    if (!tvdbId) {
+      await this.prisma.mediaItem.update({
+        where: { id: mediaId },
+        data: {
+          metadataProvenance: {
+            ...((media.metadataProvenance as any) ?? {}),
+            animeTvdbNoId: { at: new Date().toISOString(), stale: staleRows },
+          },
+        },
+      });
+      return notFixed;
+    }
 
     // Bypass the 24h isStale gate inside ensureShowFullTvdb — this is a forced provider
     // switch, not a routine refresh.
@@ -645,16 +716,34 @@ export class MetadataBackfillService {
     await this.meta.ensureShowFullTvdb(tvdbId);
     const remap = await this.structureRemap.remapShow(mediaId);
     // Remember the kept-unmapped count so kept rows alone never re-arm this repair.
+    // A success also clears the no-id / fail-strike marks.
+    const provenance = { ...((media.metadataProvenance as any) ?? {}) } as Record<string, any>;
+    delete provenance.animeTvdbNoId;
+    delete provenance.animeTvdbFail;
+    provenance.animeTvdbKeptUnmapped = remap.unmapped;
     await this.prisma.mediaItem.update({
       where: { id: mediaId },
-      data: {
-        metadataProvenance: {
-          ...((media.metadataProvenance as any) ?? {}),
-          animeTvdbKeptUnmapped: remap.unmapped,
-        },
-      },
+      data: { metadataProvenance: provenance },
     });
     return { fixed: true, remapped: remap.mapped };
+  }
+
+  /** Strike-count a per-row repair failure (skipped after 5 strikes within 30 days). */
+  private async stampAnimeTvdbFail(mediaId: string, prev: Record<string, any> | null) {
+    try {
+      const before = (prev?.animeTvdbFail as any) ?? {};
+      await this.prisma.mediaItem.update({
+        where: { id: mediaId },
+        data: {
+          metadataProvenance: {
+            ...(prev ?? {}),
+            animeTvdbFail: { at: new Date().toISOString(), count: (before.count ?? 0) + 1 },
+          },
+        },
+      });
+    } catch {
+      /* best-effort marker */
+    }
   }
 
   /**

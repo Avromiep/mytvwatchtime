@@ -23,6 +23,7 @@ interface MetadataHealth {
   nonEnglishContent: number;
   bannerAsPoster: number;
   missingRating: number;
+  animeTvdbUnresolvable: number;
 }
 
 /** Live progress of one background repair job (from /admin/metadata-health/repair-progress). */
@@ -56,7 +57,7 @@ const STAT_HINTS: Record<string, string> = {
   tvdbOnly: 'Shows/movies that exist only on TVDB (no TMDB id) — informational, usually anime.',
   stale: 'Metadata older than 30 days. These refresh lazily on view; Run Backfill for a bulk pass.',
   animeOnTmdb:
-    'Animation-genre shows whose structure came from TMDB (wrong season splits for anime). Fix moves them to TVDB and transfers watch data.',
+    'Animation-genre shows whose structure came from TMDB (wrong season splits for anime). Fix moves them to TVDB and transfers watch data. Rows whose TVDB id cannot be resolved are parked for 30 days (see "Anime unresolvable" below) and no longer counted here — the nightly/hourly job no longer burns provider calls re-attempting them.',
   structuralTypeMismatch:
     'Movie and show merged into ONE row by a bad id cross-link. Repair splits them and transfers watch data.',
   castMissingCharacterIds:
@@ -477,7 +478,7 @@ export default function MetadataHealthPage() {
             <MetricCard
               label="Anime on TMDB"
               value={stats.animeOnTmdb}
-              sub={`should be TVDB · ${stats.animeOnTmdbNoTvdbId} missing TVDB id`}
+              sub={`should be TVDB · ${stats.animeOnTmdbNoTvdbId} missing TVDB id · ${stats.animeTvdbUnresolvable} parked (unresolvable)`}
               hint={STAT_HINTS.animeOnTmdb}
               highlight={stats.animeOnTmdb > 0}
               action={
