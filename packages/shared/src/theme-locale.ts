@@ -78,7 +78,10 @@ export function tvdbCode(locale: SupportedLocale | string | null | undefined): s
 }
 
 /** Resolve a theme preference against the OS color scheme. Unknown → dark. */
-export function resolveTheme(pref: ThemePreference, systemScheme: 'light' | 'dark' | null | undefined): ResolvedTheme {
+export function resolveTheme(
+  pref: ThemePreference,
+  systemScheme: 'light' | 'dark' | null | undefined,
+): ResolvedTheme {
   if (pref === 'light' || pref === 'dark') return pref;
   return systemScheme === 'light' ? 'light' : 'dark';
 }
@@ -87,17 +90,19 @@ const LOCALE_ALIASES: Record<string, SupportedLocale> = {
   'zh-hans': 'zh-CN',
   'zh-cn': 'zh-CN',
   'zh-sg': 'zh-CN',
-  'zh': 'zh-CN',
-  'pt': 'pt-BR',
+  zh: 'zh-CN',
+  pt: 'pt-BR',
   'pt-br': 'pt-BR',
   'pt-pt': 'pt-BR', // product decision: fold PT-PT into the Brazilian bundle for v1
 };
 
-const SUPPORTED_SET = new Set<string>(SUPPORTED_LOCALES.map((l) => l.code.toLowerCase()));
-
 function norm(s: string): string {
   return s.trim().toLowerCase().replace(/_/g, '-');
 }
+
+const SUPPORTED_BY_NORM: Record<string, SupportedLocale> = Object.fromEntries(
+  SUPPORTED_LOCALES.map((l) => [norm(l.code), l.code]),
+) as Record<string, SupportedLocale>;
 
 /**
  * Resolve a language preference to a supported locale.
@@ -108,10 +113,10 @@ export function resolveLocale(pref: LanguagePreference, deviceLocales: string[])
   if (pref !== 'system') return pref;
   const candidates = (deviceLocales?.length ? deviceLocales : []).map(norm);
   for (const c of candidates) {
-    if (SUPPORTED_SET.has(c)) return c as SupportedLocale; // exact (e.g. pt-br)
+    if (SUPPORTED_BY_NORM[c]) return SUPPORTED_BY_NORM[c]; // exact (e.g. pt-br → pt-BR)
     if (LOCALE_ALIASES[c]) return LOCALE_ALIASES[c]; // alias (e.g. zh-hans)
     const base = c.split('-')[0];
-    if (base && SUPPORTED_SET.has(base)) return base as SupportedLocale; // base match (fr-ca → fr)
+    if (base && SUPPORTED_BY_NORM[base]) return SUPPORTED_BY_NORM[base]; // base match (fr-ca → fr)
     if (LOCALE_ALIASES[base]) return LOCALE_ALIASES[base];
   }
   return 'en';
@@ -123,6 +128,6 @@ export function safeThemePref(v: string | null | undefined): ThemePreference {
 }
 export function safeLangPref(v: string | null | undefined): LanguagePreference {
   if (v === 'system') return 'system';
-  if (v && SUPPORTED_SET.has(norm(v))) return norm(v) as LanguagePreference;
+  if (v) return SUPPORTED_BY_NORM[norm(v)] ?? 'system';
   return 'system';
 }

@@ -876,6 +876,13 @@ export class MediaMetadataService {
     if (!this.tvmaze.enabled) return;
     const tvdb = externals.find((e) => e.provider === ExternalProvider.THE_TVDB)?.value;
     const imdb = externals.find((e) => e.provider === ExternalProvider.IMDB)?.value;
+    if (!tvdb && !imdb) return;
+    // Shared by scheduled refresh, show-detail reads, and full show hydrations/repairs.
+    // TVmaze doesn't cover every show and rate-limits aggressively, so every path gets
+    // the same per-show cooldown instead of hydration jobs bypassing it.
+    const marker = `airtimes:tried:${mediaId}`;
+    if (await this.redis.get(marker)) return;
+    await this.redis.set(marker, 1, 6 * 3600);
     const map = await this.tvmaze.getEpisodeAirTimes(tvdb, imdb);
     if (map.size === 0) return;
     const eps = await this.prisma.episode.findMany({
@@ -912,13 +919,6 @@ export class MediaMetadataService {
       where: { season: { show: { mediaId } }, airTime: null },
     });
     if (missing === 0) return;
-    // TVmaze doesn't cover every show (and partial coverage never reaches missing=0),
-    // so without a marker EVERY detail view re-fetched TVmaze + re-looped all episodes.
-    // Attempt at most once per 6h per show; newly added episodes are picked up on the
-    // next window.
-    const marker = `airtimes:tried:${mediaId}`;
-    if (await this.redis.get(marker)) return;
-    await this.redis.set(marker, 1, 6 * 3600);
     const exts = await this.prisma.externalId.findMany({
       where: { mediaId },
       select: { provider: true, value: true },

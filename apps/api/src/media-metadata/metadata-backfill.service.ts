@@ -17,6 +17,7 @@ import { slugify } from './util/slugify';
 // episode text in addition to media titles.
 const EN_CONTENT_VERIFIER_VERSION = 3;
 const EN_CONTENT_DEEP_CURSOR_KEY = 'EN_CONTENT_DEEP_CURSOR';
+const REPAIR_STALL_MS = 30 * 60 * 1000;
 
 /**
  * Metadata health stats + background backfill.
@@ -89,7 +90,7 @@ export class MetadataBackfillService {
       // A "running" job with no progress update for 30+ min is a HUNG promise
       // (its run never resolved — no cron history row is ever written for those).
       // Report it as stalled so the admin panel doesn't show a phantom run forever.
-      const stalled = p.running && p.updatedAt && now - p.updatedAt.getTime() > 30 * 60 * 1000;
+      const stalled = p.running && p.updatedAt && now - p.updatedAt.getTime() > REPAIR_STALL_MS;
       // A stalled run stays reported for 24h (admin should notice it), then drops.
       const stalledVisible =
         stalled && p.updatedAt && now - p.updatedAt.getTime() < 24 * 60 * 60 * 1000;
@@ -632,15 +633,17 @@ export class MetadataBackfillService {
       remapped: 0,
       sample: [] as string[],
     };
-    if (this.animeFixStartedAt && Date.now() - this.animeFixStartedAt < 3 * 60 * 60 * 1000) {
-      this.logger.log('Anime TVDB rehydration already running — skipping');
-      return empty;
-    }
     if (this.animeFixStartedAt) {
-      // Guard older than 3h = the previous run's promise HUNG (a run taking >3h can
-      // no longer be doing useful work). Latch released so this run can proceed.
+      const lastProgressAt =
+        this.repairProgress.get('anime-rehydrate')?.updatedAt?.getTime() ?? this.animeFixStartedAt;
+      if (Date.now() - lastProgressAt < REPAIR_STALL_MS) {
+        this.logger.log('Anime TVDB rehydration already running — skipping');
+        return empty;
+      }
+      // Guard older than the admin stall window = the previous run's promise HUNG
+      // and is no longer doing useful work. Latch released so this run can proceed.
       this.logger.error(
-        'Anime TVDB rehydration: previous run never settled (hung >3h) — releasing the overlap guard',
+        'Anime TVDB rehydration: previous run made no progress for 30+ min — releasing the overlap guard',
       );
     }
     if (!this.tvdb.enabled) {
@@ -658,46 +661,52 @@ export class MetadataBackfillService {
     });
     try {
       const noIdRearmThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-      // Rows whose TVDB id recently proved unresolvable — excluded from candidates.
-      // (Raw pre-query: a Prisma NOT JSON-path filter falls into SQL three-valued
-      // logic and would wrongly exclude every row WITHOUT the stamp.)
-      const recentlyStamped = (
-        await this.prisma.$queryRaw<{ id: string }[]>`
-          SELECT id FROM media_items
-          WHERE COALESCE(metadata_provenance #>> '{animeTvdbNoId,at}', '') > ${noIdRearmThreshold}
-        `
-      ).map((r) => r.id);
-      const candidates = await this.prisma.mediaItem.findMany({
-        where: {
-          type: 'SHOW',
-          id: { notIn: recentlyStamped },
-          genres: {
-            some: {
-              genre: {
-                OR: [{ slug: 'animation' }, { name: { equals: 'Animation', mode: 'insensitive' } }],
-              },
-            },
-          },
-          // At least one stale TMDB-only episode row. Fresh TVDB rows may coexist after a
-          // partial switch (e.g. an earlier detail-view hydration) — those shows still
-          // need the remap, so "has any TVDB id" does NOT exclude them.
-          show: {
-            seasons: {
-              some: {
-                episodes: {
-                  some: {
-                    externalIds: { some: { provider: ExternalProvider.TMDB } },
-                    NOT: { externalIds: { some: { provider: ExternalProvider.THE_TVDB } } },
-                  },
-                },
-              },
-            },
-          },
-        },
-        orderBy: { title: 'asc' },
-        take: Math.max(1, Math.min(limit ?? 1000, 100000)),
-        select: { id: true, title: true, metadataProvenance: true },
-      });
+      const take = Math.max(1, Math.min(limit ?? 1000, 100000));
+      this.trackRepair('anime-rehydrate', { current: 'Selecting candidate shows' });
+      const selectionHeartbeat = setInterval(() => {
+        this.trackRepair('anime-rehydrate', { current: 'Selecting candidate shows' });
+      }, 60_000);
+      let candidates: { id: string; title: string; metadataProvenance: unknown }[];
+      try {
+        // Direct SQL avoids Prisma generating a very large nested relation-filter query over
+        // seasons/episodes/episode_external_ids. `0/0` stalls in the admin panel happened
+        // before this candidate list completed.
+        candidates = await this.prisma.$queryRaw<
+          { id: string; title: string; metadataProvenance: unknown }[]
+        >`
+          SELECT m.id, m.title, m.metadata_provenance AS "metadataProvenance"
+          FROM media_items m
+          JOIN shows sh ON sh.media_id = m.id
+          WHERE m.type = ${MediaType.SHOW}
+            AND COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '') <= ${noIdRearmThreshold}
+            AND EXISTS (
+              SELECT 1
+              FROM media_genres mg
+              JOIN genres g ON g.id = mg.genre_id
+              WHERE mg.media_id = m.id
+                AND (g.slug = 'animation' OR lower(g.name) = 'animation')
+            )
+            AND EXISTS (
+              SELECT 1
+              FROM seasons s
+              JOIN episodes e ON e.season_id = s.id
+              WHERE s.show_id = sh.id
+                AND EXISTS (
+                  SELECT 1 FROM episode_external_ids tmdb_ep
+                  WHERE tmdb_ep.episode_id = e.id
+                    AND tmdb_ep.provider = ${ExternalProvider.TMDB}
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM episode_external_ids tvdb_ep
+                  WHERE tvdb_ep.episode_id = e.id
+                    AND tvdb_ep.provider = ${ExternalProvider.THE_TVDB}
+                )
+            )
+          ORDER BY m.title ASC
+          LIMIT ${take}`;
+      } finally {
+        clearInterval(selectionHeartbeat);
+      }
 
       this.trackRepair('anime-rehydrate', { total: candidates.length });
 

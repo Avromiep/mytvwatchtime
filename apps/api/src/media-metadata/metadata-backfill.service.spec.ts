@@ -407,9 +407,9 @@ describe('MetadataBackfillService', () => {
   });
 
   describe('rehydrateAnimeFromTvdb', () => {
-    /** Candidates for the batch: findMany (selection) + findUnique (fix reload) + ≥1 stale row. */
+    /** Candidates for the batch: raw selection + findUnique (fix reload) + ≥1 stale row. */
     const mockCandidates = (list: any[]) => {
-      prisma.mediaItem.findMany.mockResolvedValue(list);
+      prisma.$queryRaw.mockResolvedValue(list);
       prisma.mediaItem.findUnique.mockImplementation(({ where: { id } }: any) =>
         Promise.resolve(list.find((c) => c.id === id) ?? null),
       );
