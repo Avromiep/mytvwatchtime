@@ -78,9 +78,11 @@ export class MediaMetadataService {
   private async fetchEnBase(type: MediaType, tmdbId: number) {
     if (!this.tmdb.enabled) return undefined;
     try {
-      return type === MediaType.SHOW
-        ? await this.tmdb.localizedShowBase(tmdbId, 'en-US')
-        : await this.tmdb.localizedMovieBase(tmdbId, 'en-US');
+      const base =
+        type === MediaType.SHOW
+          ? await this.tmdb.localizedShowBase(tmdbId, 'en-US')
+          : await this.tmdb.localizedMovieBase(tmdbId, 'en-US');
+      return base?.title ? base : undefined;
     } catch {
       return undefined;
     }
@@ -211,6 +213,18 @@ export class MediaMetadataService {
     return { data, changed };
   }
 
+  private isProviderSourcedTmdbLightItem(item: {
+    overview?: string | null;
+    posterUrl?: string | null;
+    backdropUrl?: string | null;
+    rating?: number | null;
+    popularity?: number | null;
+  }): boolean {
+    return ['overview', 'posterUrl', 'backdropUrl', 'rating', 'popularity'].some((key) =>
+      Object.prototype.hasOwnProperty.call(item, key),
+    );
+  }
+
   async lightUpsertShow(item: {
     tmdbId: number;
     title: string;
@@ -231,7 +245,13 @@ export class MediaMetadataService {
     if (existing) {
       // List data is single-language: store it as a locale override only, never
       // overwriting the (English) base so other users aren't contaminated.
-      const { data, changed } = this.localeOverrideUpdate(existing, item, lang);
+      const trustRequestLocale = lang !== 'en' || this.isProviderSourcedTmdbLightItem(item);
+      const enBase = trustRequestLocale
+        ? undefined
+        : await this.fetchEnBase(MediaType.SHOW, item.tmdbId);
+      const { data, changed } = this.localeOverrideUpdate(existing, item, lang, enBase, {
+        skipUntrustedEnglish: !trustRequestLocale,
+      });
       if (changed) {
         await this.prisma.mediaItem.update({ where: { id: existing.id }, data });
       }
@@ -253,6 +273,7 @@ export class MediaMetadataService {
             item,
             await this.fetchEnBase(MediaType.SHOW, item.tmdbId),
             lang,
+            lang !== 'en' || this.isProviderSourcedTmdbLightItem(item),
           ),
           type: MediaType.SHOW,
           rating: item.rating ?? undefined,
@@ -304,7 +325,13 @@ export class MediaMetadataService {
       ProviderEntityKind.MOVIE,
     );
     if (existing) {
-      const { data, changed } = this.localeOverrideUpdate(existing, item, lang);
+      const trustRequestLocale = lang !== 'en' || this.isProviderSourcedTmdbLightItem(item);
+      const enBase = trustRequestLocale
+        ? undefined
+        : await this.fetchEnBase(MediaType.MOVIE, item.tmdbId);
+      const { data, changed } = this.localeOverrideUpdate(existing, item, lang, enBase, {
+        skipUntrustedEnglish: !trustRequestLocale,
+      });
       if (changed) {
         await this.prisma.mediaItem.update({ where: { id: existing.id }, data });
       }
@@ -325,6 +352,7 @@ export class MediaMetadataService {
             item,
             await this.fetchEnBase(MediaType.MOVIE, item.tmdbId),
             lang,
+            lang !== 'en' || this.isProviderSourcedTmdbLightItem(item),
           ),
           type: MediaType.MOVIE,
           rating: item.rating ?? undefined,

@@ -385,6 +385,145 @@ describe('MediaMetadataService — titleLocale marker', () => {
   });
 });
 
+describe('MediaMetadataService — TMDB sparse light upserts verify English titles', () => {
+  function make(
+    existing?: any,
+    enShowTitle: string | null = 'The X-Files',
+    enMovieTitle: string | null = 'Fight Club',
+  ) {
+    const created: any[] = [];
+    const updated: any[] = [];
+    const prisma = {
+      mediaItem: {
+        create: async (a: any) => {
+          created.push(a);
+          return { id: 'new-1' };
+        },
+        update: async (a: any) => {
+          updated.push(a);
+          return {};
+        },
+      },
+      externalId: { findFirst: async () => (existing ? { media: existing } : null) },
+      show: { updateMany: async () => ({ count: 0 }) },
+      movie: { updateMany: async () => ({ count: 0 }) },
+    };
+    const tmdb = {
+      enabled: true,
+      localizedShowBase: jest.fn(async () => ({
+        title: enShowTitle ?? '',
+        overview: enShowTitle ? 'English overview' : null,
+      })),
+      localizedMovieBase: jest.fn(async () => ({
+        title: enMovieTitle ?? '',
+        overview: enMovieTitle ? 'English movie overview' : null,
+      })),
+    };
+    const svc = new MediaMetadataService(
+      prisma as any,
+      tmdb as any,
+      {} as any, // tvdb
+      {} as any, // tvmaze
+      {} as any, // config
+      { enqueueClassifyCandidate: async () => undefined } as any,
+      { get: async () => null, set: async () => undefined, del: async () => undefined } as any,
+    );
+    return { svc, created, updated, tmdb };
+  }
+
+  const sparseShow = { tmdbId: 4087, title: 'Akta X', year: 1993 };
+  const sparseMovie = { tmdbId: 550, title: 'El club de la pelea', year: 1999 };
+
+  it('existing en sparse-ID show upsert writes verified TMDB English, not the supplied title', async () => {
+    const existing = {
+      id: 'm1',
+      titles: { en: 'Old title' },
+      overviews: null,
+      posterUrls: null,
+      backdropUrls: null,
+    };
+    const { svc, updated, tmdb } = make(existing);
+
+    await runInLanguage('en', () => svc.lightUpsertShow(sparseShow));
+
+    expect(tmdb.localizedShowBase).toHaveBeenCalledWith(4087, 'en-US');
+    expect(updated).toHaveLength(1);
+    expect(updated[0].data.titles.en).toBe('The X-Files');
+    expect(updated[0].data.titles.en).not.toBe('Akta X');
+  });
+
+  it('existing en sparse-ID movie upsert writes verified TMDB English, not the supplied title', async () => {
+    const existing = {
+      id: 'm1',
+      titles: { en: 'Old title' },
+      overviews: null,
+      posterUrls: null,
+      backdropUrls: null,
+    };
+    const { svc, updated, tmdb } = make(existing);
+
+    await runInLanguage('en', () => svc.lightUpsertMovie(sparseMovie));
+
+    expect(tmdb.localizedMovieBase).toHaveBeenCalledWith(550, 'en-US');
+    expect(updated).toHaveLength(1);
+    expect(updated[0].data.titles.en).toBe('Fight Club');
+    expect(updated[0].data.titles.en).not.toBe('El club de la pelea');
+  });
+
+  it('existing en sparse-ID show upsert skips the title write when English is unavailable', async () => {
+    const existing = {
+      id: 'm1',
+      titles: { en: 'The X-Files' },
+      overviews: null,
+      posterUrls: null,
+      backdropUrls: null,
+    };
+    const { svc, updated } = make(existing, null);
+
+    await runInLanguage('en', () => svc.lightUpsertShow(sparseShow));
+
+    expect(updated).toHaveLength(0);
+  });
+
+  it('new en sparse-ID show without English is marked untrusted for repair', async () => {
+    const { svc, created } = make(undefined, null);
+
+    await runInLanguage('en', () => svc.lightUpsertShow(sparseShow));
+
+    expect(created).toHaveLength(1);
+    expect(created[0].data.title).toBe('Akta X');
+    expect(created[0].data.titleLocale).toBe('und');
+    expect(created[0].data.titles.en).toBeUndefined();
+  });
+
+  it('provider-sourced English list items stay cheap and do not re-fetch the English base', async () => {
+    const existing = {
+      id: 'm1',
+      titles: null,
+      overviews: null,
+      posterUrls: null,
+      backdropUrls: null,
+    };
+    const { svc, updated, tmdb } = make(existing);
+
+    await runInLanguage('en', () =>
+      svc.lightUpsertShow({
+        tmdbId: 4087,
+        title: 'The X-Files',
+        overview: 'English overview',
+        posterUrl: 'p.jpg',
+        backdropUrl: 'b.jpg',
+        rating: 8.4,
+        popularity: 20,
+        year: 1993,
+      }),
+    );
+
+    expect(tmdb.localizedShowBase).not.toHaveBeenCalled();
+    expect(updated[0].data.titles.en).toBe('The X-Files');
+  });
+});
+
 describe('MediaMetadataService — TVDB light upserts are born with an English base', () => {
   function make(enTitle: string | null, existing?: any) {
     const created: any[] = [];
