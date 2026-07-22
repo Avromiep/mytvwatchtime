@@ -68,38 +68,44 @@ export async function anonymizeAndDeleteUser(prisma: PrismaService, userId: stri
   const exists = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
   if (!exists) return;
   const deletedId = await getOrCreateDeletedUser(prisma);
-  await prisma.$transaction(async (tx: any) => {
-    // Counters the cascade will remove from SURVIVING comments (other people's content).
-    const liked = await tx.commentLike.findMany({
-      where: { userId },
-      select: { commentId: true },
-    });
-    const flagged = await tx.commentSpoilerReport.findMany({
-      where: { userId },
-      select: { commentId: true },
-    });
-    // Keep the comments; delete everything else via the user cascade.
-    await tx.comment.updateMany({ where: { userId }, data: { userId: deletedId } });
-    await tx.user.delete({ where: { id: userId } });
-    if (liked.length) {
-      await tx.comment.updateMany({
-        where: { id: { in: liked.map((l: any) => l.commentId) } },
-        data: { likesCount: { decrement: 1 } },
+  // Raised budget (default 5s is not enough): user.delete fires the whole cascade tree
+  // (history, statuses, ratings, devices, sessions…) and heavy users blew past it,
+  // failing DELETE /me with "Transaction already closed".
+  await prisma.$transaction(
+    async (tx: any) => {
+      // Counters the cascade will remove from SURVIVING comments (other people's content).
+      const liked = await tx.commentLike.findMany({
+        where: { userId },
+        select: { commentId: true },
       });
-      await tx.comment.updateMany({
-        where: { likesCount: { lt: 0 } },
-        data: { likesCount: 0 },
+      const flagged = await tx.commentSpoilerReport.findMany({
+        where: { userId },
+        select: { commentId: true },
       });
-    }
-    if (flagged.length) {
-      await tx.comment.updateMany({
-        where: { id: { in: flagged.map((f: any) => f.commentId) } },
-        data: { spoilerCount: { decrement: 1 } },
-      });
-      await tx.comment.updateMany({
-        where: { spoilerCount: { lt: 0 } },
-        data: { spoilerCount: 0 },
-      });
-    }
-  });
+      // Keep the comments; delete everything else via the user cascade.
+      await tx.comment.updateMany({ where: { userId }, data: { userId: deletedId } });
+      await tx.user.delete({ where: { id: userId } });
+      if (liked.length) {
+        await tx.comment.updateMany({
+          where: { id: { in: liked.map((l: any) => l.commentId) } },
+          data: { likesCount: { decrement: 1 } },
+        });
+        await tx.comment.updateMany({
+          where: { likesCount: { lt: 0 } },
+          data: { likesCount: 0 },
+        });
+      }
+      if (flagged.length) {
+        await tx.comment.updateMany({
+          where: { id: { in: flagged.map((f: any) => f.commentId) } },
+          data: { spoilerCount: { decrement: 1 } },
+        });
+        await tx.comment.updateMany({
+          where: { spoilerCount: { lt: 0 } },
+          data: { spoilerCount: 0 },
+        });
+      }
+    },
+    { timeout: 60_000, maxWait: 10_000 },
+  );
 }

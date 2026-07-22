@@ -64,7 +64,7 @@ const STAT_HINTS: Record<string, string> = {
   structuralTypeMismatch:
     'Movie and show merged into ONE row by a bad id cross-link. Repair splits them and transfers watch data.',
   castMissingCharacterIds:
-    'Shows whose cast lacks TVDB character ids — needed to resolve imported character votes. Backfill rehydrates them from TVDB.',
+    'Shows whose cast lacks TVDB character ids (needed to resolve imported character votes), plus shows hydrated with the old top-20 cast slice — backfill rehydrates them from TVDB, which fills ids and widens the cast to 40 so rank 21+ votes can resolve.',
   movieDataOnShows:
     'Movie statuses/history wrongly written on shows (import bug). The Repair button above purges these too.',
   multiTvdbIds:

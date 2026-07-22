@@ -209,6 +209,11 @@ const tvdbStatusMap = (s?: string): MediaStatus => {
   }
 };
 
+/** Cast rows persisted per entity — deliberately generous (was 20): imported TV Time
+ *  character votes resolve locally via media_cast.characterExternalId, and a vote for
+ *  a character beyond the slice can NEVER resolve. Detail pages slice for display. */
+const TVDB_CAST_LIMIT = 40;
+
 @Injectable()
 export class TvdbProvider {
   private readonly logger = new Logger(TvdbProvider.name);
@@ -371,7 +376,7 @@ export class TvdbProvider {
 
     const cast: NormalizedCast[] = (s.characters || [])
       .filter((c) => c.personName && c.peopleType === 'Actor')
-      .slice(0, 20)
+      .slice(0, TVDB_CAST_LIMIT)
       .map((c, i) => ({
         tmdbPersonId: c.peopleId ?? 900000000 + i, // unique per person (avoids all-0 collision)
         name: c.personName ?? 'Unknown',
@@ -574,7 +579,7 @@ export class TvdbProvider {
 
     const cast: NormalizedCast[] = (m.characters || [])
       .filter((c) => c.personName && c.peopleType === 'Actor')
-      .slice(0, 20)
+      .slice(0, TVDB_CAST_LIMIT)
       .map((c, i) => ({
         tmdbPersonId: c.peopleId ?? 900000000 + i,
         name: c.personName ?? 'Unknown',

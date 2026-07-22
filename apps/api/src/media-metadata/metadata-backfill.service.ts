@@ -195,11 +195,19 @@ export class MetadataBackfillService {
           WHERE (m.type='MOVIE' AND EXISTS (SELECT 1 FROM shows sh WHERE sh.media_id = m.id))
              OR (m.type='SHOW' AND EXISTS (SELECT 1 FROM movies mv WHERE mv.media_id = m.id))`,
       // Shows with a cast but NO TVDB character ids yet (cast predates the
-      // characterExternalId field — a TVDB rehydration fills the whole cast at once).
+      // characterExternalId field — a TVDB rehydration fills the whole cast at once),
+      // PLUS shows hydrated with the OLD top-20 cast slice (exactly 20 cast rows with
+      // ids, not yet re-widened): rehydration widens them to TVDB_CAST_LIMIT.
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
           WHERE m.type='SHOW'
             AND EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id)
-            AND NOT EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id AND mc.character_external_id IS NOT NULL)`,
+            AND (
+              NOT EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id AND mc.character_external_id IS NOT NULL)
+              OR (
+                (SELECT count(*) FROM media_cast mc WHERE mc.media_id = m.id) = 20
+                AND m.metadata_provenance->>'castWidenedAt' IS NULL
+              )
+            )`,
       // User-data type mismatch: movie statuses/history written onto SHOW rows (never
       // legitimate — purged by the type-mismatch repair).
       this.prisma.$queryRaw<{ c: bigint }[]>`
@@ -1083,7 +1091,9 @@ export class MetadataBackfillService {
    * Fill `media_cast.characterExternalId` (TVDB character ids) for shows whose cast rows
    * predate the field. One full TVDB hydration per show — the cast rewrite fills every
    * role at once; never per-character calls. Powers TVTime character-vote resolution.
-   * Stops early on TVDB rate limits (the stat shows the remainder).
+   * Also re-hydrates shows hydrated with the OLD top-20 cast slice (exactly 20 cast
+   * rows, ids present — the old cap's fingerprint) so the widened TVDB_CAST_LIMIT (40)
+   * lets rank 21+ character votes resolve. Stops early on TVDB rate limits.
    */
   async backfillCharacterIds(limit?: number): Promise<{
     processed: number;
@@ -1111,25 +1121,31 @@ export class MetadataBackfillService {
       finishedAt: null,
     });
     try {
-      const candidates = await this.prisma.mediaItem.findMany({
-        where: {
-          type: 'SHOW',
-          cast: { some: {} },
-          NOT: { cast: { some: { characterExternalId: { not: null } } } },
-          externalIds: { some: { provider: ExternalProvider.THE_TVDB } },
-        },
-        orderBy: { title: 'asc' },
-        take: Math.max(1, Math.min(limit ?? 500, 100000)),
-        select: {
-          id: true,
-          title: true,
-          externalIds: {
-            where: { provider: ExternalProvider.THE_TVDB },
-            take: 1,
-            select: { value: true },
-          },
-        },
-      });
+      // Two cohorts: (a) cast with NO character ids (predates the field); (b) exactly
+      // 20 cast rows WITH ids and never widened — the old slice(0,20) cap's fingerprint
+      // (a show with a genuinely 20-person cast is handled by the castWidenedAt stamp:
+      // one idempotent rehydration, then it leaves the cohort). Most-popular first.
+      const candidates = await this.prisma.$queryRaw<
+        { id: string; title: string; tvdb_id: string }[]
+      >`
+        SELECT m.id, m.title,
+          (SELECT e.value FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB'
+             AND e.provider_entity_kind = 'SERIES' LIMIT 1) AS tvdb_id
+        FROM media_items m
+        WHERE m.type = 'SHOW'
+          AND EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id)
+          AND (
+            NOT EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id AND mc.character_external_id IS NOT NULL)
+            OR (
+              (SELECT count(*) FROM media_cast mc WHERE mc.media_id = m.id) = 20
+              AND m.metadata_provenance->>'castWidenedAt' IS NULL
+            )
+          )
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB'
+                        AND e.provider_entity_kind = 'SERIES')
+        ORDER BY m.popularity DESC
+        LIMIT ${Math.max(1, Math.min(limit ?? 500, 100000))}
+      `;
 
       this.trackRepair('character-ids', { total: candidates.length });
 
@@ -1153,9 +1169,18 @@ export class MetadataBackfillService {
           });
           // skipClassification: this is a cast-only refresh — re-enqueueing anime
           // classification for every backfilled show saturates Kitsu/Jikan for nothing.
-          await this.meta.ensureShowFullTvdb(Number(m.externalIds[0].value), undefined, {
+          await this.meta.ensureShowFullTvdb(Number(m.tvdb_id), undefined, {
             skipClassification: true,
           });
+          // Stamp the =20 cohort: a show still at exactly 20 cast rows AFTER a widened
+          // rehydration genuinely has 20 actors — the stamp stops it from being
+          // re-hydrated by every future backfill run.
+          await this.prisma.$executeRaw`
+            UPDATE media_items
+            SET metadata_provenance = jsonb_set(
+                  COALESCE(metadata_provenance, '{}'::jsonb),
+                  '{castWidenedAt}', to_jsonb(NOW()::text))
+            WHERE id = ${m.id}`;
           succeeded++;
           if (sample.length < 5) sample.push(m.title);
         } catch (e) {

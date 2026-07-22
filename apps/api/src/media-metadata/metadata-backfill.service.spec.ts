@@ -25,6 +25,7 @@ function mockPrisma() {
     reaction: model(['count']),
     characterVote: model(['count']),
     $queryRaw: jest.fn().mockResolvedValue([{ c: BigInt(0) }]),
+    $executeRaw: jest.fn(async () => 0),
     $transaction: jest.fn(async (arg: any) => (Array.isArray(arg) ? Promise.all(arg) : arg(p))),
   } as any;
   p.userEpisodeStatus.count.mockResolvedValue(0);
@@ -718,9 +719,9 @@ describe('MetadataBackfillService', () => {
 
   describe('backfillCharacterIds', () => {
     it('rehydrates shows whose cast lacks characterExternalId (one TVDB call per show)', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([
-        { id: 'm1', title: 'The Office', externalIds: [{ value: '73255' }] },
-        { id: 'm2', title: 'Broadchurch', externalIds: [{ value: '73996' }] },
+      prisma.$queryRaw.mockResolvedValue([
+        { id: 'm1', title: 'The Office', tvdb_id: '73255' },
+        { id: 'm2', title: 'Broadchurch', tvdb_id: '73996' },
       ]);
       const res = await service.backfillCharacterIds();
       expect(prisma.mediaItem.update).toHaveBeenCalledWith({
@@ -738,9 +739,9 @@ describe('MetadataBackfillService', () => {
     });
 
     it('stops early on TVDB rate limits', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([
-        { id: 'm1', title: 'The Office', externalIds: [{ value: '73255' }] },
-        { id: 'm2', title: 'Broadchurch', externalIds: [{ value: '73996' }] },
+      prisma.$queryRaw.mockResolvedValue([
+        { id: 'm1', title: 'The Office', tvdb_id: '73255' },
+        { id: 'm2', title: 'Broadchurch', tvdb_id: '73996' },
       ]);
       meta.ensureShowFullTvdb.mockRejectedValue(new ProviderThrottled('tvdb', 1000));
       const res = await service.backfillCharacterIds();
@@ -752,7 +753,7 @@ describe('MetadataBackfillService', () => {
       tvdb.enabled = false;
       const res = await service.backfillCharacterIds();
       expect(res.processed).toBe(0);
-      expect(prisma.mediaItem.findMany).not.toHaveBeenCalled();
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
     });
   });
 

@@ -124,9 +124,42 @@ export class ImportProcessor implements OnModuleInit {
     });
   }
 
+  /** Raw parser errors (malformed CSV quoting etc.) are meaningless to users —
+   *  translate the common ones into actionable messages; the rest pass through. */
+  private friendlyImportError(e: Error): string {
+    const msg = e.message ?? '';
+    if (/invalid (closing|opening) quote/i.test(msg)) {
+      return 'One of the files in this archive is malformed (broken CSV quoting). Try re-downloading your export and uploading again.';
+    }
+    return msg.slice(0, 1000);
+  }
+
+  /**
+   * Final status after processing. An upload that produced ZERO rows AND zero staged
+   * items (unrecognized/unsupported content only — e.g. a random JSON upload) used to
+   * land on a confusing empty review screen; fail it fast with a clear message instead.
+   */
+  private async finishProcessing(importId: string, payload: Record<string, any>) {
+    const n = (k: string) => Number(payload[k]) || 0;
+    const staged =
+      n('matchedCount') + n('needsReviewCount') + n('unmatchedCount') + n('duplicateCount');
+    const extras =
+      n('ratingsDetected') +
+      n('emotionsDetected') +
+      n('commentRowsDetected') +
+      n('characterVotesDetected');
+    if (n('totalRows') === 0 && staged === 0 && extras === 0) {
+      await this.setStatus(importId, 'FAILED', {
+        errorMessage:
+          'No recognizable data found in this upload. Check that you exported from a supported service (TV Time / Trakt) and try again.',
+      });
+      return;
+    }
+    await this.setStatus(importId, 'READY_FOR_REVIEW', payload);
+  }
+
   /** Row-backed status counters for the review summary (extras included). */
-  private async statusCounts(importId: string) {
-    const groups = await this.prisma.importItem.groupBy({
+  private async statusCounts(importId: string) {    const groups = await this.prisma.importItem.groupBy({
       by: ['status'],
       where: { importId },
       _count: { _all: true },
@@ -632,7 +665,7 @@ export class ImportProcessor implements OnModuleInit {
       // Status counters come from the staged ROWS (main loop + lists + all extras) —
       // not from the main match loop alone, or the first recount would "jump" by the
       // extras count. duplicates/invalid stay processing counters (no row equivalent).
-      await this.setStatus(importId, 'READY_FOR_REVIEW', {
+      await this.finishProcessing(importId, {
         totalFiles: files.length,
         totalRows,
         progress: 100,
@@ -645,7 +678,7 @@ export class ImportProcessor implements OnModuleInit {
     } catch (e) {
       this.logger.error(`Import ${importId} failed: ${(e as Error).message}`);
       await this.setStatus(importId, 'FAILED', {
-        errorMessage: (e as Error).message?.slice(0, 1000),
+        errorMessage: this.friendlyImportError(e as Error),
       });
     }
   }
@@ -1229,7 +1262,7 @@ export class ImportProcessor implements OnModuleInit {
       }
       await this.flushItems(importId, commentItems);
 
-      await this.setStatus(importId, 'READY_FOR_REVIEW', {
+      await this.finishProcessing(importId, {
         totalFiles: parsed.length,
         totalRows,
         progress: 100,
@@ -1258,7 +1291,7 @@ export class ImportProcessor implements OnModuleInit {
     } catch (e) {
       this.logger.error(`Import ${importId} failed: ${(e as Error).message}`);
       await this.setStatus(importId, 'FAILED', {
-        errorMessage: (e as Error).message?.slice(0, 1000),
+        errorMessage: this.friendlyImportError(e as Error),
       });
     }
   }
@@ -1776,7 +1809,7 @@ export class ImportProcessor implements OnModuleInit {
       }
       await this.flushItems(importId, ratingItems);
 
-      await this.setStatus(importId, 'READY_FOR_REVIEW', {
+      await this.finishProcessing(importId, {
         totalFiles: parsed.length,
         totalRows,
         progress: 100,
@@ -1805,7 +1838,7 @@ export class ImportProcessor implements OnModuleInit {
     } catch (e) {
       this.logger.error(`Import ${importId} failed: ${(e as Error).message}`);
       await this.setStatus(importId, 'FAILED', {
-        errorMessage: (e as Error).message?.slice(0, 1000),
+        errorMessage: this.friendlyImportError(e as Error),
       });
     }
   }
@@ -2154,7 +2187,7 @@ export class ImportProcessor implements OnModuleInit {
       }
       await flush();
 
-      await this.setStatus(importId, 'READY_FOR_REVIEW', {
+      await this.finishProcessing(importId, {
         totalFiles: parsed.length,
         totalRows,
         progress: 100,
@@ -2177,7 +2210,7 @@ export class ImportProcessor implements OnModuleInit {
     } catch (e) {
       this.logger.error(`Import ${importId} failed: ${(e as Error).message}`);
       await this.setStatus(importId, 'FAILED', {
-        errorMessage: (e as Error).message?.slice(0, 1000),
+        errorMessage: this.friendlyImportError(e as Error),
       });
     }
   }
