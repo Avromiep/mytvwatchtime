@@ -121,12 +121,20 @@ export class NotificationService {
   }
 
   async markAllRead(userId: string) {
-    await this.prisma.notification.updateMany({ where: { userId, read: false }, data: { read: true } });
+    await this.prisma.notification.updateMany({
+      where: { userId, read: false },
+      data: { read: true },
+    });
     return { ok: true };
   }
 
   async remove(userId: string, id: string) {
     await this.prisma.notification.deleteMany({ where: { id, userId } });
+    return { ok: true };
+  }
+
+  async clearAll(userId: string) {
+    await this.prisma.notification.deleteMany({ where: { userId } });
     return { ok: true };
   }
 
@@ -138,7 +146,10 @@ export class NotificationService {
       });
     }
     return {
-      preferences: prefs.preferences as Record<NotificationCategory, { push: boolean; inApp: boolean }>,
+      preferences: prefs.preferences as Record<
+        NotificationCategory,
+        { push: boolean; inApp: boolean }
+      >,
       quietHoursEnabled: prefs.quietHoursEnabled,
       quietHoursStart: prefs.quietHoursStart,
       quietHoursEnd: prefs.quietHoursEnd,

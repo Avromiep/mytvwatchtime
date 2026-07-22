@@ -30,7 +30,10 @@ export function Header({
     <View
       style={[
         styles.wrap,
-        { paddingTop: insets.top + 8, backgroundColor: tone === 'media' ? 'transparent' : tokens.background },
+        {
+          paddingTop: insets.top + 8,
+          backgroundColor: tone === 'media' ? 'transparent' : tokens.background,
+        },
         style,
       ]}
     >
@@ -45,7 +48,11 @@ export function Header({
             <T variant="title" style={tone === 'media' ? { color: fg } : undefined}>
               {title}
             </T>
-            {subtitle ? <T variant="caption" muted style={tone === 'media' ? { color: fg } : undefined}>{subtitle}</T> : null}
+            {subtitle ? (
+              <T variant="caption" muted style={tone === 'media' ? { color: fg } : undefined}>
+                {subtitle}
+              </T>
+            ) : null}
           </View>
         ) : (
           <View style={{ flex: 1 }} />
@@ -56,13 +63,33 @@ export function Header({
   );
 }
 
-export function IconButton({ icon, onPress, badge, tone = 'default' }: { icon: keyof typeof Ionicons.glyphMap; onPress?: () => void; badge?: number; tone?: 'default' | 'media' }) {
+export function IconButton({
+  icon,
+  onPress,
+  badge,
+  tone = 'default',
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress?: () => void;
+  badge?: number;
+  tone?: 'default' | 'media';
+}) {
   const { tokens } = useAppearance();
   const fg = tone === 'media' ? tokens.mediaText : tokens.textPrimary;
+  const badgeLabel = badge && badge > 99 ? '99+' : badge ? String(badge) : '';
   return (
     <Pressable onPress={onPress} hitSlop={10} style={styles.iconBtn}>
       <Ionicons name={icon} size={24} color={fg} />
-      {badge ? <View style={[styles.badge, { backgroundColor: tokens.primary }]} /> : null}
+      {badge ? (
+        <View style={[styles.badge, { backgroundColor: tokens.primary }]}>
+          <T
+            variant="micro"
+            style={{ color: tokens.primaryForeground, fontSize: 9, fontWeight: '700' }}
+          >
+            {badgeLabel}
+          </T>
+        </View>
+      ) : null}
     </Pressable>
   );
 }
@@ -71,5 +98,15 @@ const styles = StyleSheet.create({
   wrap: { paddingHorizontal: spacing.lg },
   row: { flexDirection: 'row', alignItems: 'center', minHeight: 40 },
   iconBtn: { marginLeft: spacing.md, position: 'relative' },
-  badge: { position: 'absolute', top: 0, right: 0, width: 8, height: 8, borderRadius: 4 },
+  badge: {
+    position: 'absolute',
+    top: -6,
+    right: -8,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 3,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

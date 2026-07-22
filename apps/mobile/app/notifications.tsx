@@ -3,7 +3,7 @@ import { FlatList, RefreshControl, View } from 'react-native';
 import { Header } from '../components/Header';
 import { NotificationItem } from '../components/cards';
 import { Button, Chip, EmptyState, Screen, Spinner, T } from '../components/primitives';
-import { useMarkNotificationRead, useNotifications } from '../api/hooks';
+import { useClearNotifications, useMarkNotificationRead, useNotifications } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { navigateFromLink } from '../lib/announcement';
 import { spacing } from '../theme/theme';
@@ -12,10 +12,11 @@ import { useTranslation } from 'react-i18next';
 export default function NotificationsScreen() {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['notifications', 'common']);
-  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [unreadOnly, setUnreadOnly] = useState(true);
   const { data, isLoading, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useNotifications({ unreadOnly });
   const mark = useMarkNotificationRead();
+  const clear = useClearNotifications();
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -31,9 +32,11 @@ export default function NotificationsScreen() {
         showBack
         right={
           <Button
-            title={t('notifications:markAll')}
+            title={unreadOnly ? t('notifications:markAll') : t('notifications:clearAll')}
             variant="ghost"
-            onPress={() => mark.mutate({ all: true })}
+            onPress={() => (unreadOnly ? mark.mutate({ all: true }) : clear.mutate())}
+            loading={unreadOnly ? mark.isPending : clear.isPending}
+            disabled={items.length === 0}
             style={{ paddingHorizontal: spacing.sm }}
           />
         }

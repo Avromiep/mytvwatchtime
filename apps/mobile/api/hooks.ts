@@ -72,6 +72,7 @@ const qk = {
   statsMovies: ['statsMovies'] as const,
   badges: ['badges'] as const,
   notifications: (p: any) => ['notifications', p] as const,
+  notificationsUnreadCount: ['notificationsUnreadCount'] as const,
   myComments: ['myComments'] as const,
   notifPrefs: ['notifPrefs'] as const,
   comments: (p: any) => ['comments', p] as const,
@@ -126,7 +127,8 @@ export const useUpcomingPast = (initialCursor: UpcomingPastCursor | null) =>
     staleTime: 30 * 1000,
     // Never retry 4xx (429 throttle / 400 bad cursor) — one silent retry otherwise.
     retry: (failureCount, error) =>
-      failureCount < 1 && !(error instanceof HttpError && error.status >= 400 && error.status < 500),
+      failureCount < 1 &&
+      !(error instanceof HttpError && error.status >= 400 && error.status < 500),
   });
 export const useHistory = (p: { mediaType?: MediaType; page?: number }) =>
   useQuery({
@@ -269,11 +271,10 @@ function useAllPages<T>(key: readonly unknown[], path: string, params: Record<st
 }
 
 export const useAllWatchlist = (type?: MediaType, genre?: string | null) =>
-  useAllPages<MediaCardLiteDto>(
-    ['watchlist', 'all', type, genre ?? ''] as const,
-    '/me/watchlist',
-    { ...(type ? { type } : {}), ...(genre ? { genre } : {}) },
-  );
+  useAllPages<MediaCardLiteDto>(['watchlist', 'all', type, genre ?? ''] as const, '/me/watchlist', {
+    ...(type ? { type } : {}),
+    ...(genre ? { genre } : {}),
+  });
 export const useAllFavorites = (type: MediaType, genre?: string | null) =>
   useAllPages<MediaCardLiteDto>(
     ['favorites', 'all', type, genre ?? ''] as const,
@@ -318,12 +319,26 @@ export const useNotifications = (p: { unreadOnly?: boolean }) =>
     queryKey: qk.notifications(p),
     queryFn: ({ pageParam }) =>
       api.get<Paginated<NotificationItemDto>>('/me/notifications', {
-        unreadOnly: p.unreadOnly,
+        ...(p.unreadOnly ? { unreadOnly: true } : {}),
         page: pageParam as number,
         pageSize: 30,
       } as any),
     initialPageParam: 1,
     getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
+  });
+
+export const useUnreadNotificationCount = () =>
+  useQuery({
+    queryKey: qk.notificationsUnreadCount,
+    queryFn: async () => {
+      const res = await api.get<Paginated<NotificationItemDto>>('/me/notifications', {
+        unreadOnly: true,
+        page: 1,
+        pageSize: 1,
+      } as any);
+      return res.total;
+    },
+    refetchInterval: 60_000,
   });
 /** Current user's comments across all threads, newest first (Profile → My comments). */
 export const useMyComments = () =>
@@ -1103,7 +1118,21 @@ export const useMarkNotificationRead = () => {
       all
         ? api.post('/me/notifications/mark-all-read', {})
         : api.patch(`/me/notifications/${id}/read`, {}),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['notifications'] });
+      qc.invalidateQueries({ queryKey: qk.notificationsUnreadCount });
+    },
+  });
+};
+
+export const useClearNotifications = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.del('/me/notifications'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['notifications'] });
+      qc.invalidateQueries({ queryKey: qk.notificationsUnreadCount });
+    },
   });
 };
 

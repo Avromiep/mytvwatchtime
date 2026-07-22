@@ -1,6 +1,7 @@
 {
   "title": "通知",
   "markAll": "全部标为已读",
+  "clearAll": "全部清除",
   "all": "全部",
   "unread": "未读",
   "empty": "没有通知",

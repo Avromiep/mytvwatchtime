@@ -1,6 +1,7 @@
 {
   "title": "Bildirimler",
   "markAll": "Tümünü işaretle",
+  "clearAll": "Tümünü temizle",
   "all": "Tümü",
   "unread": "Okunmamış",
   "empty": "Bildirim yok",

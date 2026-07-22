@@ -1,5 +1,13 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, ImageBackground, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  ActivityIndicator,
+  ImageBackground,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Link, router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,10 +15,32 @@ import { MediaType } from '@tvwatch/shared';
 import { Header, IconButton } from '../../components/Header';
 import { Carousel } from '../../components/cards';
 import { Leaderboard } from '../../components/Leaderboard';
-import { Box, Button, Card, EmptyState, FavoriteButton, PosterImage, ProgressBar, Screen, SectionHeader, Skeleton, Spinner, StatsCard, T, APP_ICON } from '../../components/primitives';
+import {
+  Box,
+  Button,
+  Card,
+  EmptyState,
+  FavoriteButton,
+  PosterImage,
+  ProgressBar,
+  Screen,
+  SectionHeader,
+  Skeleton,
+  Spinner,
+  StatsCard,
+  T,
+  APP_ICON,
+} from '../../components/primitives';
 import { ListCard } from '../../components/ListCard';
-import { useMyLists, useFollowedLists } from '../../api/hooks';
-import { useFavorites, useMe, useStatsSummary, useWatchlist } from '../../api/hooks';
+import {
+  useFavorites,
+  useFollowedLists,
+  useMe,
+  useMyLists,
+  useStatsSummary,
+  useUnreadNotificationCount,
+  useWatchlist,
+} from '../../api/hooks';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
@@ -40,7 +70,16 @@ export default function ProfileScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([refetchMe(), summary.refetch(), shows.refetch(), movies.refetch(), favShows.refetch(), favMovies.refetch(), myLists.refetch(), followedLists.refetch()]);
+    await Promise.all([
+      refetchMe(),
+      summary.refetch(),
+      shows.refetch(),
+      movies.refetch(),
+      favShows.refetch(),
+      favMovies.refetch(),
+      myLists.refetch(),
+      followedLists.refetch(),
+    ]);
     setRefreshing(false);
   }, [refetchMe, summary, shows, movies, favShows, favMovies]);
   useTabPressReset(() => scrollRef.current?.scrollTo({ y: 0, animated: true }));
@@ -73,12 +112,27 @@ export default function ProfileScreen() {
 
   return (
     <Screen>
-      <ScrollView ref={scrollRef} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
+      <ScrollView
+        ref={scrollRef}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[tokens.primary]}
+            tintColor={tokens.primary}
+          />
+        }
+      >
         <ProfileHeader user={me ?? null} fallbackCover={coverFallback} />
 
         {/* Stats carousel */}
         <View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingVertical: spacing.lg }}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingVertical: spacing.lg }}
+          >
             {statsLoading ? (
               <>
                 <Skeleton style={{ width: 150, height: 92, marginRight: spacing.md }} />
@@ -88,17 +142,46 @@ export default function ProfileScreen() {
               </>
             ) : (
               <>
-                <MiniStat label={t('profile:tvTimeWatched')} value={fmtDuration(summary.data?.tvTime)} icon="time-outline" />
-                <MiniStat label={t('profile:episodesWatched')} value={`${summary.data?.episodesWatched ?? 0}`} icon="tv-outline" />
-                <MiniStat label={t('profile:movieTimeWatched')} value={fmtDuration(summary.data?.movieTime)} icon="film-outline" />
-                <MiniStat label={t('profile:moviesWatched')} value={`${summary.data?.moviesWatched ?? 0}`} icon="videocam-outline" />
+                <MiniStat
+                  label={t('profile:tvTimeWatched')}
+                  value={fmtDuration(summary.data?.tvTime)}
+                  icon="time-outline"
+                />
+                <MiniStat
+                  label={t('profile:episodesWatched')}
+                  value={`${summary.data?.episodesWatched ?? 0}`}
+                  icon="tv-outline"
+                />
+                <MiniStat
+                  label={t('profile:movieTimeWatched')}
+                  value={fmtDuration(summary.data?.movieTime)}
+                  icon="film-outline"
+                />
+                <MiniStat
+                  label={t('profile:moviesWatched')}
+                  value={`${summary.data?.moviesWatched ?? 0}`}
+                  icon="videocam-outline"
+                />
               </>
             )}
           </ScrollView>
           {statsRefreshing ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }}>
-              <ActivityIndicator size="small" color={tokens.primary} style={{ marginRight: spacing.xs }} />
-              <T variant="micro" muted>{t('common:updating')}</T>
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                paddingHorizontal: spacing.lg,
+                paddingBottom: spacing.sm,
+              }}
+            >
+              <ActivityIndicator
+                size="small"
+                color={tokens.primary}
+                style={{ marginRight: spacing.xs }}
+              />
+              <T variant="micro" muted>
+                {t('common:updating')}
+              </T>
             </View>
           ) : null}
         </View>
@@ -109,7 +192,9 @@ export default function ProfileScreen() {
             <Card style={styles.chevron}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <Ionicons name="stats-chart" size={20} color={tokens.primary} />
-                <T variant="h2" style={{ marginLeft: spacing.sm }}>{t('profile:stats')}</T>
+                <T variant="h2" style={{ marginLeft: spacing.sm }}>
+                  {t('profile:stats')}
+                </T>
               </View>
               <Ionicons name="chevron-forward" size={20} color={tokens.textMuted} />
             </Card>
@@ -120,7 +205,9 @@ export default function ProfileScreen() {
             <Card style={styles.chevron}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <Ionicons name="chatbubbles-outline" size={20} color={tokens.primary} />
-                <T variant="h2" style={{ marginLeft: spacing.sm }}>{t('profile:myComments')}</T>
+                <T variant="h2" style={{ marginLeft: spacing.sm }}>
+                  {t('profile:myComments')}
+                </T>
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <T variant="caption" muted style={{ marginRight: spacing.xs }}>
@@ -136,7 +223,9 @@ export default function ProfileScreen() {
             <Card style={styles.chevron}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <Ionicons name="people-outline" size={20} color={tokens.primary} />
-                <T variant="h2" style={{ marginLeft: spacing.sm }}>{t('profile:findUsers')}</T>
+                <T variant="h2" style={{ marginLeft: spacing.sm }}>
+                  {t('profile:findUsers')}
+                </T>
               </View>
               <Ionicons name="chevron-forward" size={20} color={tokens.textMuted} />
             </Card>
@@ -145,16 +234,26 @@ export default function ProfileScreen() {
           {/* Followers/Following quick links */}
           {me ? (
             <View style={{ flexDirection: 'row', gap: spacing.md }}>
-              <Pressable onPress={() => router.push(`/follows?u=${me.username}&t=followers`)} style={{ flex: 1 }}>
+              <Pressable
+                onPress={() => router.push(`/follows?u=${me.username}&t=followers`)}
+                style={{ flex: 1 }}
+              >
                 <Card style={{ alignItems: 'center' }}>
                   <T variant="h2">{me.followersCount ?? 0}</T>
-                  <T variant="caption" muted>{t('common:followers')}</T>
+                  <T variant="caption" muted>
+                    {t('common:followers')}
+                  </T>
                 </Card>
               </Pressable>
-              <Pressable onPress={() => router.push(`/follows?u=${me.username}&t=following`)} style={{ flex: 1 }}>
+              <Pressable
+                onPress={() => router.push(`/follows?u=${me.username}&t=following`)}
+                style={{ flex: 1 }}
+              >
                 <Card style={{ alignItems: 'center' }}>
                   <T variant="h2">{me.followingCount ?? 0}</T>
-                  <T variant="caption" muted>{t('common:following')}</T>
+                  <T variant="caption" muted>
+                    {t('common:following')}
+                  </T>
                 </Card>
               </Pressable>
             </View>
@@ -168,47 +267,117 @@ export default function ProfileScreen() {
 
           {/* Shows */}
           <View>
-            <SectionHeader title={t('profile:shows')} action={t('common:seeAll')} onAction={() => router.push('/myshows')} />
-            {shows.isLoading && !shows.data ? <PosterRowSkeleton /> : <ShowsRow items={shows.data?.items ?? []} />}
+            <SectionHeader
+              title={t('profile:shows')}
+              action={t('common:seeAll')}
+              onAction={() => router.push('/myshows')}
+            />
+            {shows.isLoading && !shows.data ? (
+              <PosterRowSkeleton />
+            ) : (
+              <ShowsRow items={shows.data?.items ?? []} />
+            )}
           </View>
 
           {/* Movies */}
           <View>
-            <SectionHeader title={t('profile:movies')} action={t('common:seeAll')} onAction={() => router.push('/more?t=watchlist-movies')} />
-            {movies.isLoading && !movies.data ? <PosterRowSkeleton /> : <ShowsRow items={movies.data?.items ?? []} kind="movies" />}
+            <SectionHeader
+              title={t('profile:movies')}
+              action={t('common:seeAll')}
+              onAction={() => router.push('/more?t=watchlist-movies')}
+            />
+            {movies.isLoading && !movies.data ? (
+              <PosterRowSkeleton />
+            ) : (
+              <ShowsRow items={movies.data?.items ?? []} kind="movies" />
+            )}
           </View>
 
           {/* Favorite shows */}
           <View>
-            <SectionHeader title={t('profile:favoriteShows')} action={t('common:seeAll')} onAction={() => router.push('/more?t=favorites-shows')} />
-            {favShows.isLoading ? <Spinner /> : (favShows.data?.items?.length ? <ShowsRow items={favShows.data.items} /> : <FavEmpty label={t('profile:addFavoriteShows')} />)}
+            <SectionHeader
+              title={t('profile:favoriteShows')}
+              action={t('common:seeAll')}
+              onAction={() => router.push('/more?t=favorites-shows')}
+            />
+            {favShows.isLoading ? (
+              <Spinner />
+            ) : favShows.data?.items?.length ? (
+              <ShowsRow items={favShows.data.items} />
+            ) : (
+              <FavEmpty label={t('profile:addFavoriteShows')} />
+            )}
           </View>
 
           {/* Favorite movies */}
           <View>
-            <SectionHeader title={t('profile:favoriteMovies')} action={t('common:seeAll')} onAction={() => router.push('/more?t=favorites-movies')} />
-            {favMovies.isLoading ? <Spinner /> : (favMovies.data?.items?.length ? <ShowsRow items={favMovies.data.items} kind="movies" /> : <FavEmpty label={t('profile:addFavoriteMovies')} />)}
+            <SectionHeader
+              title={t('profile:favoriteMovies')}
+              action={t('common:seeAll')}
+              onAction={() => router.push('/more?t=favorites-movies')}
+            />
+            {favMovies.isLoading ? (
+              <Spinner />
+            ) : favMovies.data?.items?.length ? (
+              <ShowsRow items={favMovies.data.items} kind="movies" />
+            ) : (
+              <FavEmpty label={t('profile:addFavoriteMovies')} />
+            )}
           </View>
 
           {/* My Lists */}
           <View>
-            <SectionHeader title={t('profile:myLists')} action={t('common:seeAll')} onAction={() => router.push('/my-lists')} />
+            <SectionHeader
+              title={t('profile:myLists')}
+              action={t('common:seeAll')}
+              onAction={() => router.push('/my-lists')}
+            />
             {myLists.isLoading && !myLists.data ? (
               <Spinner />
             ) : myLists.data?.length ? (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg }}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ paddingHorizontal: spacing.lg }}
+              >
                 {myLists.data.map((list: any) => (
-                  <ListCard key={list.id} item={list} onPress={() => router.push(`/list/${list.id}`)} />
+                  <ListCard
+                    key={list.id}
+                    item={list}
+                    onPress={() => router.push(`/list/${list.id}`)}
+                  />
                 ))}
-                <Pressable onPress={() => router.push('/create-list')} style={[{ width: 160, height: 220, borderRadius: 12, backgroundColor: tokens.surface, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: tokens.border, borderStyle: 'dashed' }]}>
+                <Pressable
+                  onPress={() => router.push('/create-list')}
+                  style={[
+                    {
+                      width: 160,
+                      height: 220,
+                      borderRadius: 12,
+                      backgroundColor: tokens.surface,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderWidth: 1,
+                      borderColor: tokens.border,
+                      borderStyle: 'dashed',
+                    },
+                  ]}
+                >
                   <Ionicons name="add" size={32} color={tokens.primary} />
-                  <T variant="caption" style={{ color: tokens.primary, marginTop: 4 }}>{t('profile:newList')}</T>
+                  <T variant="caption" style={{ color: tokens.primary, marginTop: 4 }}>
+                    {t('profile:newList')}
+                  </T>
                 </Pressable>
               </ScrollView>
             ) : (
-              <Pressable onPress={() => router.push('/create-list')} style={{ alignItems: 'center', paddingVertical: spacing.lg }}>
+              <Pressable
+                onPress={() => router.push('/create-list')}
+                style={{ alignItems: 'center', paddingVertical: spacing.lg }}
+              >
                 <Ionicons name="add-circle-outline" size={32} color={tokens.primary} />
-                <T variant="caption" muted style={{ marginTop: 4 }}>{t('profile:createFirstList')}</T>
+                <T variant="caption" muted style={{ marginTop: 4 }}>
+                  {t('profile:createFirstList')}
+                </T>
               </Pressable>
             )}
           </View>
@@ -216,16 +385,33 @@ export default function ProfileScreen() {
           {/* Followed Lists */}
           {followedLists.data?.length ? (
             <View>
-              <SectionHeader title={t('profile:followedLists')} action={t('common:seeAll')} onAction={() => router.push('/followed-lists')} />
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg }}>
+              <SectionHeader
+                title={t('profile:followedLists')}
+                action={t('common:seeAll')}
+                onAction={() => router.push('/followed-lists')}
+              />
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ paddingHorizontal: spacing.lg }}
+              >
                 {followedLists.data.map((list: any) => (
-                  <ListCard key={list.id} item={list} onPress={() => router.push(`/list/${list.id}`)} />
+                  <ListCard
+                    key={list.id}
+                    item={list}
+                    onPress={() => router.push(`/list/${list.id}`)}
+                  />
                 ))}
               </ScrollView>
             </View>
           ) : null}
 
-          <Button title={t('profile:importWatchHistory')} variant="ghost" icon="cloud-upload-outline" onPress={() => router.push('/import')} />
+          <Button
+            title={t('profile:importWatchHistory')}
+            variant="ghost"
+            icon="cloud-upload-outline"
+            onPress={() => router.push('/import')}
+          />
         </View>
       </ScrollView>
     </Screen>
@@ -236,19 +422,52 @@ function ProfileHeader({ user, fallbackCover }: { user: any; fallbackCover?: str
   const insets = useSafeAreaInsets();
   const { tokens } = useAppearance();
   const { t } = useTranslation(['common']);
+  const unreadNotifications = useUnreadNotificationCount();
   const cover = user?.coverUrl ?? fallbackCover;
   return (
     <View>
-      <ImageBackground source={cover ? { uri: cover } : undefined} style={styles.cover} imageStyle={{ opacity: 0.7 }}>
+      <ImageBackground
+        source={cover ? { uri: cover } : undefined}
+        style={styles.cover}
+        imageStyle={{ opacity: 0.7 }}
+      >
         <View style={{ flex: 1, backgroundColor: tokens.mediaScrim, justifyContent: 'flex-end' }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingTop: insets.top + 4, paddingHorizontal: spacing.sm }}>
-            <IconButton icon="notifications-outline" onPress={() => router.push('/notifications')} tone="media" />
-            <IconButton icon="settings-outline" onPress={() => router.push('/settings')} tone="media" />
+          <View
+            style={{
+              flexDirection: 'row',
+              justifyContent: 'flex-end',
+              paddingTop: insets.top + 4,
+              paddingHorizontal: spacing.sm,
+            }}
+          >
+            <IconButton
+              icon="notifications-outline"
+              badge={unreadNotifications.data}
+              onPress={() => router.push('/notifications')}
+              tone="media"
+            />
+            <IconButton
+              icon="settings-outline"
+              onPress={() => router.push('/settings')}
+              tone="media"
+            />
           </View>
           <View style={styles.profileRow}>
-            <PosterImage uri={user?.avatarUrl} fallback={APP_ICON} style={{ width: 72, height: 72, borderRadius: 36, borderWidth: 3, borderColor: tokens.primary }} />
+            <PosterImage
+              uri={user?.avatarUrl}
+              fallback={APP_ICON}
+              style={{
+                width: 72,
+                height: 72,
+                borderRadius: 36,
+                borderWidth: 3,
+                borderColor: tokens.primary,
+              }}
+            />
             <View style={{ flex: 1, marginLeft: spacing.md }}>
-              <T variant="title" style={{ color: tokens.mediaText }}>{user?.username ?? '…'}</T>
+              <T variant="title" style={{ color: tokens.mediaText }}>
+                {user?.username ?? '…'}
+              </T>
               <View style={{ flexDirection: 'row', marginTop: 6, gap: spacing.lg }}>
                 <Counter label={t('common:following')} value={user?.followingCount} />
                 <Counter label={t('common:followers')} value={user?.followersCount} />
@@ -266,19 +485,35 @@ function Counter({ label, value }: { label: string; value?: number }) {
   const { tokens } = useAppearance();
   return (
     <View>
-      <T variant="h2" style={{ color: tokens.mediaText }}>{value ?? 0}</T>
-      <T variant="micro" style={{ color: tokens.mediaText }}>{label}</T>
+      <T variant="h2" style={{ color: tokens.mediaText }}>
+        {value ?? 0}
+      </T>
+      <T variant="micro" style={{ color: tokens.mediaText }}>
+        {label}
+      </T>
     </View>
   );
 }
 
-function MiniStat({ label, value, icon }: { label: string; value: string; icon: keyof typeof Ionicons.glyphMap }) {
+function MiniStat({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}) {
   const { tokens } = useAppearance();
   return (
     <Card style={{ width: 150, marginRight: spacing.md, alignItems: 'flex-start' }}>
       <Ionicons name={icon} size={20} color={tokens.primary} />
-      <T variant="title" style={{ marginTop: spacing.sm }}>{value}</T>
-      <T variant="caption" muted style={{ marginTop: 2 }}>{label}</T>
+      <T variant="title" style={{ marginTop: spacing.sm }}>
+        {value}
+      </T>
+      <T variant="caption" muted style={{ marginTop: 2 }}>
+        {label}
+      </T>
     </Card>
   );
 }
@@ -298,27 +533,54 @@ function ShowsRow({ items, kind = 'shows' }: { items: any[]; kind?: 'shows' | 'm
   const { tokens } = useAppearance();
   const { t } = useTranslation(['common']);
   const route = kind === 'shows' ? 'show' : 'movie';
-  if (!items || items.length === 0) return <EmptyState title={t('common:nothingHereYet')} icon="layers-outline" />;
+  if (!items || items.length === 0)
+    return <EmptyState title={t('common:nothingHereYet')} icon="layers-outline" />;
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: spacing.sm }}>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ paddingVertical: spacing.sm }}
+    >
       {items.slice(0, 10).map((it) => (
         <Link key={it.id} href={`/${route}/${it.id}` as any} asChild>
           <Pressable style={{ marginRight: spacing.md }}>
             <View style={{ borderRadius: radius.md, overflow: 'hidden' }}>
-              <PosterImage uri={it.images?.poster ?? it.posterUrl} style={{ width: 110, height: 165 }} />
+              <PosterImage
+                uri={it.images?.poster ?? it.posterUrl}
+                style={{ width: 110, height: 165 }}
+              />
               {it.rating != null && it.rating > 0 ? (
-                <View style={{ position: 'absolute', top: 4, left: 4, flexDirection: 'row', alignItems: 'center', backgroundColor: tokens.mediaScrim, borderRadius: radius.sm, paddingHorizontal: 4, paddingVertical: 2 }}>
+                <View
+                  style={{
+                    position: 'absolute',
+                    top: 4,
+                    left: 4,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: tokens.mediaScrim,
+                    borderRadius: radius.sm,
+                    paddingHorizontal: 4,
+                    paddingVertical: 2,
+                  }}
+                >
                   <Ionicons name="star" size={10} color={tokens.warning} />
-                  <T variant="micro" style={{ color: tokens.mediaText, marginLeft: 2 }}>{it.rating.toFixed(1)}</T>
+                  <T variant="micro" style={{ color: tokens.mediaText, marginLeft: 2 }}>
+                    {it.rating.toFixed(1)}
+                  </T>
                 </View>
               ) : null}
               {it.userProgress !== undefined ? (
                 <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: 4 }}>
-                  <ProgressBar value={it.userProgress} color={it.userProgress >= 1 ? tokens.watched : tokens.primary} />
+                  <ProgressBar
+                    value={it.userProgress}
+                    color={it.userProgress >= 1 ? tokens.watched : tokens.primary}
+                  />
                 </View>
               ) : null}
             </View>
-            <T variant="caption" numberOfLines={1} style={{ width: 110, marginTop: 4 }}>{it.title}</T>
+            <T variant="caption" numberOfLines={1} style={{ width: 110, marginTop: 4 }}>
+              {it.title}
+            </T>
           </Pressable>
         </Link>
       ))}
@@ -329,9 +591,19 @@ function ShowsRow({ items, kind = 'shows' }: { items: any[]; kind?: 'shows' | 'm
 function FavEmpty({ label }: { label: string }) {
   const { tokens } = useAppearance();
   return (
-    <Card style={{ alignItems: 'center', padding: spacing.xl, borderWidth: 1, borderColor: tokens.border, borderStyle: 'dashed' }}>
+    <Card
+      style={{
+        alignItems: 'center',
+        padding: spacing.xl,
+        borderWidth: 1,
+        borderColor: tokens.border,
+        borderStyle: 'dashed',
+      }}
+    >
       <Ionicons name="heart-outline" size={28} color={tokens.favorite} />
-      <T variant="body" muted style={{ marginTop: spacing.sm }}>{label}</T>
+      <T variant="body" muted style={{ marginTop: spacing.sm }}>
+        {label}
+      </T>
     </Card>
   );
 }

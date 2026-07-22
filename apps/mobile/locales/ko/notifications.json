@@ -1,6 +1,7 @@
 {
   "title": "알림",
   "markAll": "모두 읽음",
+  "clearAll": "모두 지우기",
   "all": "전체",
   "unread": "읽지 않음",
   "empty": "알림이 없습니다",

@@ -1,7 +1,17 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsBoolean, IsInt, IsOptional, IsString, Min } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { NotificationService } from './notification.service';
@@ -9,7 +19,7 @@ import { UpdatePreferencesDto } from './dto/notification.dto';
 
 class ListQueryDto {
   @IsOptional()
-  @Type(() => Boolean)
+  @Transform(({ value }) => value === true || value === 'true' || value === '1')
   @IsBoolean()
   unreadOnly?: boolean;
 
@@ -39,7 +49,13 @@ export class NotificationsController {
 
   @Get('notifications')
   list(@CurrentUser('id') userId: string, @Query() q: ListQueryDto) {
-    return this.notifications.list(userId, { unreadOnly: q.unreadOnly, page: q.page, pageSize: q.pageSize });
+    const unreadOnly =
+      q.unreadOnly === true || (q.unreadOnly as any) === 'true' || (q.unreadOnly as any) === '1';
+    return this.notifications.list(userId, {
+      unreadOnly,
+      page: q.page,
+      pageSize: q.pageSize,
+    });
   }
 
   @Patch('notifications/:id/read')
@@ -50,6 +66,11 @@ export class NotificationsController {
   @Post('notifications/mark-all-read')
   markAllRead(@CurrentUser('id') userId: string) {
     return this.notifications.markAllRead(userId);
+  }
+
+  @Delete('notifications')
+  clearAll(@CurrentUser('id') userId: string) {
+    return this.notifications.clearAll(userId);
   }
 
   @Delete('notifications/:id')

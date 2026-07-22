@@ -1,6 +1,7 @@
 {
   "title": "Notificaciones",
   "markAll": "Marcar todo",
+  "clearAll": "Borrar todo",
   "all": "Todas",
   "unread": "No leídas",
   "empty": "No hay notificaciones",

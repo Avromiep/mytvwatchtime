@@ -1,6 +1,7 @@
 {
   "title": "Notifications",
   "markAll": "Tout marquer",
+  "clearAll": "Tout effacer",
   "all": "Toutes",
   "unread": "Non lues",
   "empty": "Aucune notification",

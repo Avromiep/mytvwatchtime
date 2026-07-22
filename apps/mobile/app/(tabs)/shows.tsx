@@ -12,6 +12,7 @@ import {
   useUpcomingPast,
   useWatchNext,
   useActiveAnnouncement,
+  useUnreadNotificationCount,
 } from '../../api/hooks';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
@@ -70,6 +71,7 @@ export default function ShowsScreen() {
   const { t, i18n } = useTranslation(['shows', 'navigation', 'common']);
   const { tokens } = useAppearance();
   const { data: announcement } = useActiveAnnouncement();
+  const unreadNotifications = useUnreadNotificationCount();
   const dismissKey = announcement
     ? `announcement:${announcement.id}:rev:${announcement.revision}`
     : null;
@@ -85,7 +87,11 @@ export default function ShowsScreen() {
       <Header
         title={t('shows:title')}
         right={
-          <IconButton icon="notifications-outline" onPress={() => router.push('/notifications')} />
+          <IconButton
+            icon="notifications-outline"
+            badge={unreadNotifications.data}
+            onPress={() => router.push('/notifications')}
+          />
         }
       />
       <View style={styles.tabs}>
