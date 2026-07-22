@@ -29,8 +29,9 @@ export class MetadataBackfillService {
   private readonly defaultBatchSize = 1000;
   /** Prevents concurrent batches from picking the same items. */
   private backfillRunning = false;
-  /** Prevents concurrent anime→TVDB rehydration batches. */
-  private animeFixRunning = false;
+  /** Start time of the in-flight anime→TVDB batch (null = idle). A guard older
+   *  than 3h means the run's promise HUNG and never settled — auto-released. */
+  private animeFixStartedAt: number | null = null;
 
   // ---- Live repair progress (admin Metadata Health page) ----
   private readonly repairProgress = new Map<
@@ -43,6 +44,7 @@ export class MetadataBackfillService {
       failed: number;
       current?: string;
       finishedAt?: Date;
+      updatedAt?: Date;
     }
   >();
 
@@ -69,6 +71,7 @@ export class MetadataBackfillService {
       ...prev,
       ...patch,
       ...(patch.finishedAt === null ? { finishedAt: undefined } : {}),
+      updatedAt: new Date(),
     } as any);
   }
 
@@ -77,8 +80,18 @@ export class MetadataBackfillService {
     const now = Date.now();
     const out: Record<string, any> = {};
     for (const [job, p] of this.repairProgress) {
+      // A "running" job with no progress update for 30+ min is a HUNG promise
+      // (its run never resolved — no cron history row is ever written for those).
+      // Report it as stalled so the admin panel doesn't show a phantom run forever.
+      const stalled =
+        p.running && p.updatedAt && now - p.updatedAt.getTime() > 30 * 60 * 1000;
+      // A stalled run stays reported for 24h (admin should notice it), then drops.
+      const stalledVisible =
+        stalled && p.updatedAt && now - p.updatedAt.getTime() < 24 * 60 * 60 * 1000;
+      const shown = stalled ? { ...p, running: false, stalled: true } : p;
       // Recently-finished jobs stay visible for 60s so the UI shows the completion.
-      if (p.running || !p.finishedAt || now - p.finishedAt.getTime() < 60_000) out[job] = p;
+      if (shown.running || stalledVisible || (!stalled && (!p.finishedAt || now - p.finishedAt.getTime() < 60_000)))
+        out[job] = shown;
     }
     return out;
   }
@@ -481,15 +494,22 @@ export class MetadataBackfillService {
       remapped: 0,
       sample: [] as string[],
     };
-    if (this.animeFixRunning) {
+    if (this.animeFixStartedAt && Date.now() - this.animeFixStartedAt < 3 * 60 * 60 * 1000) {
       this.logger.log('Anime TVDB rehydration already running — skipping');
       return empty;
+    }
+    if (this.animeFixStartedAt) {
+      // Guard older than 3h = the previous run's promise HUNG (a run taking >3h can
+      // no longer be doing useful work). Latch released so this run can proceed.
+      this.logger.error(
+        'Anime TVDB rehydration: previous run never settled (hung >3h) — releasing the overlap guard',
+      );
     }
     if (!this.tvdb.enabled) {
       this.logger.warn('TVDB not configured — skipping anime TVDB rehydration');
       return empty;
     }
-    this.animeFixRunning = true;
+    this.animeFixStartedAt = Date.now();
     this.trackRepair('anime-rehydrate', {
       running: true,
       processed: 0,
@@ -619,8 +639,13 @@ export class MetadataBackfillService {
         remapped,
         sample,
       };
+    } catch (e) {
+      // Always clear the panel state on failure — a stale `running: true` entry
+      // haunts the admin page forever otherwise.
+      this.trackRepair('anime-rehydrate', { running: false, finishedAt: new Date() });
+      throw e;
     } finally {
-      this.animeFixRunning = false;
+      this.animeFixStartedAt = null;
     }
   }
 

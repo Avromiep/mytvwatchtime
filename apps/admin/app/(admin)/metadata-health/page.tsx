@@ -29,6 +29,9 @@ interface MetadataHealth {
 /** Live progress of one background repair job (from /admin/metadata-health/repair-progress). */
 interface RepairProgress {
   running: boolean;
+  /** True when the job claimed to be running but produced no update for 30+ min
+   *  (its promise hung — the run never resolved). Safe to re-run. */
+  stalled?: boolean;
   processed: number;
   total: number;
   succeeded: number;
@@ -408,10 +411,16 @@ export default function MetadataHealthPage() {
                   <div className="flex items-center justify-between gap-2 text-sm">
                     <span className="font-medium">
                       {REPAIR_LABELS[job] ?? job}
-                      {!p.running && (
-                        <span className="ml-2 text-xs font-normal text-green-600 dark:text-green-400">
-                          done
+                      {p.stalled ? (
+                        <span className="ml-2 text-xs font-normal text-red-600 dark:text-red-400">
+                          stalled — no progress for 30+ min (hung run); safe to re-run
                         </span>
+                      ) : (
+                        !p.running && (
+                          <span className="ml-2 text-xs font-normal text-green-600 dark:text-green-400">
+                            done
+                          </span>
+                        )
                       )}
                     </span>
                     <span className="shrink-0 text-xs text-zinc-400">
@@ -420,7 +429,7 @@ export default function MetadataHealthPage() {
                   </div>
                   <div className="mt-1 h-2 w-full overflow-hidden rounded bg-zinc-200 dark:bg-zinc-700">
                     <div
-                      className={`h-2 rounded transition-all ${p.running ? 'bg-blue-600' : 'bg-green-600'}`}
+                      className={`h-2 rounded transition-all ${p.stalled ? 'bg-red-600' : p.running ? 'bg-blue-600' : 'bg-green-600'}`}
                       style={{ width: `${p.total > 0 ? pctDone : p.running ? 5 : 100}%` }}
                     />
                   </div>
