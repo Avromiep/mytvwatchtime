@@ -1100,20 +1100,21 @@ describe('MetadataBackfillService.backfillRatings', () => {
 });
 
 describe('MetadataBackfillService.repairNonEnglishContent', () => {
-  function make(rows: any[], providerTitle: string | null) {
+  function make(
+    rows: any[],
+    providerBase: string | { title: string; overview?: string | null } | null,
+  ) {
     const prisma = mockPrisma();
     prisma.$executeRaw = jest.fn(async () => 0);
     prisma.$queryRaw.mockResolvedValue(rows.map((r) => ({ id: r.id })));
     prisma.mediaItem.findMany.mockResolvedValue(rows);
     const meta = mockMeta();
+    const base =
+      typeof providerBase === 'string' ? { title: providerBase, overview: null } : providerBase;
     const tmdbProvider = {
       enabled: true,
-      localizedShowBase: jest.fn(async () =>
-        providerTitle == null ? null : { title: providerTitle },
-      ),
-      localizedMovieBase: jest.fn(async () =>
-        providerTitle == null ? null : { title: providerTitle },
-      ),
+      localizedShowBase: jest.fn(async () => base),
+      localizedMovieBase: jest.fn(async () => base),
     };
     const redis = { get: jest.fn(async () => ''), set: jest.fn(async () => undefined) };
     const service = new MetadataBackfillService(
@@ -1133,6 +1134,8 @@ describe('MetadataBackfillService.repairNonEnglishContent', () => {
     id: 'm1',
     title: 'Chirurgové',
     titles: null,
+    overview: null,
+    overviews: null,
     type: 'SHOW',
     contentClassification: null,
     show: { keywords: [] },
@@ -1156,6 +1159,35 @@ describe('MetadataBackfillService.repairNonEnglishContent', () => {
       expect.objectContaining({ processed: 1, verified: 0, fixed: 1, failed: 0 }),
     );
     expect(res.sample[0]).toContain("Grey's Anatomy");
+    const verifiedWrite = (prisma.$executeRaw as jest.Mock).mock.calls.find((c) =>
+      c[0].join(' ').includes('enContentVerifiedTitle'),
+    );
+    expect(verifiedWrite).toBeTruthy();
+    expect(verifiedWrite.slice(1)).toContain("Grey's Anatomy");
+  });
+
+  it('re-hydrates rows whose English-visible overview differs even when the title matches', async () => {
+    const { service, prisma, meta } = make(
+      [
+        row({
+          title: 'The X-Files',
+          overview: 'Agent Fox Mulder a agentka Dana Scullyová vyšetřují Akta X.',
+        }),
+      ],
+      { title: 'The X-Files', overview: 'FBI agents investigate unexplained cases.' },
+    );
+
+    const res = await service.repairNonEnglishContent();
+
+    expect(meta.ensureShowFull).toHaveBeenCalledWith(1416);
+    expect(res).toEqual(
+      expect.objectContaining({ processed: 1, verified: 0, fixed: 1, failed: 0 }),
+    );
+    const verifiedWrite = (prisma.$executeRaw as jest.Mock).mock.calls.find((c) =>
+      c[0].join(' ').includes('enContentVerifiedOverview'),
+    );
+    expect(verifiedWrite).toBeTruthy();
+    expect(verifiedWrite.slice(1)).toContain('FBI agents investigate unexplained cases.');
   });
 
   it('verifies and skips legit non-ASCII English titles (Pokémon false alarm)', async () => {
@@ -1228,6 +1260,9 @@ describe('MetadataBackfillService.repairNonEnglishContent', () => {
     const [parts] = (prisma.$queryRaw as jest.Mock).mock.calls[0];
     const sql = parts.join(' ');
     expect(sql).toContain('enContentVerifiedTitle');
+    expect(sql).toContain('enContentVerifiedOverview');
+    expect(sql).toContain('enContentVerifiedEpisodeFingerprint');
+    expect(sql).toContain('episodes e');
     expect(sql).toContain('ORDER BY m.popularity DESC');
   });
 

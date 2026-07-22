@@ -30,6 +30,7 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    shm_size: 1gb
     command: >
       postgres
       -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}

@@ -21,6 +21,15 @@ interface MetadataHealth {
   multiTvdbIds: number;
   nonEnglishBase: number;
   nonEnglishContent: number;
+  nonEnglishContentParked: number;
+  nonEnglishContentDeep: {
+    totalEligible: number;
+    unverified: number;
+    remainingInPass: number;
+    cursorPosition: number;
+    cursorActive: boolean;
+    verifierVersion: number;
+  };
   bannerAsPoster: number;
   missingRating: number;
   animeTvdbUnresolvable: number;
@@ -72,7 +81,7 @@ const STAT_HINTS: Record<string, string> = {
   nonEnglishBase:
     "Rows explicitly marked as having a non-English base title (title_locale ≠ en). Repair re-hydrates them with a proper English base and restores the 'en' override. Rows that just failed are parked for 24h so repeated runs keep advancing. Rows with an unset marker are NOT counted (most have a fine English base already). No user data touched.",
   nonEnglishContent:
-    "Suspected wrong-language CONTENT with a lying/missing marker: the title an English user sees contains non-ASCII. Verify+Fix checks the most-popular suspects first against the provider's canonical English title and re-hydrates only real mismatches. Verified rows are remembered and leave this count (a title change re-arms them), so the number DRAINS as runs complete. Deep mode verifies every row — catches pure-ASCII foreign titles. A nightly Scheduled Job keeps it converged. No user data touched.",
+    "Suspected wrong-language CONTENT with a lying/missing marker: the title/overview an English user sees, or any episode title/overview, contains non-ASCII. Verify+Fix checks the most-popular suspects first against the provider's canonical English title/overview and re-hydrates only real media mismatches; episode suspects rehydrate the parent show in English. Verified rows are remembered and leave this count (content changes re-arm them), so the number DRAINS as runs complete. Rows that fail are parked for 24h so normal runs keep advancing. Deep mode verifies every row — catches pure-ASCII foreign media titles/overviews — and shows its own backlog/cursor stats when selected. A nightly Scheduled Job keeps it converged. No user data touched.",
   bannerAsPoster:
     'Rows whose poster is actually a TVDB BANNER (wide artwork in a poster slot) — legacy of a swapped TVDB artwork mapping. Repair re-hydrates them from TVDB, which re-picks the correct poster (type 2) and backdrop (type 3). Most-visible first, stops early on TVDB rate limits. No user data touched.',
   missingRating:
@@ -299,6 +308,11 @@ export default function MetadataHealthPage() {
   if (!canView) return <p className="p-6 text-sm text-zinc-500">Admins only.</p>;
 
   const pct = (n: number) => (stats && stats.total > 0 ? Math.round((n / stats.total) * 100) : 0);
+  const deepStats = stats?.nonEnglishContentDeep;
+  const deepCursorPct =
+    deepStats && deepStats.totalEligible > 0
+      ? Math.min(100, Math.round((deepStats.cursorPosition / deepStats.totalEligible) * 100))
+      : 0;
 
   return (
     <div className="p-6 space-y-6">
@@ -594,7 +608,7 @@ export default function MetadataHealthPage() {
             <MetricCard
               label="Non-English Content (suspected)"
               value={stats.nonEnglishContent}
-              sub="unverified suspects — most-visible first"
+              sub={`titles/overviews/episodes — most-visible first${stats.nonEnglishContentParked > 0 ? ` · ${stats.nonEnglishContentParked.toLocaleString()} parked 24h` : ''}`}
               hint={STAT_HINTS.nonEnglishContent}
               highlight={stats.nonEnglishContent > 0}
               action={
@@ -622,6 +636,20 @@ export default function MetadataHealthPage() {
                   >
                     {repairingEnContent ? 'Starting…' : 'Verify & Fix English'}
                   </button>
+                  {enContentDeep && deepStats && (
+                    <div className="basis-full rounded border border-rose-200 bg-white/70 p-2 text-xs text-zinc-600 dark:border-rose-800 dark:bg-zinc-900/60 dark:text-zinc-300">
+                      <div className="font-medium text-zinc-700 dark:text-zinc-200">
+                        Deep backlog: {deepStats.unverified.toLocaleString()} unverified of{' '}
+                        {deepStats.totalEligible.toLocaleString()} eligible rows
+                      </div>
+                      <div className="mt-1 text-zinc-500 dark:text-zinc-400">
+                        Next run: {deepStats.remainingInPass.toLocaleString()} left in this pass ·
+                        cursor {deepStats.cursorPosition.toLocaleString()}/
+                        {deepStats.totalEligible.toLocaleString()} ({deepCursorPct}%)
+                        {deepStats.cursorActive ? '' : ' · starts at beginning'}
+                      </div>
+                    </div>
+                  )}
                 </div>
               }
             />

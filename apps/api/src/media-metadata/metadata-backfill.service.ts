@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -12,9 +13,10 @@ import { ProviderThrottled } from './providers/shared/provider-http';
 import { StructureRemapService } from './structure-remap.service';
 import { slugify } from './util/slugify';
 
-// Bump when English-content verification logic changes. v2 invalidates rows that were
-// "verified" while unsupported TVDB languages could be folded into titles.en.
-const EN_CONTENT_VERIFIER_VERSION = 2;
+// Bump when English-content verification logic changes. v3 verifies overviews and
+// episode text in addition to media titles.
+const EN_CONTENT_VERIFIER_VERSION = 3;
+const EN_CONTENT_DEEP_CURSOR_KEY = 'EN_CONTENT_DEEP_CURSOR';
 
 /**
  * Metadata health stats + background backfill.
@@ -126,6 +128,8 @@ export class MetadataBackfillService {
 
   /** Counts of media needing attention — powers the admin "metadata health" view. */
   async getHealthStats() {
+    const deepCursor =
+      (await this.redis.get<string>(EN_CONTENT_DEEP_CURSOR_KEY).catch(() => null)) ?? '';
     // Optimized queries: avoid NOT EXISTS on episodes (573k rows); check at the season level.
     const [
       total,
@@ -143,6 +147,11 @@ export class MetadataBackfillService {
       multiTvdbIds,
       nonEnglishBase,
       nonEnglishContent,
+      nonEnglishContentParked,
+      nonEnglishContentDeepTotal,
+      nonEnglishContentDeepUnverified,
+      nonEnglishContentDeepRemaining,
+      nonEnglishContentDeepCursorPosition,
       bannerAsPoster,
       missingRating,
       animeTvdbUnresolvable,
@@ -239,18 +248,121 @@ export class MetadataBackfillService {
         WHERE m.title_locale IS NOT NULL AND m.title_locale != 'en'
           AND (m.metadata_provenance->>'enBaseRepairFailedAt' IS NULL
                OR (m.metadata_provenance->>'enBaseRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')`,
-      // Content-based suspects STILL NEEDING verification: the title an English user
-      // SEES ('en' override → base) contains non-ASCII — catches wrong-language bases
-      // whose marker LIES ('en'/unset), which the marker stat above cannot see. Rows
-      // already verified as English (remembered in metadata_provenance) are excluded;
-      // a title change re-enters the row. The verify+repair checks each against the
-      // provider's real English title before touching anything.
+      // Content-based suspects STILL NEEDING verification: the title/overview an English
+      // user SEES ('en' override → base), or any episode title/overview, contains non-ASCII.
+      // Rows already verified as English are excluded until visible content changes or the
+      // verifier version is bumped. The repair checks provider English before touching media.
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
-        WHERE COALESCE(NULLIF(m.titles->>'en',''), m.title) ~ '[^ -~]'
+        WHERE (
+            COALESCE(NULLIF(m.titles->>'en',''), m.title) ~ '[^ -~]'
+            OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '') ~ '[^ -~]'
+            OR EXISTS (
+              SELECT 1 FROM shows sh
+              JOIN seasons s ON s.show_id = sh.id
+              JOIN episodes e ON e.season_id = s.id
+              WHERE sh.media_id = m.id
+                AND (
+                  COALESCE(NULLIF(e.titles->>'en',''), e.title) ~ '[^ -~]'
+                  OR COALESCE(NULLIF(e.overviews->>'en',''), e.overview, '') ~ '[^ -~]'
+                )
+            )
+          )
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
-          AND COALESCE(NULLIF(m.titles->>'en',''), m.title)
-                IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'`,
+          AND (m.metadata_provenance->>'enContentRepairFailedAt' IS NULL
+               OR (m.metadata_provenance->>'enContentRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')
+          AND (
+            COALESCE(NULLIF(m.titles->>'en',''), m.title)
+                  IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
+            OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '')
+                  IS DISTINCT FROM COALESCE(m.metadata_provenance->>'enContentVerifiedOverview', '')
+            OR COALESCE(
+                 CASE WHEN (m.metadata_provenance->>'enContentVerifiedVersion') ~ '^\\d+$'
+                      THEN (m.metadata_provenance->>'enContentVerifiedVersion')::int
+                      ELSE 0 END,
+                 0) < ${EN_CONTENT_VERIFIER_VERSION}
+            OR (
+              m.type = 'SHOW'
+              AND EXISTS (SELECT 1 FROM shows sh JOIN seasons s ON s.show_id = sh.id JOIN episodes e ON e.season_id = s.id WHERE sh.media_id = m.id)
+              AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
+                    IS DISTINCT FROM COALESCE((
+                      SELECT count(e.id)::text || ':' || COALESCE(max(e.updated_at)::text, '')
+                      FROM shows sh
+                      JOIN seasons s ON s.show_id = sh.id
+                      JOIN episodes e ON e.season_id = s.id
+                      WHERE sh.media_id = m.id
+                    ), '')
+            )
+          )`,
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c FROM media_items m
+        WHERE m.metadata_provenance->>'enContentRepairFailedAt' IS NOT NULL
+          AND (m.metadata_provenance->>'enContentRepairFailedAt')::timestamptz >= NOW() - INTERVAL '24 hours'`,
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c FROM media_items m
+        WHERE EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)`,
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c FROM media_items m
+        WHERE EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
+          AND (m.metadata_provenance->>'enContentRepairFailedAt' IS NULL
+               OR (m.metadata_provenance->>'enContentRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')
+          AND (
+            COALESCE(NULLIF(m.titles->>'en',''), m.title)
+                  IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
+            OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '')
+                  IS DISTINCT FROM COALESCE(m.metadata_provenance->>'enContentVerifiedOverview', '')
+            OR COALESCE(
+                 CASE WHEN (m.metadata_provenance->>'enContentVerifiedVersion') ~ '^\\d+$'
+                      THEN (m.metadata_provenance->>'enContentVerifiedVersion')::int
+                      ELSE 0 END,
+                 0) < ${EN_CONTENT_VERIFIER_VERSION}
+            OR (
+              m.type = 'SHOW'
+              AND EXISTS (SELECT 1 FROM shows sh JOIN seasons s ON s.show_id = sh.id JOIN episodes e ON e.season_id = s.id WHERE sh.media_id = m.id)
+              AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
+                    IS DISTINCT FROM COALESCE((
+                      SELECT count(e.id)::text || ':' || COALESCE(max(e.updated_at)::text, '')
+                      FROM shows sh
+                      JOIN seasons s ON s.show_id = sh.id
+                      JOIN episodes e ON e.season_id = s.id
+                      WHERE sh.media_id = m.id
+                    ), '')
+            )
+          )`,
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c FROM media_items m
+        WHERE (${deepCursor} = '' OR m.id > ${deepCursor})
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
+          AND (m.metadata_provenance->>'enContentRepairFailedAt' IS NULL
+               OR (m.metadata_provenance->>'enContentRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')
+          AND (
+            COALESCE(NULLIF(m.titles->>'en',''), m.title)
+                  IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
+            OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '')
+                  IS DISTINCT FROM COALESCE(m.metadata_provenance->>'enContentVerifiedOverview', '')
+            OR COALESCE(
+                 CASE WHEN (m.metadata_provenance->>'enContentVerifiedVersion') ~ '^\\d+$'
+                      THEN (m.metadata_provenance->>'enContentVerifiedVersion')::int
+                      ELSE 0 END,
+                 0) < ${EN_CONTENT_VERIFIER_VERSION}
+            OR (
+              m.type = 'SHOW'
+              AND EXISTS (SELECT 1 FROM shows sh JOIN seasons s ON s.show_id = sh.id JOIN episodes e ON e.season_id = s.id WHERE sh.media_id = m.id)
+              AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
+                    IS DISTINCT FROM COALESCE((
+                      SELECT count(e.id)::text || ':' || COALESCE(max(e.updated_at)::text, '')
+                      FROM shows sh
+                      JOIN seasons s ON s.show_id = sh.id
+                      JOIN episodes e ON e.season_id = s.id
+                      WHERE sh.media_id = m.id
+                    ), '')
+            )
+          )`,
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c FROM media_items m
+        WHERE ${deepCursor} != ''
+          AND m.id <= ${deepCursor}
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)`,
       // Rows whose POSTER is a TVDB banner (wide artwork in a poster slot) — legacy of
       // the swapped TVDB series artwork mapping (type 1=banner was taken as poster).
       // URL shape: artworks.thetvdb.com/banners/v4/{kind}/{id}/banners/<file>.
@@ -297,6 +409,15 @@ export class MetadataBackfillService {
       multiTvdbIds: toNum(multiTvdbIds as any),
       nonEnglishBase: toNum(nonEnglishBase as any),
       nonEnglishContent: toNum(nonEnglishContent as any),
+      nonEnglishContentParked: toNum(nonEnglishContentParked as any),
+      nonEnglishContentDeep: {
+        totalEligible: toNum(nonEnglishContentDeepTotal as any),
+        unverified: toNum(nonEnglishContentDeepUnverified as any),
+        remainingInPass: toNum(nonEnglishContentDeepRemaining as any),
+        cursorPosition: toNum(nonEnglishContentDeepCursorPosition as any),
+        cursorActive: deepCursor !== '',
+        verifierVersion: EN_CONTENT_VERIFIER_VERSION,
+      },
       bannerAsPoster: toNum(bannerAsPoster as any),
       missingRating: toNum(missingRating as any),
       animeTvdbUnresolvable: toNum(animeTvdbUnresolvable as any),
@@ -1736,18 +1857,26 @@ export class MetadataBackfillService {
     return typeof en === 'string' && en.trim() ? en.trim() : m.title;
   }
 
+  /** The overview an English user SEES: the 'en' override slot first, then the base column. */
+  private englishVisibleOverview(m: { overview?: string | null; overviews?: unknown }): string {
+    const t = m.overviews;
+    const en = t && typeof t === 'object' ? (t as Record<string, unknown>).en : undefined;
+    if (typeof en === 'string' && en.trim()) return en.trim();
+    return typeof m.overview === 'string' ? m.overview.trim() : '';
+  }
+
   /** Loose title comparison: case/space/quote-insensitive (punctuation variants are the
    *  same title — anything stricter would flag false mismatches). */
   private normTitleForCompare(s: string): string {
     return s.trim().toLowerCase().replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ');
   }
 
-  /** The provider's canonical English title in ONE light call (TMDB localized base /
+  /** The provider's canonical English base in ONE light call (TMDB localized base /
    *  TVDB English payload). null = unverifiable right now (no ids, provider down). */
-  private async resolveProviderEnglishTitle(m: {
+  private async resolveProviderEnglishBase(m: {
     type: string;
     externalIds: { provider: string; value: string; providerEntityKind: string }[];
-  }): Promise<string | null> {
+  }): Promise<{ title: string; overview: string } | null> {
     const tmdbExt = m.externalIds.find(
       (e) => e.provider === 'TMDB' && e.providerEntityKind !== 'EPISODE',
     );
@@ -1756,7 +1885,8 @@ export class MetadataBackfillService {
         m.type === 'SHOW'
           ? await this.tmdbProvider.localizedShowBase(Number(tmdbExt.value), 'en-US')
           : await this.tmdbProvider.localizedMovieBase(Number(tmdbExt.value), 'en-US');
-      return base?.title?.trim() || null;
+      const title = base?.title?.trim();
+      return title ? { title, overview: base?.overview?.trim() || '' } : null;
     }
     const tvdbExt = m.externalIds.find((e) => e.provider === 'THE_TVDB');
     if (tvdbExt && this.tvdb.enabled) {
@@ -1764,27 +1894,85 @@ export class MetadataBackfillService {
         m.type === 'SHOW'
           ? await this.tvdb.getShow(Number(tvdbExt.value), 'en')
           : await this.tvdb.getMovie(Number(tvdbExt.value), 'en');
-      return d?.title?.trim() || null;
+      const title = d?.title?.trim();
+      return title ? { title, overview: d?.overview?.trim() || '' } : null;
     }
     return null;
   }
 
+  private async getEpisodeContentStats(
+    mediaIds: string[],
+  ): Promise<Map<string, { fingerprint: string; hasSuspect: boolean }>> {
+    if (mediaIds.length === 0) return new Map();
+    const ids = mediaIds.map((id) => Prisma.sql`${id}`);
+    const rows = await this.prisma.$queryRaw<
+      { mediaId: string; fingerprint: string | null; hasSuspect: boolean | null }[]
+    >`
+      SELECT sh.media_id AS "mediaId",
+             count(e.id)::text || ':' || COALESCE(max(e.updated_at)::text, '') AS "fingerprint",
+             bool_or(
+               COALESCE(NULLIF(e.titles->>'en',''), e.title) ~ '[^ -~]'
+               OR COALESCE(NULLIF(e.overviews->>'en',''), e.overview, '') ~ '[^ -~]'
+             ) AS "hasSuspect"
+      FROM shows sh
+      JOIN seasons s ON s.show_id = sh.id
+      JOIN episodes e ON e.season_id = s.id
+      WHERE sh.media_id IN (${Prisma.join(ids)})
+      GROUP BY sh.media_id`;
+    return new Map(
+      rows.map((row) => [
+        row.mediaId,
+        { fingerprint: row.fingerprint ?? '', hasSuspect: row.hasSuspect === true },
+      ]),
+    );
+  }
+
+  private async stampEnglishContentVerified(
+    mediaId: string,
+    visibleTitle: string,
+    visibleOverview: string,
+    episodeFingerprint: string,
+  ): Promise<void> {
+    await this.prisma.$executeRaw`
+      UPDATE media_items
+      SET metadata_provenance = ((COALESCE(metadata_provenance, '{}'::jsonb)
+              - 'enContentRepairFailedAt') - 'enContentRepairFailReason')
+            || jsonb_build_object('enContentVerifiedTitle', ${visibleTitle}::text,
+                                  'enContentVerifiedOverview', ${visibleOverview}::text,
+                                  'enContentVerifiedEpisodeFingerprint', ${episodeFingerprint}::text,
+                                  'enContentVerifiedAt', ${new Date().toISOString()}::text,
+                                  'enContentVerifiedVersion', ${EN_CONTENT_VERIFIER_VERSION})
+      WHERE id = ${mediaId}`;
+  }
+
+  private async stampEnglishContentRepairFailure(mediaId: string, error: unknown): Promise<void> {
+    const message = String((error as Error)?.message ?? error).slice(0, 300);
+    await this.prisma.$executeRaw`
+      UPDATE media_items
+      SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
+            || jsonb_build_object(
+                 'enContentRepairFailedAt', ${new Date().toISOString()}::text,
+                 'enContentRepairFailReason', ${message}::text)
+      WHERE id = ${mediaId}`;
+  }
+
   /**
    * Content-based English repair — the blind spot of the marker stat: rows whose base
-   * title is the WRONG language even though title_locale says 'en' (or is unset). This
-   * is what English users actually complain about.
+   * title/overview or episode text is the WRONG language even though title_locale says
+   * 'en' (or is unset). This is what English users actually complain about.
    *
-   * Normal mode scans SUSPECTS (the English-visible title contains non-ASCII),
-   * most-popular first — what users actually see gets verified first. Deep mode verifies
-   * EVERY row with external ids — the only way to catch wrong-language titles that are
-   * pure ASCII (e.g. Italian) — paging the catalog with a wrapping Redis id-cursor.
+   * Normal mode scans SUSPECTS (the English-visible title/overview or episode text contains
+   * non-ASCII), most-popular first — what users actually see gets verified first. Deep mode
+   * verifies EVERY row with external ids — the only way to catch wrong-language media titles
+   * or overviews that are pure ASCII (e.g. Italian) — paging the catalog with a wrapping Redis
+   * id-cursor.
    *
-   * CONVERGENCE: a row verified as already-English is remembered
-   * (metadata_provenance.enContentVerifiedTitle) and skipped until its English-visible
-   * title changes — legit non-ASCII titles (Pokémon) are verified ONCE, not every run,
-   * and new/changed contamination re-enters the pool automatically. Every candidate is
-   * VERIFIED against the provider's canonical English title; only real mismatches are
-   * re-hydrated. User data untouched.
+   * CONVERGENCE: a row verified as already-English or successfully fixed is remembered
+   * (metadata_provenance.enContentVerified*) and skipped until its English-visible content
+   * changes — legit non-ASCII titles (Pokémon) are verified ONCE, not every run, and
+   * new/changed contamination re-enters the pool automatically. Every media candidate is
+   * VERIFIED against the provider's canonical English title/overview; episode suspects trigger
+   * the parent show's existing English rehydrate path. User data untouched.
    */
   async repairNonEnglishContent(
     limit?: number,
@@ -1814,26 +2002,41 @@ export class MetadataBackfillService {
       const take = Math.max(1, Math.min(limit ?? 200, 100000));
       let ids: { id: string }[];
       if (deep) {
-        const cursorKey = 'EN_CONTENT_DEEP_CURSOR';
-        const cursor = (await this.redis.get<string>(cursorKey)) ?? '';
+        const cursor = (await this.redis.get<string>(EN_CONTENT_DEEP_CURSOR_KEY)) ?? '';
         ids = await this.prisma.$queryRaw<{ id: string }[]>`
           SELECT m.id FROM media_items m
           WHERE m.id > ${cursor}
             AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
+            AND (m.metadata_provenance->>'enContentRepairFailedAt' IS NULL
+                 OR (m.metadata_provenance->>'enContentRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')
             AND (
               COALESCE(NULLIF(m.titles->>'en',''), m.title)
                     IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
+              OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '')
+                    IS DISTINCT FROM COALESCE(m.metadata_provenance->>'enContentVerifiedOverview', '')
               OR COALESCE(
                    CASE WHEN (m.metadata_provenance->>'enContentVerifiedVersion') ~ '^\\d+$'
                         THEN (m.metadata_provenance->>'enContentVerifiedVersion')::int
                         ELSE 0 END,
                    0) < ${EN_CONTENT_VERIFIER_VERSION}
+              OR (
+                m.type = 'SHOW'
+                AND EXISTS (SELECT 1 FROM shows sh JOIN seasons s ON s.show_id = sh.id JOIN episodes e ON e.season_id = s.id WHERE sh.media_id = m.id)
+                AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
+                      IS DISTINCT FROM COALESCE((
+                        SELECT count(e.id)::text || ':' || COALESCE(max(e.updated_at)::text, '')
+                        FROM shows sh
+                        JOIN seasons s ON s.show_id = sh.id
+                        JOIN episodes e ON e.season_id = s.id
+                        WHERE sh.media_id = m.id
+                      ), '')
+              )
             )
           ORDER BY m.id
           LIMIT ${take}`;
         // End of the catalog reached → next deep run wraps to the beginning.
         await this.redis.set(
-          cursorKey,
+          EN_CONTENT_DEEP_CURSOR_KEY,
           ids.length < take ? '' : (ids[ids.length - 1]?.id ?? cursor),
           86400 * 30,
         );
@@ -1842,16 +2045,45 @@ export class MetadataBackfillService {
         // leave the pool, so every run advances through NEW suspects only.
         ids = await this.prisma.$queryRaw<{ id: string }[]>`
           SELECT m.id FROM media_items m
-          WHERE COALESCE(NULLIF(m.titles->>'en',''), m.title) ~ '[^ -~]'
+          WHERE (
+              COALESCE(NULLIF(m.titles->>'en',''), m.title) ~ '[^ -~]'
+              OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '') ~ '[^ -~]'
+              OR EXISTS (
+                SELECT 1 FROM shows sh
+                JOIN seasons s ON s.show_id = sh.id
+                JOIN episodes e ON e.season_id = s.id
+                WHERE sh.media_id = m.id
+                  AND (
+                    COALESCE(NULLIF(e.titles->>'en',''), e.title) ~ '[^ -~]'
+                    OR COALESCE(NULLIF(e.overviews->>'en',''), e.overview, '') ~ '[^ -~]'
+                  )
+              )
+            )
             AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
+            AND (m.metadata_provenance->>'enContentRepairFailedAt' IS NULL
+                 OR (m.metadata_provenance->>'enContentRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')
             AND (
               COALESCE(NULLIF(m.titles->>'en',''), m.title)
                     IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
+              OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '')
+                    IS DISTINCT FROM COALESCE(m.metadata_provenance->>'enContentVerifiedOverview', '')
               OR COALESCE(
                    CASE WHEN (m.metadata_provenance->>'enContentVerifiedVersion') ~ '^\\d+$'
                         THEN (m.metadata_provenance->>'enContentVerifiedVersion')::int
                         ELSE 0 END,
                    0) < ${EN_CONTENT_VERIFIER_VERSION}
+              OR (
+                m.type = 'SHOW'
+                AND EXISTS (SELECT 1 FROM shows sh JOIN seasons s ON s.show_id = sh.id JOIN episodes e ON e.season_id = s.id WHERE sh.media_id = m.id)
+                AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
+                      IS DISTINCT FROM COALESCE((
+                        SELECT count(e.id)::text || ':' || COALESCE(max(e.updated_at)::text, '')
+                        FROM shows sh
+                        JOIN seasons s ON s.show_id = sh.id
+                        JOIN episodes e ON e.season_id = s.id
+                        WHERE sh.media_id = m.id
+                      ), '')
+              )
             )
           ORDER BY m.popularity DESC, m.id
           LIMIT ${take}`;
@@ -1873,6 +2105,8 @@ export class MetadataBackfillService {
           id: true,
           title: true,
           titles: true,
+          overview: true,
+          overviews: true,
           type: true,
           contentClassification: true,
           show: { select: { keywords: true } },
@@ -1885,6 +2119,7 @@ export class MetadataBackfillService {
       // findMany doesn't preserve the IN order.
       const order = new Map(ids.map((r, idx) => [r.id, idx]));
       candidates.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+      const episodeStats = await this.getEpisodeContentStats(candidates.map((m) => m.id));
       this.trackRepair('english-content', { total: candidates.length });
 
       let verified = 0;
@@ -1900,35 +2135,68 @@ export class MetadataBackfillService {
           current: m.title,
         });
         try {
-          const providerTitle = await this.resolveProviderEnglishTitle(m);
-          if (!providerTitle) {
+          const providerBase = await this.resolveProviderEnglishBase(m);
+          if (!providerBase) {
             failed++; // unverifiable right now — never guess
+            await this.stampEnglishContentRepairFailure(m.id, 'no provider English base').catch(
+              () => undefined,
+            );
             if (failed <= 10)
               this.logger.warn(
-                `English-content verify: no provider English title for "${m.title}" (${m.id}) — providers: ${m.externalIds.map((e) => e.provider).join(',') || 'none'}`,
+                `English-content verify: no provider English base for "${m.title}" (${m.id}) — providers: ${m.externalIds.map((e) => e.provider).join(',') || 'none'}`,
               );
             continue;
           }
-          const visible = this.englishVisibleTitle(m);
-          if (this.normTitleForCompare(providerTitle) === this.normTitleForCompare(visible)) {
+          const visibleTitle = this.englishVisibleTitle(m);
+          const visibleOverview = this.englishVisibleOverview(m);
+          const ep = episodeStats.get(m.id) ?? { fingerprint: '', hasSuspect: false };
+          const titleMatches =
+            this.normTitleForCompare(providerBase.title) === this.normTitleForCompare(visibleTitle);
+          const overviewMatches =
+            !visibleOverview ||
+            (!!providerBase.overview &&
+              this.normTitleForCompare(providerBase.overview) ===
+                this.normTitleForCompare(visibleOverview));
+          if (titleMatches && overviewMatches && !ep.hasSuspect) {
             verified++;
-            // Remember the verified title: the row leaves the suspect pool until its
-            // English-visible title changes (new contamination re-arms it). This is what
-            // makes repeated runs converge instead of re-verifying Pokémon forever.
-            await this.prisma.$executeRaw`
-              UPDATE media_items
-              SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
-                    || jsonb_build_object('enContentVerifiedTitle', ${visible}::text,
-                                          'enContentVerifiedAt', ${new Date().toISOString()}::text,
-                                          'enContentVerifiedVersion', ${EN_CONTENT_VERIFIER_VERSION})
-              WHERE id = ${m.id}`;
+            // Remember the verified visible content: the row leaves the suspect pool until
+            // its title/overview/episode fingerprint changes (new contamination re-arms it).
+            await this.stampEnglishContentVerified(
+              m.id,
+              visibleTitle,
+              visibleOverview,
+              ep.fingerprint,
+            );
             continue;
           }
           await this.forceEnglishRehydrate(m);
+          const refreshedEp = (await this.getEpisodeContentStats([m.id])).get(m.id) ?? {
+            fingerprint: ep.fingerprint,
+            hasSuspect: false,
+          };
+          if (refreshedEp.hasSuspect) {
+            failed++;
+            await this.stampEnglishContentRepairFailure(
+              m.id,
+              'episode text still suspicious after rehydrate',
+            ).catch(() => undefined);
+            if (failed <= 10)
+              this.logger.warn(
+                `English-content repair: episode text still suspicious after rehydrate for "${m.title}" (${m.id})`,
+              );
+            continue;
+          }
+          await this.stampEnglishContentVerified(
+            m.id,
+            providerBase.title,
+            providerBase.overview,
+            refreshedEp.fingerprint,
+          );
           fixed++;
-          if (sample.length < 5) sample.push(`${m.title} → ${providerTitle}`);
+          if (sample.length < 5) sample.push(`${m.title} → ${providerBase.title}`);
         } catch (e) {
           failed++;
+          await this.stampEnglishContentRepairFailure(m.id, e).catch(() => undefined);
           // First failures are WARN-visible (prod runs at info level); the rest stay debug.
           if (failed <= 10)
             this.logger.warn(
