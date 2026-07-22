@@ -12,6 +12,10 @@ import { ProviderThrottled } from './providers/shared/provider-http';
 import { StructureRemapService } from './structure-remap.service';
 import { slugify } from './util/slugify';
 
+// Bump when English-content verification logic changes. v2 invalidates rows that were
+// "verified" while unsupported TVDB languages could be folded into titles.en.
+const EN_CONTENT_VERIFIER_VERSION = 2;
+
 /**
  * Metadata health stats + background backfill.
  *
@@ -232,7 +236,9 @@ export class MetadataBackfillService {
       // content-based suspect stat below.
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
-        WHERE m.title_locale IS NOT NULL AND m.title_locale != 'en'`,
+        WHERE m.title_locale IS NOT NULL AND m.title_locale != 'en'
+          AND (m.metadata_provenance->>'enBaseRepairFailedAt' IS NULL
+               OR (m.metadata_provenance->>'enBaseRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')`,
       // Content-based suspects STILL NEEDING verification: the title an English user
       // SEES ('en' override → base) contains non-ASCII — catches wrong-language bases
       // whose marker LIES ('en'/unset), which the marker stat above cannot see. Rows
@@ -1555,6 +1561,17 @@ export class MetadataBackfillService {
   // ---- Non-English base titles ----
   private enBaseFixRunning = false;
 
+  private async stampEnglishBaseRepairFailure(mediaId: string, error: unknown): Promise<void> {
+    const message = String((error as Error)?.message ?? error).slice(0, 300);
+    await this.prisma.$executeRaw`
+      UPDATE media_items
+      SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
+            || jsonb_build_object(
+                 'enBaseRepairFailedAt', ${new Date().toISOString()}::text,
+                 'enBaseRepairFailReason', ${message}::text)
+      WHERE id = ${mediaId}`;
+  }
+
   /**
    * Restore a trusted ENGLISH base for rows whose base/override was written in the wrong
    * language (older contaminations: title_locale != 'en', or a missing/wrong 'en' slot).
@@ -1583,13 +1600,17 @@ export class MetadataBackfillService {
       finishedAt: null,
     });
     try {
+      const take = Math.max(1, Math.min(limit ?? 200, 100000));
+      const ids = await this.prisma.$queryRaw<{ id: string }[]>`
+        SELECT m.id FROM media_items m
+        WHERE m.title_locale IS NOT NULL AND m.title_locale != 'en'
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
+          AND (m.metadata_provenance->>'enBaseRepairFailedAt' IS NULL
+               OR (m.metadata_provenance->>'enBaseRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')
+        ORDER BY m.id
+        LIMIT ${take}`;
       const candidates = await this.prisma.mediaItem.findMany({
-        where: {
-          AND: [{ titleLocale: { not: 'en' } }, { titleLocale: { not: null } }],
-          externalIds: { some: {} },
-        },
-        orderBy: { id: 'asc' },
-        take: Math.max(1, Math.min(limit ?? 200, 100000)),
+        where: { id: { in: ids.map((r) => r.id) } },
         select: {
           id: true,
           title: true,
@@ -1601,6 +1622,8 @@ export class MetadataBackfillService {
           genres: { select: { genre: { select: { slug: true, name: true } } } },
         },
       });
+      const order = new Map(ids.map((r, idx) => [r.id, idx]));
+      candidates.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 
       this.trackRepair('english-base', { total: candidates.length });
 
@@ -1622,6 +1645,7 @@ export class MetadataBackfillService {
           if (sample.length < 5) sample.push(m.title);
         } catch (e) {
           failed++;
+          await this.stampEnglishBaseRepairFailure(m.id, e).catch(() => undefined);
           this.logger.debug(
             `non-English base repair failed for "${m.title}": ${(e as Error).message}`,
           );
@@ -1796,8 +1820,15 @@ export class MetadataBackfillService {
           SELECT m.id FROM media_items m
           WHERE m.id > ${cursor}
             AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
-            AND COALESCE(NULLIF(m.titles->>'en',''), m.title)
-                  IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
+            AND (
+              COALESCE(NULLIF(m.titles->>'en',''), m.title)
+                    IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
+              OR COALESCE(
+                   CASE WHEN (m.metadata_provenance->>'enContentVerifiedVersion') ~ '^\\d+$'
+                        THEN (m.metadata_provenance->>'enContentVerifiedVersion')::int
+                        ELSE 0 END,
+                   0) < ${EN_CONTENT_VERIFIER_VERSION}
+            )
           ORDER BY m.id
           LIMIT ${take}`;
         // End of the catalog reached → next deep run wraps to the beginning.
@@ -1813,8 +1844,15 @@ export class MetadataBackfillService {
           SELECT m.id FROM media_items m
           WHERE COALESCE(NULLIF(m.titles->>'en',''), m.title) ~ '[^ -~]'
             AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
-            AND COALESCE(NULLIF(m.titles->>'en',''), m.title)
-                  IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
+            AND (
+              COALESCE(NULLIF(m.titles->>'en',''), m.title)
+                    IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
+              OR COALESCE(
+                   CASE WHEN (m.metadata_provenance->>'enContentVerifiedVersion') ~ '^\\d+$'
+                        THEN (m.metadata_provenance->>'enContentVerifiedVersion')::int
+                        ELSE 0 END,
+                   0) < ${EN_CONTENT_VERIFIER_VERSION}
+            )
           ORDER BY m.popularity DESC, m.id
           LIMIT ${take}`;
       }
@@ -1881,7 +1919,8 @@ export class MetadataBackfillService {
               UPDATE media_items
               SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
                     || jsonb_build_object('enContentVerifiedTitle', ${visible}::text,
-                                          'enContentVerifiedAt', ${new Date().toISOString()}::text)
+                                          'enContentVerifiedAt', ${new Date().toISOString()}::text,
+                                          'enContentVerifiedVersion', ${EN_CONTENT_VERIFIER_VERSION})
               WHERE id = ${m.id}`;
             continue;
           }

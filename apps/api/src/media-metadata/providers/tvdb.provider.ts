@@ -1,6 +1,6 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ExternalProvider, MediaStatus, MediaType } from '@tvwatch/shared';
-import { tvdbCode, formatNetworks } from '@tvwatch/shared';
+import { tvdbCode, formatNetworks, type SupportedLocale } from '@tvwatch/shared';
 
 /** Map our app locales → TVDB 3-letter language codes for the episodes path param. */
 const TVDB_3LETTER: Record<string, string> = {
@@ -148,14 +148,15 @@ interface TvdbTranslationBlock {
   overviewTranslations?: { overview: string; language: string; isPrimary?: boolean }[];
 }
 
-/** Reverse-map TVDB 3-letter codes → our app locale codes. */
-const TVDB_TO_APP: Record<string, string> = {
+/** Reverse-map TVDB language codes → supported app locale codes. Unsupported TVDB
+ *  languages must NOT fall into `en` or they overwrite the English override. */
+const TVDB_TO_APP: Partial<Record<string, SupportedLocale>> = {
   eng: 'en',
   fra: 'fr',
   spa: 'es',
   por: 'pt-BR',
   deu: 'de',
-  ita: 'ita',
+  ita: 'it',
   ara: 'ar',
   tur: 'tr',
   hin: 'hi',
@@ -163,23 +164,13 @@ const TVDB_TO_APP: Record<string, string> = {
   jpn: 'ja',
   kor: 'ko',
   zho: 'zh-CN',
-  rus: 'en',
-  hrv: 'en',
-  heb: 'en',
-  swe: 'en',
-  pol: 'en',
-  hun: 'en',
-  nld: 'en',
-  fin: 'en',
-  ukr: 'en',
-  srp: 'en',
-  ell: 'en',
-  ces: 'en',
-  sqi: 'en',
-  lit: 'en',
   zhtw: 'zh-CN',
   pt: 'pt-BR',
 };
+
+function tvdbToAppLocale(code?: string | null): SupportedLocale | undefined {
+  return TVDB_TO_APP[String(code ?? '').toLowerCase()];
+}
 
 interface TvdbMovieExtended {
   id: number;
@@ -229,7 +220,9 @@ export class TvdbProvider {
   async fetchImdbId(kind: 'show' | 'movie', tvdbId: number): Promise<string | null> {
     if (!this.client.enabled) return null;
     if (kind === 'show') {
-      const res = await this.client.get<{ data: { imdbId?: string } }>(`/series/${tvdbId}/extended`);
+      const res = await this.client.get<{ data: { imdbId?: string } }>(
+        `/series/${tvdbId}/extended`,
+      );
       return res.data?.imdbId || null;
     }
     const res = await this.client.get<{ data: { remoteIds?: TvdbRemoteId[] } }>(
@@ -330,17 +323,19 @@ export class TvdbProvider {
     const allOverviews: Record<string, string> = {};
     if (tr?.nameTranslations) {
       for (const nt of tr.nameTranslations) {
-        const appLocale = TVDB_TO_APP[nt.language] ?? 'en';
+        const appLocale = tvdbToAppLocale(nt.language);
+        if (!appLocale) continue;
         if (!allTitles[appLocale]) allTitles[appLocale] = nt.name;
       }
     }
     if (tr?.overviewTranslations) {
       for (const ot of tr.overviewTranslations) {
-        const appLocale = TVDB_TO_APP[ot.language] ?? 'en';
+        const appLocale = tvdbToAppLocale(ot.language);
+        if (!appLocale) continue;
         if (!allOverviews[appLocale]) allOverviews[appLocale] = ot.overview;
       }
     }
-    const requestLocale = TVDB_TO_APP[tvdbLang3(language)] ?? 'en';
+    const requestLocale = tvdbToAppLocale(tvdbLang3(language)) ?? 'en';
     const localizedTitle = allTitles[requestLocale] ?? allTitles['en'] ?? null;
     const localizedOverview = allOverviews[requestLocale] ?? allOverviews['en'] ?? null;
     // The primary translation marks the series' original language (e.g. jpn → ja) —
@@ -393,7 +388,7 @@ export class TvdbProvider {
       title: localizedTitle ?? (s.name || 'Untitled'),
       // Original-language series name (TVDB's `name` is always original-language).
       originalTitle: s.name ?? null,
-      originalLanguage: primaryTvdbLang ? (TVDB_TO_APP[primaryTvdbLang] ?? null) : undefined,
+      originalLanguage: primaryTvdbLang ? (tvdbToAppLocale(primaryTvdbLang) ?? null) : undefined,
       overview: localizedOverview ?? (s.overview || null),
       posterUrl: this.client.artwork(poster?.image),
       backdropUrl: this.client.artwork(backdrop?.image),
@@ -609,21 +604,23 @@ export class TvdbProvider {
     const allTranslations: Record<string, { title?: string; overview?: string }> = {};
     if (tr?.nameTranslations) {
       for (const nt of tr.nameTranslations) {
-        const appLocale = TVDB_TO_APP[nt.language] ?? 'en';
+        const appLocale = tvdbToAppLocale(nt.language);
+        if (!appLocale) continue;
         if (!allTranslations[appLocale]) allTranslations[appLocale] = {};
         allTranslations[appLocale].title = nt.name;
       }
     }
     if (tr?.overviewTranslations) {
       for (const ot of tr.overviewTranslations) {
-        const appLocale = TVDB_TO_APP[ot.language] ?? 'en';
+        const appLocale = tvdbToAppLocale(ot.language);
+        if (!appLocale) continue;
         if (!allTranslations[appLocale]) allTranslations[appLocale] = {};
         allTranslations[appLocale].overview = ot.overview;
       }
     }
 
     // Determine the best title/overview for the request locale.
-    const requestLocale = TVDB_TO_APP[tvdbLang3(language)] ?? 'en';
+    const requestLocale = tvdbToAppLocale(tvdbLang3(language)) ?? 'en';
     const localeTr = allTranslations[requestLocale] ?? allTranslations['en'] ?? {};
 
     return {

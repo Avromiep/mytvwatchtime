@@ -14,6 +14,15 @@ function fakeClient(routes: Record<string, unknown>) {
   };
 }
 
+function fakeClientWithHandler(handler: (path: string) => any) {
+  return {
+    enabled: true,
+    apiKey: 'k',
+    artwork: (p?: string | null) => (p ? `https://art/${p}` : null),
+    get: jest.fn(async <T>(path: string): Promise<T> => handler(path) as T),
+  };
+}
+
 describe('TvdbProvider — episode + translations', () => {
   it('resolves an episode by TVDB id with parent-series + absolute number', async () => {
     const provider = new TvdbProvider(
@@ -170,7 +179,7 @@ describe('TvdbProvider — episode + translations', () => {
               peopleType: 'Actor',
               sort: 1,
             },
-            { id: 999, name: 'Crew Person', personName: 'Someone', peopleType: 'Crew', sort: 2 }, // non-Actor filtered
+            { id: 999, name: 'Crew Person', personName: 'Someone', peopleType: 'Crew', sort: 2 },
           ],
         },
         '/series/5/episodes': { episodes: [] },
@@ -184,6 +193,68 @@ describe('TvdbProvider — episode + translations', () => {
       characterExternalId: 64771402,
     });
     expect(show.cast[1]).toMatchObject({ characterExternalId: 64771393 });
+  });
+
+  it('does not fold unsupported TVDB translations into English', async () => {
+    const provider = new TvdbProvider(
+      fakeClientWithHandler((path) => {
+        if (path.includes('/episodes/')) return { data: { episodes: [] }, links: {} };
+        return {
+          data: {
+            id: 77398,
+            name: 'The X-Files',
+            status: { name: 'Ended' },
+            seasons: [],
+            artworks: [],
+            characters: [],
+            genres: [],
+            translations: {
+              nameTranslations: [
+                { language: 'ces', name: 'Akta X' },
+                { language: 'eng', name: 'The X-Files' },
+              ],
+              overviewTranslations: [
+                { language: 'ces', overview: 'Czech overview' },
+                { language: 'eng', overview: 'English overview' },
+              ],
+            },
+          },
+        };
+      }) as any,
+    );
+
+    const show = await provider.getShow(77398, 'en');
+
+    expect(show.title).toBe('The X-Files');
+    expect(show.overview).toBe('English overview');
+  });
+
+  it('maps TVDB ita translations to the app it locale', async () => {
+    const provider = new TvdbProvider(
+      fakeClientWithHandler(() => ({
+        data: {
+          id: 1,
+          name: 'English Movie',
+          artworks: [],
+          characters: [],
+          genres: [],
+          remoteIds: [],
+          translations: {
+            nameTranslations: [
+              { language: 'eng', name: 'English Movie' },
+              { language: 'ita', name: 'Film italiano' },
+            ],
+            overviewTranslations: [{ language: 'ita', overview: 'Descrizione italiana' }],
+          },
+        },
+      })) as any,
+    );
+
+    const movie = await provider.getMovie(1, 'it');
+
+    expect(movie.title).toBe('Film italiano');
+    expect(movie.translations?.it?.title).toBe('Film italiano');
+    expect((movie.translations as any)?.ita).toBeUndefined();
   });
 });
 

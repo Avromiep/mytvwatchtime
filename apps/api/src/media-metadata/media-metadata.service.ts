@@ -122,37 +122,31 @@ export class MediaMetadataService {
         }
       | undefined,
     lang: string,
+    trustRequestLocale = true,
   ) {
+    const titleBase = mergeLocalized(null, 'en', enBase?.title, undefined);
+    const overviewBase = mergeLocalized(null, 'en', enBase?.overview, undefined);
+    const posterBase = mergeLocalized(null, 'en', enBase?.posterUrl, undefined);
+    const backdropBase = mergeLocalized(null, 'en', enBase?.backdropUrl, undefined);
+    const shouldStoreRequestLocale = trustRequestLocale && (lang !== 'en' || !enBase);
     return {
       title: enBase?.title ?? item.title,
       overview: enBase?.overview ?? item.overview,
       posterUrl: enBase?.posterUrl ?? item.posterUrl,
       backdropUrl: enBase?.backdropUrl ?? item.backdropUrl,
-      titleLocale: enBase ? 'en' : lang,
-      titles: mergeLocalized(
-        mergeLocalized(null, 'en', enBase?.title, undefined),
-        lang,
-        item.title,
-        undefined,
-      ),
-      overviews: mergeLocalized(
-        mergeLocalized(null, 'en', enBase?.overview, undefined),
-        lang,
-        item.overview,
-        undefined,
-      ),
-      posterUrls: mergeLocalized(
-        mergeLocalized(null, 'en', enBase?.posterUrl, undefined),
-        lang,
-        item.posterUrl,
-        undefined,
-      ),
-      backdropUrls: mergeLocalized(
-        mergeLocalized(null, 'en', enBase?.backdropUrl, undefined),
-        lang,
-        item.backdropUrl,
-        undefined,
-      ),
+      titleLocale: enBase ? 'en' : trustRequestLocale ? lang : 'und',
+      titles: shouldStoreRequestLocale
+        ? mergeLocalized(titleBase, lang, item.title, undefined)
+        : titleBase,
+      overviews: shouldStoreRequestLocale
+        ? mergeLocalized(overviewBase, lang, item.overview, undefined)
+        : overviewBase,
+      posterUrls: shouldStoreRequestLocale
+        ? mergeLocalized(posterBase, lang, item.posterUrl, undefined)
+        : posterBase,
+      backdropUrls: shouldStoreRequestLocale
+        ? mergeLocalized(backdropBase, lang, item.backdropUrl, undefined)
+        : backdropBase,
     };
   }
 
@@ -173,12 +167,38 @@ export class MediaMetadataService {
       backdropUrl?: string | null;
     },
     lang: string,
+    englishBase?: {
+      title?: string;
+      overview?: string | null;
+      posterUrl?: string | null;
+      backdropUrl?: string | null;
+    },
+    opts?: { skipUntrustedEnglish?: boolean },
   ) {
+    if (lang === 'en' && !englishBase && opts?.skipUntrustedEnglish) {
+      return { data: {}, changed: false };
+    }
+    const localeItem = lang === 'en' && englishBase ? englishBase : item;
     const data = {
-      titles: mergeLocalized(existing.titles as any, lang, item.title, undefined),
-      overviews: mergeLocalized(existing.overviews as any, lang, item.overview, undefined),
-      posterUrls: mergeLocalized(existing.posterUrls as any, lang, item.posterUrl, undefined),
-      backdropUrls: mergeLocalized(existing.backdropUrls as any, lang, item.backdropUrl, undefined),
+      titles: mergeLocalized(existing.titles as any, lang, localeItem.title, englishBase?.title),
+      overviews: mergeLocalized(
+        existing.overviews as any,
+        lang,
+        localeItem.overview,
+        englishBase?.overview,
+      ),
+      posterUrls: mergeLocalized(
+        existing.posterUrls as any,
+        lang,
+        localeItem.posterUrl,
+        englishBase?.posterUrl,
+      ),
+      backdropUrls: mergeLocalized(
+        existing.backdropUrls as any,
+        lang,
+        localeItem.backdropUrl,
+        englishBase?.backdropUrl,
+      ),
     };
     const same = (before: any, after: any) =>
       (before?.en ?? undefined) === (after?.en ?? undefined) &&
@@ -352,20 +372,13 @@ export class MediaMetadataService {
       ProviderEntityKind.SERIES,
     );
     if (existing) {
-      await this.prisma.mediaItem.update({
-        where: { id: existing.id },
-        data: {
-          titles: mergeLocalized(existing.titles as any, lang, item.title, undefined),
-          overviews: mergeLocalized(existing.overviews as any, lang, item.overview, undefined),
-          posterUrls: mergeLocalized(existing.posterUrls as any, lang, item.posterUrl, undefined),
-          backdropUrls: mergeLocalized(
-            existing.backdropUrls as any,
-            lang,
-            item.backdropUrl,
-            undefined,
-          ),
-        },
+      const enBase = await this.fetchEnBaseTvdb(MediaType.SHOW, item.tvdbId);
+      const { data, changed } = this.localeOverrideUpdate(existing, item, lang, enBase, {
+        skipUntrustedEnglish: true,
       });
+      if (changed) {
+        await this.prisma.mediaItem.update({ where: { id: existing.id }, data });
+      }
       if (item.year) {
         await this.prisma.show
           .updateMany({
@@ -386,8 +399,9 @@ export class MediaMetadataService {
       data: {
         ...this.newMediaLocaleFields(
           item,
-          lang === 'en' ? undefined : await this.fetchEnBaseTvdb(MediaType.SHOW, item.tvdbId),
+          await this.fetchEnBaseTvdb(MediaType.SHOW, item.tvdbId),
           lang,
+          lang !== 'en',
         ),
         type: MediaType.SHOW,
         popularity: item.popularity ?? 0,
@@ -424,20 +438,13 @@ export class MediaMetadataService {
       ProviderEntityKind.MOVIE,
     );
     if (existing) {
-      await this.prisma.mediaItem.update({
-        where: { id: existing.id },
-        data: {
-          titles: mergeLocalized(existing.titles as any, lang, item.title, undefined),
-          overviews: mergeLocalized(existing.overviews as any, lang, item.overview, undefined),
-          posterUrls: mergeLocalized(existing.posterUrls as any, lang, item.posterUrl, undefined),
-          backdropUrls: mergeLocalized(
-            existing.backdropUrls as any,
-            lang,
-            item.backdropUrl,
-            undefined,
-          ),
-        },
+      const enBase = await this.fetchEnBaseTvdb(MediaType.MOVIE, item.tvdbId);
+      const { data, changed } = this.localeOverrideUpdate(existing, item, lang, enBase, {
+        skipUntrustedEnglish: true,
       });
+      if (changed) {
+        await this.prisma.mediaItem.update({ where: { id: existing.id }, data });
+      }
       if (item.year) {
         await this.prisma.movie
           .updateMany({
@@ -457,8 +464,9 @@ export class MediaMetadataService {
       data: {
         ...this.newMediaLocaleFields(
           item,
-          lang === 'en' ? undefined : await this.fetchEnBaseTvdb(MediaType.MOVIE, item.tvdbId),
+          await this.fetchEnBaseTvdb(MediaType.MOVIE, item.tvdbId),
           lang,
+          lang !== 'en',
         ),
         type: MediaType.MOVIE,
         popularity: item.popularity ?? 0,
@@ -677,7 +685,10 @@ export class MediaMetadataService {
           ? await this.tmdb.localizedShowBase(Number(tmdbIdRaw), 'en-US')
           : await this.tmdb.localizedMovieBase(Number(tmdbIdRaw), 'en-US');
       if (base.rating != null && base.rating > 0) {
-        await this.prisma.mediaItem.update({ where: { id: mediaId }, data: { rating: base.rating } });
+        await this.prisma.mediaItem.update({
+          where: { id: mediaId },
+          data: { rating: base.rating },
+        });
       }
     } catch (e) {
       this.logger.debug(`rating fill skipped for ${mediaId}: ${(e as Error).message}`);

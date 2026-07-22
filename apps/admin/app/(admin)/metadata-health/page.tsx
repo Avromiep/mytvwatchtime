@@ -70,7 +70,7 @@ const STAT_HINTS: Record<string, string> = {
   multiTvdbIds:
     'Rows carrying more than one TVDB id — merge leftovers (harmless) or id poisoning from an old bug (one id belongs to a DIFFERENT show, mis-routing matches). Repair verifies each id via TMDB and detaches only the wrong ones. User history is never deleted.',
   nonEnglishBase:
-    "Rows explicitly marked as having a non-English base title (title_locale ≠ en). Repair re-hydrates them with a proper English base and restores the 'en' override. Rows with an unset marker are NOT counted (most have a fine English base already). No user data touched.",
+    "Rows explicitly marked as having a non-English base title (title_locale ≠ en). Repair re-hydrates them with a proper English base and restores the 'en' override. Rows that just failed are parked for 24h so repeated runs keep advancing. Rows with an unset marker are NOT counted (most have a fine English base already). No user data touched.",
   nonEnglishContent:
     "Suspected wrong-language CONTENT with a lying/missing marker: the title an English user sees contains non-ASCII. Verify+Fix checks the most-popular suspects first against the provider's canonical English title and re-hydrates only real mismatches. Verified rows are remembered and leave this count (a title change re-arms them), so the number DRAINS as runs complete. Deep mode verifies every row — catches pure-ASCII foreign titles. A nightly Scheduled Job keeps it converged. No user data touched.",
   bannerAsPoster:

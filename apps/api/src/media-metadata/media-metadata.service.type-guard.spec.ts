@@ -386,16 +386,22 @@ describe('MediaMetadataService — titleLocale marker', () => {
 });
 
 describe('MediaMetadataService — TVDB light upserts are born with an English base', () => {
-  function make(enTitle: string | null) {
+  function make(enTitle: string | null, existing?: any) {
     const created: any[] = [];
+    const updated: any[] = [];
     const prisma = {
       mediaItem: {
         create: async (a: any) => {
           created.push(a);
           return { id: 'new-1' };
         },
+        update: async (a: any) => {
+          updated.push(a);
+          return {};
+        },
       },
-      externalId: { findFirst: async () => null },
+      externalId: { findFirst: async () => (existing ? { media: existing } : null) },
+      show: { updateMany: async () => ({ count: 0 }) },
     };
     const tvdb = {
       enabled: true,
@@ -413,7 +419,7 @@ describe('MediaMetadataService — TVDB light upserts are born with an English b
       { enqueueClassifyCandidate: async () => undefined } as any,
       { get: async () => null, set: async () => undefined, del: async () => undefined } as any,
     );
-    return { svc, created, tvdb };
+    return { svc, created, updated, tvdb };
   }
 
   const item = {
@@ -449,15 +455,60 @@ describe('MediaMetadataService — TVDB light upserts are born with an English b
     expect(data.titleLocale).toBe('it');
   });
 
-  it('en creation: no extra fetch — the item itself is the English base', async () => {
+  it('en creation: uses the trusted TVDB English title, not the localized search result', async () => {
     const { svc, created, tvdb } = make('The Vampire Diaries');
 
-    await runInLanguage('en', () =>
-      svc.lightUpsertShowTvdb({ ...item, title: 'The Vampire Diaries' }),
-    );
+    await runInLanguage('en', () => svc.lightUpsertShowTvdb(item));
 
-    expect(tvdb.localizedShowBase).not.toHaveBeenCalled();
+    expect(tvdb.localizedShowBase).toHaveBeenCalledWith(95491, 'eng');
     expect(created[0].data.title).toBe('The Vampire Diaries');
     expect(created[0].data.titleLocale).toBe('en');
+    expect(created[0].data.titles).toMatchObject({ en: 'The Vampire Diaries' });
+    expect(created[0].data.titles.en).not.toBe('Diari di vampiri');
+  });
+
+  it('en creation without an English TVDB title is marked untrusted for repair', async () => {
+    const { svc, created } = make(null);
+
+    await runInLanguage('en', () => svc.lightUpsertShowTvdb(item));
+
+    expect(created[0].data.title).toBe('Diari di vampiri');
+    expect(created[0].data.titleLocale).toBe('und');
+    expect(created[0].data.titles.en).toBeUndefined();
+  });
+
+  it('existing en upsert writes the trusted TVDB English title, not a localized match name', async () => {
+    const existing = {
+      id: 'm1',
+      titles: { en: 'Old title' },
+      overviews: null,
+      posterUrls: null,
+      backdropUrls: null,
+    };
+    const { svc, updated } = make('How I Met Your Mother', existing);
+
+    await runInLanguage('en', () =>
+      svc.lightUpsertShowTvdb({ ...item, tvdbId: 75760, title: 'Jak jsem poznal vaši matku' }),
+    );
+
+    expect(updated).toHaveLength(1);
+    expect(updated[0].data.titles.en).toBe('How I Met Your Mother');
+  });
+
+  it('existing en upsert skips the write when English could not be verified', async () => {
+    const existing = {
+      id: 'm1',
+      titles: { en: 'How I Met Your Mother' },
+      overviews: null,
+      posterUrls: null,
+      backdropUrls: null,
+    };
+    const { svc, updated } = make(null, existing);
+
+    await runInLanguage('en', () =>
+      svc.lightUpsertShowTvdb({ ...item, tvdbId: 75760, title: 'Jak jsem poznal vaši matku' }),
+    );
+
+    expect(updated).toHaveLength(0);
   });
 });

@@ -140,6 +140,7 @@ describe('MetadataBackfillService.repairNonEnglishBase', () => {
         findMany: jest.fn(async () => candidates),
         update: jest.fn(async () => ({})),
       },
+      $queryRaw: jest.fn(async () => candidates.map((c) => ({ id: c.id }))),
       $executeRaw: jest.fn(async () => 0),
     };
     const meta = mockMeta();
@@ -254,6 +255,34 @@ describe('MetadataBackfillService.repairNonEnglishBase', () => {
     expect(meta.ensureMovieFullTvdb).toHaveBeenCalledWith(777);
     expect(res.succeeded).toBe(1);
     expect(res.failed).toBe(1); // m3 has nothing to hydrate from
+  });
+
+  it('excludes rows that failed this repair in the last 24 hours', async () => {
+    const { service, prisma } = make([row()]);
+
+    await service.repairNonEnglishBase();
+
+    const [parts] = (prisma.$queryRaw as jest.Mock).mock.calls[0];
+    expect(parts.join(' ')).toContain('enBaseRepairFailedAt');
+    expect(parts.join(' ')).toContain("INTERVAL '24 hours'");
+  });
+
+  it('stamps failures so repeated manual runs can advance past them', async () => {
+    const { service, prisma } = make([
+      row({
+        id: 'bad-1',
+        externalIds: [{ provider: 'IMDB', value: 'tt123', providerEntityKind: 'MOVIE' }],
+      }),
+    ]);
+
+    const res = await service.repairNonEnglishBase();
+
+    expect(res.failed).toBe(1);
+    const [parts, ...vals] = (prisma.$executeRaw as jest.Mock).mock.calls.find((c) =>
+      c[0].join(' ').includes('enBaseRepairFailedAt'),
+    );
+    expect(parts.join(' ')).toContain('enBaseRepairFailReason');
+    expect(vals).toContain('bad-1');
   });
 });
 
@@ -964,6 +993,7 @@ describe('MetadataBackfillService — repair progress tracking', () => {
         ]),
         update: jest.fn(async () => ({})),
       },
+      $queryRaw: jest.fn(async () => [{ id: 'm1' }]),
       $executeRaw: jest.fn(async () => 0),
     };
     const service = new MetadataBackfillService(
