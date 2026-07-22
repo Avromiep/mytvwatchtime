@@ -449,37 +449,49 @@ export class TmdbProvider {
     episode: { tmdbEpisodeId: number; showId: number; season: number; episode: number } | null;
   } | null> {
     try {
-      const res = await this.tmdb.get<{
-        movie_results?: { id?: number; genre_ids?: number[] }[];
-        tv_results?: { id?: number; genre_ids?: number[]; origin_country?: string[] }[];
-        tv_episode_results?: {
-          id?: number;
-          show_id?: number;
-          season_number?: number;
-          episode_number?: number;
-        }[];
-      }>(`/find/${externalId}`, { external_source: source });
-      const m = res.movie_results?.[0];
-      const s = res.tv_results?.[0];
-      const e = res.tv_episode_results?.[0];
-      return {
-        movie: m?.id ? { tmdbId: m.id, genreIds: m.genre_ids ?? [] } : null,
-        show: s?.id
-          ? { tmdbId: s.id, genreIds: s.genre_ids ?? [], originCountries: s.origin_country ?? [] }
-          : null,
-        episode:
-          e?.id && e.show_id && e.season_number != null && e.episode_number != null
-            ? {
-                tmdbEpisodeId: e.id,
-                showId: e.show_id,
-                season: e.season_number,
-                episode: e.episode_number,
-              }
-            : null,
-      };
+      return await this.findByExternalIdStrict(externalId, source);
     } catch {
       return null;
     }
+  }
+
+  /** Same as findByExternalId, but provider errors/rate limits are allowed to bubble. */
+  async findByExternalIdStrict(
+    externalId: string | number,
+    source: 'tvdb_id' | 'imdb_id',
+  ): Promise<{
+    movie: { tmdbId: number; genreIds: number[] } | null;
+    show: { tmdbId: number; genreIds: number[]; originCountries: string[] } | null;
+    episode: { tmdbEpisodeId: number; showId: number; season: number; episode: number } | null;
+  } | null> {
+    const res = await this.tmdb.get<{
+      movie_results?: { id?: number; genre_ids?: number[] }[];
+      tv_results?: { id?: number; genre_ids?: number[]; origin_country?: string[] }[];
+      tv_episode_results?: {
+        id?: number;
+        show_id?: number;
+        season_number?: number;
+        episode_number?: number;
+      }[];
+    }>(`/find/${externalId}`, { external_source: source });
+    const m = res.movie_results?.[0];
+    const s = res.tv_results?.[0];
+    const e = res.tv_episode_results?.[0];
+    return {
+      movie: m?.id ? { tmdbId: m.id, genreIds: m.genre_ids ?? [] } : null,
+      show: s?.id
+        ? { tmdbId: s.id, genreIds: s.genre_ids ?? [], originCountries: s.origin_country ?? [] }
+        : null,
+      episode:
+        e?.id && e.show_id && e.season_number != null && e.episode_number != null
+          ? {
+              tmdbEpisodeId: e.id,
+              showId: e.show_id,
+              season: e.season_number,
+              episode: e.episode_number,
+            }
+          : null,
+    };
   }
 
   async getShow(id: number, language?: string): Promise<NormalizedShow> {

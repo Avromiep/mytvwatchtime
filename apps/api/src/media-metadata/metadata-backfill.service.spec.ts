@@ -993,6 +993,82 @@ describe('MetadataBackfillService — repair progress tracking', () => {
   });
 });
 
+describe('MetadataBackfillService.backfillRatings', () => {
+  function make(rows: any[], tmdbProviderOver: Record<string, any> = {}) {
+    const prisma = mockPrisma();
+    prisma.$queryRaw.mockResolvedValue(rows);
+    const tmdbProvider = {
+      enabled: true,
+      findByExternalIdStrict: jest.fn(async () => null),
+      localizedShowBase: jest.fn(async () => ({ rating: null })),
+      localizedMovieBase: jest.fn(async () => ({ rating: null })),
+      ...tmdbProviderOver,
+    };
+    const tvdb = { enabled: true, fetchImdbId: jest.fn(async () => null) };
+    const service = new MetadataBackfillService(
+      prisma,
+      mockMeta(),
+      {} as any,
+      {} as any,
+      {} as any,
+      tvdb as any,
+      tmdbProvider as any,
+      {} as any,
+    );
+    return { service, prisma, tmdbProvider, tvdb };
+  }
+
+  const row = (over: Record<string, any> = {}) => ({
+    id: 'm1',
+    title: 'TVDB-only show',
+    type: 'SHOW',
+    tmdb_id: null,
+    tvdb_id: '123',
+    ...over,
+  });
+
+  it('stamps definitive TVDB-only no-match rows so they drain from the next run', async () => {
+    const { service, prisma } = make([row()]);
+
+    const res = await service.backfillRatings(1);
+
+    expect(res).toEqual(expect.objectContaining({ processed: 1, noneAtSource: 1, failed: 0 }));
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    const [parts, ...vals] = (prisma.$executeRaw as jest.Mock).mock.calls[0];
+    expect(parts.join('?')).toContain('ratingCheckedAt');
+    expect(vals).toContain('m1');
+  });
+
+  it('does not stamp throttled external-id lookups', async () => {
+    const { service, prisma } = make([row()], {
+      findByExternalIdStrict: jest.fn(async () => {
+        throw new ProviderThrottled('tmdb', 60_000);
+      }),
+    });
+
+    const res = await service.backfillRatings(1);
+
+    expect(res.rateLimited).toBe(1);
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('stamps definitive TMDB 404s instead of retrying them every run', async () => {
+    const { service, prisma } = make(
+      [row({ tmdb_id: '999', tvdb_id: null, title: 'Missing TMDB row' })],
+      {
+        localizedShowBase: jest.fn(async () => {
+          throw new ProviderError('not_found', 'tmdb cached 404', 404);
+        }),
+      },
+    );
+
+    const res = await service.backfillRatings(1);
+
+    expect(res).toEqual(expect.objectContaining({ noneAtSource: 1, failed: 0 }));
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('MetadataBackfillService.repairNonEnglishContent', () => {
   function make(rows: any[], providerTitle: string | null) {
     const prisma = mockPrisma();

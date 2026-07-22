@@ -83,14 +83,17 @@ export class MetadataBackfillService {
       // A "running" job with no progress update for 30+ min is a HUNG promise
       // (its run never resolved — no cron history row is ever written for those).
       // Report it as stalled so the admin panel doesn't show a phantom run forever.
-      const stalled =
-        p.running && p.updatedAt && now - p.updatedAt.getTime() > 30 * 60 * 1000;
+      const stalled = p.running && p.updatedAt && now - p.updatedAt.getTime() > 30 * 60 * 1000;
       // A stalled run stays reported for 24h (admin should notice it), then drops.
       const stalledVisible =
         stalled && p.updatedAt && now - p.updatedAt.getTime() < 24 * 60 * 60 * 1000;
       const shown = stalled ? { ...p, running: false, stalled: true } : p;
       // Recently-finished jobs stay visible for 60s so the UI shows the completion.
-      if (shown.running || stalledVisible || (!stalled && (!p.finishedAt || now - p.finishedAt.getTime() < 60_000)))
+      if (
+        shown.running ||
+        stalledVisible ||
+        (!stalled && (!p.finishedAt || now - p.finishedAt.getTime() < 60_000))
+      )
         out[job] = shown;
     }
     return out;
@@ -851,6 +854,11 @@ export class MetadataBackfillService {
     return e instanceof ProviderThrottled || (isProviderError(e) && e.category === 'rate_limited');
   }
 
+  /** Definitive provider 404 / cached 404: retrying immediately will only churn the batch. */
+  private isNotFoundError(e: unknown): boolean {
+    return isProviderError(e) && e.category === 'not_found';
+  }
+
   // ---- Structural type mismatch repair (admin button) ----
 
   /**
@@ -1219,6 +1227,15 @@ export class MetadataBackfillService {
   // ---- Rating backfill ----
   private ratingFixRunning = false;
 
+  private async stampRatingChecked(mediaId: string): Promise<void> {
+    await this.prisma.$executeRaw`
+      UPDATE media_items
+      SET metadata_provenance = jsonb_set(
+            COALESCE(metadata_provenance, '{}'::jsonb),
+            '{ratingCheckedAt}', to_jsonb(NOW()::text))
+      WHERE id = ${mediaId}`;
+  }
+
   /**
    * Fill `media_items.rating` for rows that have none — mostly TVDB-hydrated shows
    * (anime/animation): TVDB exposes no public 0–10 rating (its `score` is a
@@ -1264,7 +1281,13 @@ export class MetadataBackfillService {
     try {
       const take = Math.max(1, Math.min(limit ?? 500, 100000));
       const candidates = await this.prisma.$queryRaw<
-        { id: string; title: string; type: MediaType; tmdb_id: string | null; tvdb_id: string | null }[]
+        {
+          id: string;
+          title: string;
+          type: MediaType;
+          tmdb_id: string | null;
+          tvdb_id: string | null;
+        }[]
       >`
         SELECT m.id, m.title, m.type,
           (SELECT e.value FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB'
@@ -1302,23 +1325,29 @@ export class MetadataBackfillService {
           // Resolve the TMDB id: stored external id, else the authoritative
           // cross-id chain (tvdb_id find → imdb_id find via TVDB extended).
           let tmdbId = m.tmdb_id ? Number(m.tmdb_id) : null;
+          let checkedRatingSource = false;
           if (this.tmdbProvider.enabled) {
             if (!tmdbId && m.tvdb_id) {
-              const found = await this.tmdbProvider.findByExternalId(m.tvdb_id, 'tvdb_id');
-              tmdbId = (m.type === MediaType.SHOW ? found?.show?.tmdbId : found?.movie?.tmdbId) ?? null;
+              const found = await this.tmdbProvider.findByExternalIdStrict(m.tvdb_id, 'tvdb_id');
+              tmdbId =
+                (m.type === MediaType.SHOW ? found?.show?.tmdbId : found?.movie?.tmdbId) ?? null;
               if (!tmdbId && this.tvdb.enabled) {
                 const imdbId = await this.tvdb.fetchImdbId(
                   m.type === MediaType.SHOW ? 'show' : 'movie',
                   Number(m.tvdb_id),
                 );
                 if (imdbId) {
-                  const foundImdb = await this.tmdbProvider.findByExternalId(imdbId, 'imdb_id');
+                  const foundImdb = await this.tmdbProvider.findByExternalIdStrict(
+                    imdbId,
+                    'imdb_id',
+                  );
                   tmdbId =
                     (m.type === MediaType.SHOW
                       ? foundImdb?.show?.tmdbId
                       : foundImdb?.movie?.tmdbId) ?? null;
                 }
               }
+              checkedRatingSource = true;
             }
             if (tmdbId) {
               const base =
@@ -1326,6 +1355,7 @@ export class MetadataBackfillService {
                   ? await this.tmdbProvider.localizedShowBase(tmdbId, 'en-US')
                   : await this.tmdbProvider.localizedMovieBase(tmdbId, 'en-US');
               rating = base.rating ?? null;
+              checkedRatingSource = true;
             }
           }
           if (rating != null && rating > 0) {
@@ -1334,17 +1364,12 @@ export class MetadataBackfillService {
             if (sample.length < 5) sample.push(`${m.title} (${rating.toFixed(1)})`);
           } else {
             noneAtSource++;
-            // Stamp ONLY definitive no-rating-at-source answers (a TMDB entity was
-            // resolved and carried no vote average). findByExternalId swallows
-            // errors into null, so an unresolved cross-id may just be a throttle
-            // wave — stamping those would wrongly skip them for 90 days.
-            if (tmdbId) {
-              await this.prisma.$executeRaw`
-                UPDATE media_items
-                SET metadata_provenance = jsonb_set(
-                      COALESCE(metadata_provenance, '{}'::jsonb),
-                      '{ratingCheckedAt}', to_jsonb(NOW()::text))
-                WHERE id = ${m.id}`;
+            // Stamp ONLY definitive no-rating answers/no-match answers. The strict
+            // external-id lookups above throw for provider/rate-limit failures, so a
+            // null TMDB id here means the checked source chain really had no rating
+            // source available and should not be picked again tomorrow.
+            if (checkedRatingSource) {
+              await this.stampRatingChecked(m.id);
             }
           }
         } catch (e) {
@@ -1352,6 +1377,11 @@ export class MetadataBackfillService {
             rateLimited++;
             this.logger.warn(`Rating backfill rate-limited after ${i} rows — deferring the rest`);
             break;
+          }
+          if (this.isNotFoundError(e)) {
+            noneAtSource++;
+            await this.stampRatingChecked(m.id);
+            continue;
           }
           failed++;
           if (failed <= 10)
