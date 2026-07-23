@@ -245,7 +245,9 @@ export class AdminService {
         where,
         include: {
           profile: true,
-          _count: { select: { showStatuses: true, watchHistory: true, comments: true } },
+          _count: {
+            select: { showStatuses: true, movieStatuses: true, watchHistory: true, comments: true },
+          },
         },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * pageSize,

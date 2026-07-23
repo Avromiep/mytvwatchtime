@@ -305,7 +305,7 @@ export class TvdbProvider {
     const res = await this.client.get<{ data: TvdbSeriesExtended }>(
       `/series/${tvdbId}/extended`,
       { meta: 'translations' },
-      language,
+      tvdbLang3(language),
     );
     const s = res.data;
 
@@ -448,7 +448,7 @@ export class TvdbProvider {
         const res = await this.client.get<{
           data: { episodes?: TvdbEpisode[] } | TvdbEpisode[];
           links?: { next?: string | null };
-        }>(`/series/${tvdbId}/episodes/default/${lang}`, { page }, language);
+        }>(`/series/${tvdbId}/episodes/default/${lang}`, { page }, lang);
         const raw = res.data as any;
         const eps: TvdbEpisode[] = Array.isArray(raw)
           ? raw
@@ -489,7 +489,7 @@ export class TvdbProvider {
     const res = await this.client.get<{ data: TvdbEpisodeExtended }>(
       `/episodes/${tvdbEpisodeId}/extended`,
       {},
-      language,
+      tvdbLang3(language),
     );
     const e = res.data;
     return {
@@ -559,7 +559,7 @@ export class TvdbProvider {
     const res = await this.client.get<{ data: TvdbMovieExtended }>(
       `/movies/${tvdbId}/extended`,
       { meta: 'translations' },
-      language,
+      tvdbLang3(language),
     );
     const m = res.data;
 

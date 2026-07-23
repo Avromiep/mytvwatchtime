@@ -2149,12 +2149,12 @@ export class MetadataBackfillService {
     }
     const tvdbExt = m.externalIds.find((e) => e.provider === 'THE_TVDB');
     if (tvdbExt && this.tvdb.enabled) {
-      const d =
+      const base =
         m.type === 'SHOW'
-          ? await this.tvdb.getShow(Number(tvdbExt.value), 'en')
-          : await this.tvdb.getMovie(Number(tvdbExt.value), 'en');
-      const title = d?.title?.trim();
-      return title ? { title, overview: d?.overview?.trim() || '' } : null;
+          ? await this.tvdb.localizedShowBase(Number(tvdbExt.value), 'eng')
+          : await this.tvdb.localizedMovieBase(Number(tvdbExt.value), 'eng');
+      const title = base?.title?.trim();
+      return title ? { title, overview: base?.overview?.trim() || '' } : null;
     }
     return null;
   }
