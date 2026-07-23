@@ -30,11 +30,16 @@ export class ExportService {
       data: { userId, token, fileName, status: 'ready', expiresAt },
     });
 
-    const baseUrl = this.config.get<string>('api.baseUrl') || '';
+    const baseUrl = this.apiRouteBaseUrl();
     return {
       downloadUrl: `${baseUrl}/me/export-download?token=${token}`,
       expiresAt: expiresAt.toISOString(),
     };
+  }
+
+  private apiRouteBaseUrl(): string {
+    const baseUrl = (this.config.get<string>('api.baseUrl') || '').replace(/\/+$/, '');
+    return /\/api$/i.test(baseUrl) ? baseUrl : `${baseUrl}/api`;
   }
 
   async downloadExport(token: string): Promise<{ buffer: Buffer; fileName: string }> {
@@ -70,17 +75,18 @@ export class ExportService {
   }
 
   private async gatherUserData(userId: string) {
-    const [user, watchHistory, ratings, watchlist, favorites, comments, badges] = await Promise.all([
-      this.prisma.user.findUnique({
-        where: { id: userId },
-        include: { profile: true },
-      }),
-      this.prisma.watchHistory.findMany({
-        where: { userId },
-        include: { media: { select: { title: true, type: true } } },
-        orderBy: { watchedAt: 'desc' },
-      }),
-      this.prisma.$queryRaw`
+    const [user, watchHistory, ratings, watchlist, favorites, comments, badges] = await Promise.all(
+      [
+        this.prisma.user.findUnique({
+          where: { id: userId },
+          include: { profile: true },
+        }),
+        this.prisma.watchHistory.findMany({
+          where: { userId },
+          include: { media: { select: { title: true, type: true } } },
+          orderBy: { watchedAt: 'desc' },
+        }),
+        this.prisma.$queryRaw`
         SELECT m.title, 'SHOW' as type, ues.rating
         FROM user_episode_status ues
         JOIN episodes e ON ues.episode_id = e.id
@@ -89,26 +95,27 @@ export class ExportService {
         JOIN media_items m ON sh.media_id = m.id
         WHERE ues.user_id = ${userId} AND ues.rating IS NOT NULL
       `.catch(() => []),
-      this.prisma.watchlistItem.findMany({
-        where: { userId },
-        include: { media: { select: { title: true, type: true } } },
-        orderBy: { createdAt: 'desc' },
-      }),
-      this.prisma.favorite.findMany({
-        where: { userId },
-        include: { media: { select: { title: true, type: true } } },
-        orderBy: { createdAt: 'desc' },
-      }),
-      this.prisma.comment.findMany({
-        where: { userId },
-        select: { body: true, threadType: true, threadId: true, createdAt: true },
-        orderBy: { createdAt: 'desc' },
-      }),
-      this.prisma.userBadge.findMany({
-        where: { userId, unlocked: true },
-        include: { badge: { select: { name: true, icon: true } } },
-      }),
-    ]);
+        this.prisma.watchlistItem.findMany({
+          where: { userId },
+          include: { media: { select: { title: true, type: true } } },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.favorite.findMany({
+          where: { userId },
+          include: { media: { select: { title: true, type: true } } },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.comment.findMany({
+          where: { userId },
+          select: { body: true, threadType: true, threadId: true, createdAt: true },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.userBadge.findMany({
+          where: { userId, unlocked: true },
+          include: { badge: { select: { name: true, icon: true } } },
+        }),
+      ],
+    );
 
     return {
       exportedAt: new Date().toISOString(),

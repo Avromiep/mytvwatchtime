@@ -216,6 +216,7 @@ export class NotificationScheduler {
 
     const stale = await this.prisma.userShowStatus.findMany({
       where: {
+        dropped: false,
         watchedCount: { gt: 0 },
         OR: [{ lastWatchedAt: { lt: cutoff } }, { lastWatchedAt: null }],
       },
@@ -293,7 +294,7 @@ export class NotificationScheduler {
       where: {
         type: 'SHOW',
         status: 'RETURNING',
-        OR: [{ showStatuses: { some: {} } }, { watchlist: { some: {} } }],
+        OR: [{ showStatuses: { some: { dropped: false } } }, { watchlist: { some: {} } }],
         show: {
           seasons: {
             some: {
@@ -351,7 +352,7 @@ export class NotificationScheduler {
   ): Promise<{ userId: string; lastWatchedAt: Date | null; watchedCount: number }[]> {
     const [statuses, watchlist, actualCounts] = await Promise.all([
       this.prisma.userShowStatus.findMany({
-        where: { mediaId },
+        where: { mediaId, dropped: false },
         select: { userId: true, lastWatchedAt: true, watchedCount: true },
       }),
       this.prisma.watchlistItem.findMany({ where: { mediaId }, select: { userId: true } }),

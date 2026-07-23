@@ -26,6 +26,9 @@ export function isDeletedUserAccount(u: {
 
 type PrismaLike = Pick<PrismaService, 'user'>;
 
+const DELETE_TRANSACTION_TIMEOUT_MS = 180_000;
+const COUNTER_UPDATE_CHUNK_SIZE = 5_000;
+
 /**
  * Get-or-create the system deleted-user account (shared by every deletion, race-safe on
  * the unique email/username — mirrors the shadow-user pattern in the import module).
@@ -71,44 +74,53 @@ export async function anonymizeAndDeleteUser(prisma: PrismaService, userId: stri
   const exists = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
   if (!exists) return;
   const deletedId = await getOrCreateDeletedUser(prisma);
-  // Raised budget (default 5s is not enough): user.delete fires the whole cascade tree
-  // (history, statuses, ratings, devices, sessions…) and heavy users blew past it,
-  // failing DELETE /me with "Transaction already closed".
+
+  // These reads can be large for active users. Keep them out of the interactive
+  // transaction so the transaction budget is spent on the atomic write phase.
+  const [liked, flagged] = await Promise.all([
+    prisma.commentLike.findMany({
+      where: { userId },
+      select: { commentId: true },
+    }),
+    prisma.commentSpoilerReport.findMany({
+      where: { userId },
+      select: { commentId: true },
+    }),
+  ]);
+  const likedCommentIds = [...new Set(liked.map((l: any) => l.commentId))];
+  const flaggedCommentIds = [...new Set(flagged.map((f: any) => f.commentId))];
+
+  const decrementCounter = async (
+    tx: any,
+    ids: string[],
+    field: 'likesCount' | 'spoilerCount',
+  ) => {
+    for (let i = 0; i < ids.length; i += COUNTER_UPDATE_CHUNK_SIZE) {
+      await tx.comment.updateMany({
+        where: { id: { in: ids.slice(i, i + COUNTER_UPDATE_CHUNK_SIZE) } },
+        data: { [field]: { decrement: 1 } },
+      });
+    }
+    await tx.comment.updateMany({
+      where: { [field]: { lt: 0 } },
+      data: { [field]: 0 },
+    });
+  };
+
+  // Raised budget: user.delete fires the whole cascade tree (history, statuses,
+  // ratings, devices, sessions…), and heavy users can exceed Prisma's 60s default.
   await prisma.$transaction(
     async (tx: any) => {
-      // Counters the cascade will remove from SURVIVING comments (other people's content).
-      const liked = await tx.commentLike.findMany({
-        where: { userId },
-        select: { commentId: true },
-      });
-      const flagged = await tx.commentSpoilerReport.findMany({
-        where: { userId },
-        select: { commentId: true },
-      });
       // Keep the comments; delete everything else via the user cascade.
       await tx.comment.updateMany({ where: { userId }, data: { userId: deletedId } });
       await tx.user.delete({ where: { id: userId } });
-      if (liked.length) {
-        await tx.comment.updateMany({
-          where: { id: { in: liked.map((l: any) => l.commentId) } },
-          data: { likesCount: { decrement: 1 } },
-        });
-        await tx.comment.updateMany({
-          where: { likesCount: { lt: 0 } },
-          data: { likesCount: 0 },
-        });
+      if (likedCommentIds.length) {
+        await decrementCounter(tx, likedCommentIds, 'likesCount');
       }
-      if (flagged.length) {
-        await tx.comment.updateMany({
-          where: { id: { in: flagged.map((f: any) => f.commentId) } },
-          data: { spoilerCount: { decrement: 1 } },
-        });
-        await tx.comment.updateMany({
-          where: { spoilerCount: { lt: 0 } },
-          data: { spoilerCount: 0 },
-        });
+      if (flaggedCommentIds.length) {
+        await decrementCounter(tx, flaggedCommentIds, 'spoilerCount');
       }
     },
-    { timeout: 60_000, maxWait: 10_000 },
+    { timeout: DELETE_TRANSACTION_TIMEOUT_MS, maxWait: 10_000 },
   );
 }

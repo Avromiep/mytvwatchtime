@@ -1,5 +1,6 @@
 node_modules/
 .expo/
+.pnpm/
 dist/
 build/
 screenshots/
@@ -50,10 +51,13 @@ apps/mobile/keystoreprod.keystore
 apps/mobile/ios/
 apps/mobile/android/
 apps/mobile/web-build/
+
+mermaid-diagram.png
+mermaid-diagram.svg
+ipa-uploader/
+
 google-services.json
 GoogleService-Info.plist
 /apps/app.json
 /app.json
 apps/mobile/app.json
-mermaid-diagram.png
-mermaid-diagram.svg

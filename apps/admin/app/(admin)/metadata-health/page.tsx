@@ -20,8 +20,8 @@ interface MetadataHealth {
   movieDataOnShows: number;
   multiTvdbIds: number;
   nonEnglishBase: number;
-  nonEnglishContent: number;
-  nonEnglishContentParked: number;
+  nonEnglishContent: number | null;
+  nonEnglishContentParked: number | null;
   nonEnglishContentDeep: {
     totalEligible: number;
     unverified: number;
@@ -117,6 +117,7 @@ export default function MetadataHealthPage() {
   const [repairingEnContent, setRepairingEnContent] = useState(false);
   const [enContentResult, setEnContentResult] = useState<string | null>(null);
   const [enContentCount, setEnContentCount] = useState('500');
+  const [enContentStats, setEnContentStats] = useState(false);
   const [enContentDeep, setEnContentDeep] = useState(false);
   const [repairingBanner, setRepairingBanner] = useState(false);
   const [bannerResult, setBannerResult] = useState<string | null>(null);
@@ -134,15 +135,19 @@ export default function MetadataHealthPage() {
 
   const load = () => {
     setLoading(true);
+    const params = new URLSearchParams();
+    if (enContentStats) params.set('content', '1');
+    if (enContentDeep) params.set('deep', '1');
+    const qs = params.toString();
     api
-      .get('/admin/metadata-health')
+      .get(`/admin/metadata-health${qs ? `?${qs}` : ''}`)
       .then((r) => setStats(r.data))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     if (canView) load();
-  }, [canView]);
+  }, [canView, enContentStats, enContentDeep]);
 
   // Live repair progress — poll every 3s while the page is open.
   useEffect(() => {
@@ -313,6 +318,7 @@ export default function MetadataHealthPage() {
     deepStats && deepStats.totalEligible > 0
       ? Math.min(100, Math.round((deepStats.cursorPosition / deepStats.totalEligible) * 100))
       : 0;
+  const enContentLoaded = stats?.nonEnglishContent !== null;
 
   return (
     <div className="p-6 space-y-6">
@@ -607,12 +613,26 @@ export default function MetadataHealthPage() {
             />
             <MetricCard
               label="Non-English Content (suspected)"
-              value={stats.nonEnglishContent}
-              sub={`titles/overviews/episodes — most-visible first${stats.nonEnglishContentParked > 0 ? ` · ${stats.nonEnglishContentParked.toLocaleString()} parked 24h` : ''}`}
+              value={
+                stats.nonEnglishContent === null ? 'Not loaded' : stats.nonEnglishContent
+              }
+              sub={
+                stats.nonEnglishContent === null
+                  ? 'expensive scan skipped on page load'
+                  : `titles/overviews/episodes — most-visible first${(stats.nonEnglishContentParked ?? 0) > 0 ? ` · ${stats.nonEnglishContentParked?.toLocaleString()} parked 24h` : ''}`
+              }
               hint={STAT_HINTS.nonEnglishContent}
-              highlight={stats.nonEnglishContent > 0}
+              highlight={(stats.nonEnglishContent ?? 0) > 0}
               action={
                 <div className="flex flex-wrap items-center gap-2">
+                  {!enContentLoaded && !enContentDeep && (
+                    <button
+                      onClick={() => setEnContentStats(true)}
+                      className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                    >
+                      Load Count
+                    </button>
+                  )}
                   <input
                     type="number"
                     min={1}
@@ -747,7 +767,7 @@ function MetricCard({
   action,
 }: {
   label: string;
-  value: number;
+  value: number | string;
   sub?: string;
   hint?: string;
   highlight?: boolean;

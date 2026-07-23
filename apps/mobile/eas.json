@@ -19,8 +19,8 @@
     },
     "production": {
       "autoIncrement": true,
-       "cache": {
-        "key": "v3" 
+      "cache": {
+        "key": "v7"
       }
     }
   },

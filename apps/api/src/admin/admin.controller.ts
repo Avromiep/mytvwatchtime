@@ -48,8 +48,10 @@ export class AdminController {
   // ---------------- Metadata health + backfill ----------------
   @Get('metadata-health')
   @RequireRoles('ADMIN')
-  getMetadataHealth() {
-    return this.metadataBackfill.getHealthStats();
+  getMetadataHealth(@Query('content') content?: string, @Query('deep') deep?: string) {
+    const includeDeep = deep === '1' || deep === 'true';
+    const includeContent = includeDeep || content === '1' || content === 'true';
+    return this.metadataBackfill.getHealthStats(includeContent, includeDeep);
   }
 
   /** Live progress of every running (or recently finished) metadata repair job. */

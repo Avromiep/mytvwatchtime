@@ -127,8 +127,144 @@ export class MetadataBackfillService {
     private readonly structureRemap: StructureRemapService,
   ) {}
 
+  private getEnglishContentHealthStats(deepCursor: string, includeDeep: boolean) {
+    type EnglishContentHealthRow = {
+      nonEnglishContent: bigint;
+      nonEnglishContentParked: bigint;
+      totalEligible: bigint;
+      unverified: bigint;
+      remainingInPass: bigint;
+      cursorPosition: bigint;
+    };
+
+    if (!includeDeep) {
+      return this.prisma.$queryRaw<EnglishContentHealthRow[]>`
+        WITH external_media AS (
+          SELECT DISTINCT media_id FROM external_ids
+        ),
+        episode_suspects AS (
+          SELECT sh.media_id
+          FROM shows sh
+          JOIN seasons s ON s.show_id = sh.id
+          JOIN episodes e ON e.season_id = s.id
+          WHERE length(regexp_replace(COALESCE(NULLIF(e.titles->>'en',''), e.title), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
+             OR length(regexp_replace(COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
+          GROUP BY sh.media_id
+        ),
+        episode_fingerprints AS (
+          SELECT sh.media_id,
+                 count(e.id)::text || ':' || md5(COALESCE(string_agg(
+                   e.id || ':' || COALESCE(NULLIF(e.titles->>'en',''), e.title) || ':' || COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''),
+                   '|' ORDER BY e.id), '')) AS fingerprint
+          FROM shows sh
+          JOIN episode_suspects suspect ON suspect.media_id = sh.media_id
+          JOIN seasons s ON s.show_id = sh.id
+          JOIN episodes e ON e.season_id = s.id
+          GROUP BY sh.media_id
+        ),
+        health AS (
+          SELECT m.id,
+                 x.media_id IS NOT NULL AS has_external,
+                 (m.metadata_provenance->>'enContentRepairFailedAt' IS NOT NULL
+                  AND (m.metadata_provenance->>'enContentRepairFailedAt')::timestamptz >= NOW() - INTERVAL '24 hours') AS parked,
+                 (
+                   COALESCE(NULLIF(m.titles->>'en',''), m.title) ~ '[^ -~]'
+                   OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '') ~ '[^ -~]'
+                   OR suspect.media_id IS NOT NULL
+                 ) AS is_suspect,
+                 (
+                   COALESCE(NULLIF(m.titles->>'en',''), m.title)
+                         IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
+                   OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '')
+                         IS DISTINCT FROM COALESCE(m.metadata_provenance->>'enContentVerifiedOverview', '')
+                   OR COALESCE(
+                        CASE WHEN (m.metadata_provenance->>'enContentVerifiedVersion') ~ '^\\d+$'
+                             THEN (m.metadata_provenance->>'enContentVerifiedVersion')::int
+                             ELSE 0 END,
+                        0) < ${EN_CONTENT_VERIFIER_VERSION}
+                   OR (
+                     m.type = 'SHOW'
+                     AND suspect.media_id IS NOT NULL
+                     AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
+                           IS DISTINCT FROM COALESCE(ep.fingerprint, '')
+                   )
+                 ) AS needs_verification
+          FROM media_items m
+          LEFT JOIN external_media x ON x.media_id = m.id
+          LEFT JOIN episode_suspects suspect ON suspect.media_id = m.id
+          LEFT JOIN episode_fingerprints ep ON ep.media_id = m.id
+        )
+        SELECT count(*) FILTER (WHERE has_external AND is_suspect AND NOT parked AND needs_verification)::bigint AS "nonEnglishContent",
+               count(*) FILTER (WHERE parked)::bigint AS "nonEnglishContentParked",
+               0::bigint AS "totalEligible",
+               0::bigint AS "unverified",
+               0::bigint AS "remainingInPass",
+               0::bigint AS "cursorPosition"
+        FROM health`;
+    }
+
+    // Deep stats are exact but intentionally opt-in: they must know whether each show's
+    // current episode fingerprint differs from the verified one, so they scan episode text.
+    return this.prisma.$queryRaw<EnglishContentHealthRow[]>`
+      WITH external_media AS (
+        SELECT DISTINCT media_id FROM external_ids
+      ),
+      episode_en AS (
+        SELECT sh.media_id,
+               count(e.id)::text || ':' || md5(COALESCE(string_agg(
+                 e.id || ':' || COALESCE(NULLIF(e.titles->>'en',''), e.title) || ':' || COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''),
+                 '|' ORDER BY e.id), '')) AS fingerprint,
+               bool_or(
+                 length(regexp_replace(COALESCE(NULLIF(e.titles->>'en',''), e.title), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
+                 OR length(regexp_replace(COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
+               ) AS has_suspect
+        FROM shows sh
+        JOIN seasons s ON s.show_id = sh.id
+        JOIN episodes e ON e.season_id = s.id
+        GROUP BY sh.media_id
+      ),
+      health AS (
+        SELECT m.id,
+               x.media_id IS NOT NULL AS has_external,
+               (m.metadata_provenance->>'enContentRepairFailedAt' IS NOT NULL
+                AND (m.metadata_provenance->>'enContentRepairFailedAt')::timestamptz >= NOW() - INTERVAL '24 hours') AS parked,
+               (
+                 COALESCE(NULLIF(m.titles->>'en',''), m.title) ~ '[^ -~]'
+                 OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '') ~ '[^ -~]'
+                 OR COALESCE(ep.has_suspect, false)
+               ) AS is_suspect,
+               (
+                 COALESCE(NULLIF(m.titles->>'en',''), m.title)
+                       IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
+                 OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '')
+                       IS DISTINCT FROM COALESCE(m.metadata_provenance->>'enContentVerifiedOverview', '')
+                 OR COALESCE(
+                      CASE WHEN (m.metadata_provenance->>'enContentVerifiedVersion') ~ '^\\d+$'
+                           THEN (m.metadata_provenance->>'enContentVerifiedVersion')::int
+                           ELSE 0 END,
+                      0) < ${EN_CONTENT_VERIFIER_VERSION}
+                 OR (
+                   m.type = 'SHOW'
+                   AND ep.media_id IS NOT NULL
+                   AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
+                         IS DISTINCT FROM COALESCE(ep.fingerprint, '')
+                 )
+               ) AS needs_verification
+        FROM media_items m
+        LEFT JOIN external_media x ON x.media_id = m.id
+        LEFT JOIN episode_en ep ON ep.media_id = m.id
+      )
+      SELECT count(*) FILTER (WHERE has_external AND is_suspect AND NOT parked AND needs_verification)::bigint AS "nonEnglishContent",
+             count(*) FILTER (WHERE parked)::bigint AS "nonEnglishContentParked",
+             count(*) FILTER (WHERE has_external)::bigint AS "totalEligible",
+             count(*) FILTER (WHERE has_external AND NOT parked AND needs_verification)::bigint AS "unverified",
+             count(*) FILTER (WHERE (${deepCursor} = '' OR id > ${deepCursor}) AND has_external AND NOT parked AND needs_verification)::bigint AS "remainingInPass",
+             count(*) FILTER (WHERE ${deepCursor} != '' AND id <= ${deepCursor} AND has_external)::bigint AS "cursorPosition"
+      FROM health`;
+  }
+
   /** Counts of media needing attention — powers the admin "metadata health" view. */
-  async getHealthStats() {
+  async getHealthStats(includeContentStats = false, includeDeepContentStats = false) {
     const deepCursor =
       (await this.redis.get<string>(EN_CONTENT_DEEP_CURSOR_KEY).catch(() => null)) ?? '';
     // Optimized queries: avoid NOT EXISTS on episodes (573k rows); check at the season level.
@@ -147,12 +283,7 @@ export class MetadataBackfillService {
       movieDataOnShows,
       multiTvdbIds,
       nonEnglishBase,
-      nonEnglishContent,
-      nonEnglishContentParked,
-      nonEnglishContentDeepTotal,
-      nonEnglishContentDeepUnverified,
-      nonEnglishContentDeepRemaining,
-      nonEnglishContentDeepCursorPosition,
+      englishContentHealth,
       bannerAsPoster,
       missingRating,
       animeTvdbUnresolvable,
@@ -249,127 +380,9 @@ export class MetadataBackfillService {
         WHERE m.title_locale IS NOT NULL AND m.title_locale != 'en'
           AND (m.metadata_provenance->>'enBaseRepairFailedAt' IS NULL
                OR (m.metadata_provenance->>'enBaseRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')`,
-      // Content-based suspects STILL NEEDING verification: the title/overview an English
-      // user SEES ('en' override → base), or any episode title/overview, contains non-ASCII.
-      // Rows already verified as English are excluded until visible content changes or the
-      // verifier version is bumped. The repair checks provider English before touching media.
-      this.prisma.$queryRaw<{ c: bigint }[]>`
-        SELECT count(*)::bigint AS c FROM media_items m
-        WHERE (
-            COALESCE(NULLIF(m.titles->>'en',''), m.title) ~ '[^ -~]'
-            OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '') ~ '[^ -~]'
-            OR EXISTS (
-              SELECT 1 FROM shows sh
-              JOIN seasons s ON s.show_id = sh.id
-              JOIN episodes e ON e.season_id = s.id
-              WHERE sh.media_id = m.id
-                AND (
-                  length(regexp_replace(COALESCE(NULLIF(e.titles->>'en',''), e.title), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
-                  OR length(regexp_replace(COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
-                )
-            )
-          )
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
-          AND (m.metadata_provenance->>'enContentRepairFailedAt' IS NULL
-               OR (m.metadata_provenance->>'enContentRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')
-          AND (
-            COALESCE(NULLIF(m.titles->>'en',''), m.title)
-                  IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
-            OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '')
-                  IS DISTINCT FROM COALESCE(m.metadata_provenance->>'enContentVerifiedOverview', '')
-            OR COALESCE(
-                 CASE WHEN (m.metadata_provenance->>'enContentVerifiedVersion') ~ '^\\d+$'
-                      THEN (m.metadata_provenance->>'enContentVerifiedVersion')::int
-                      ELSE 0 END,
-                 0) < ${EN_CONTENT_VERIFIER_VERSION}
-            OR (
-              m.type = 'SHOW'
-              AND EXISTS (SELECT 1 FROM shows sh JOIN seasons s ON s.show_id = sh.id JOIN episodes e ON e.season_id = s.id WHERE sh.media_id = m.id)
-              AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
-                    IS DISTINCT FROM COALESCE((
-                      SELECT count(e.id)::text || ':' || md5(COALESCE(string_agg(
-                        e.id || ':' || COALESCE(NULLIF(e.titles->>'en',''), e.title) || ':' || COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''),
-                        '|' ORDER BY e.id), ''))
-                      FROM shows sh
-                      JOIN seasons s ON s.show_id = sh.id
-                      JOIN episodes e ON e.season_id = s.id
-                      WHERE sh.media_id = m.id
-                    ), '')
-            )
-          )`,
-      this.prisma.$queryRaw<{ c: bigint }[]>`
-        SELECT count(*)::bigint AS c FROM media_items m
-        WHERE m.metadata_provenance->>'enContentRepairFailedAt' IS NOT NULL
-          AND (m.metadata_provenance->>'enContentRepairFailedAt')::timestamptz >= NOW() - INTERVAL '24 hours'`,
-      this.prisma.$queryRaw<{ c: bigint }[]>`
-        SELECT count(*)::bigint AS c FROM media_items m
-        WHERE EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)`,
-      this.prisma.$queryRaw<{ c: bigint }[]>`
-        SELECT count(*)::bigint AS c FROM media_items m
-        WHERE EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
-          AND (m.metadata_provenance->>'enContentRepairFailedAt' IS NULL
-               OR (m.metadata_provenance->>'enContentRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')
-          AND (
-            COALESCE(NULLIF(m.titles->>'en',''), m.title)
-                  IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
-            OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '')
-                  IS DISTINCT FROM COALESCE(m.metadata_provenance->>'enContentVerifiedOverview', '')
-            OR COALESCE(
-                 CASE WHEN (m.metadata_provenance->>'enContentVerifiedVersion') ~ '^\\d+$'
-                      THEN (m.metadata_provenance->>'enContentVerifiedVersion')::int
-                      ELSE 0 END,
-                 0) < ${EN_CONTENT_VERIFIER_VERSION}
-            OR (
-              m.type = 'SHOW'
-              AND EXISTS (SELECT 1 FROM shows sh JOIN seasons s ON s.show_id = sh.id JOIN episodes e ON e.season_id = s.id WHERE sh.media_id = m.id)
-              AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
-                    IS DISTINCT FROM COALESCE((
-                      SELECT count(e.id)::text || ':' || md5(COALESCE(string_agg(
-                        e.id || ':' || COALESCE(NULLIF(e.titles->>'en',''), e.title) || ':' || COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''),
-                        '|' ORDER BY e.id), ''))
-                      FROM shows sh
-                      JOIN seasons s ON s.show_id = sh.id
-                      JOIN episodes e ON e.season_id = s.id
-                      WHERE sh.media_id = m.id
-                    ), '')
-            )
-          )`,
-      this.prisma.$queryRaw<{ c: bigint }[]>`
-        SELECT count(*)::bigint AS c FROM media_items m
-        WHERE (${deepCursor} = '' OR m.id > ${deepCursor})
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
-          AND (m.metadata_provenance->>'enContentRepairFailedAt' IS NULL
-               OR (m.metadata_provenance->>'enContentRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')
-          AND (
-            COALESCE(NULLIF(m.titles->>'en',''), m.title)
-                  IS DISTINCT FROM m.metadata_provenance->>'enContentVerifiedTitle'
-            OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '')
-                  IS DISTINCT FROM COALESCE(m.metadata_provenance->>'enContentVerifiedOverview', '')
-            OR COALESCE(
-                 CASE WHEN (m.metadata_provenance->>'enContentVerifiedVersion') ~ '^\\d+$'
-                      THEN (m.metadata_provenance->>'enContentVerifiedVersion')::int
-                      ELSE 0 END,
-                 0) < ${EN_CONTENT_VERIFIER_VERSION}
-            OR (
-              m.type = 'SHOW'
-              AND EXISTS (SELECT 1 FROM shows sh JOIN seasons s ON s.show_id = sh.id JOIN episodes e ON e.season_id = s.id WHERE sh.media_id = m.id)
-              AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
-                    IS DISTINCT FROM COALESCE((
-                      SELECT count(e.id)::text || ':' || md5(COALESCE(string_agg(
-                        e.id || ':' || COALESCE(NULLIF(e.titles->>'en',''), e.title) || ':' || COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''),
-                        '|' ORDER BY e.id), ''))
-                      FROM shows sh
-                      JOIN seasons s ON s.show_id = sh.id
-                      JOIN episodes e ON e.season_id = s.id
-                      WHERE sh.media_id = m.id
-                    ), '')
-            )
-          )`,
-      this.prisma.$queryRaw<{ c: bigint }[]>`
-        SELECT count(*)::bigint AS c FROM media_items m
-        WHERE ${deepCursor} != ''
-          AND m.id <= ${deepCursor}
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)`,
+      includeContentStats
+        ? this.getEnglishContentHealthStats(deepCursor, includeDeepContentStats)
+        : Promise.resolve(undefined),
       // Rows whose POSTER is a TVDB banner (wide artwork in a poster slot) — legacy of
       // the swapped TVDB series artwork mapping (type 1=banner was taken as poster).
       // URL shape: artworks.thetvdb.com/banners/v4/{kind}/{id}/banners/<file>.
@@ -405,6 +418,8 @@ export class MetadataBackfillService {
         WHERE COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '1970-01-01')::timestamptz >= NOW() - INTERVAL '30 days'`,
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
+    const enContent = englishContentHealth?.[0];
+    const enNum = (value: bigint | undefined) => Number(value ?? 0);
     return {
       total,
       neverHydrated,
@@ -425,14 +440,14 @@ export class MetadataBackfillService {
       movieDataOnShows: toNum(movieDataOnShows as any),
       multiTvdbIds: toNum(multiTvdbIds as any),
       nonEnglishBase: toNum(nonEnglishBase as any),
-      nonEnglishContent: toNum(nonEnglishContent as any),
-      nonEnglishContentParked: toNum(nonEnglishContentParked as any),
+      nonEnglishContent: includeContentStats ? enNum(enContent?.nonEnglishContent) : null,
+      nonEnglishContentParked: includeContentStats ? enNum(enContent?.nonEnglishContentParked) : null,
       nonEnglishContentDeep: {
-        totalEligible: toNum(nonEnglishContentDeepTotal as any),
-        unverified: toNum(nonEnglishContentDeepUnverified as any),
-        remainingInPass: toNum(nonEnglishContentDeepRemaining as any),
-        cursorPosition: toNum(nonEnglishContentDeepCursorPosition as any),
-        cursorActive: deepCursor !== '',
+        totalEligible: enNum(enContent?.totalEligible),
+        unverified: enNum(enContent?.unverified),
+        remainingInPass: enNum(enContent?.remainingInPass),
+        cursorPosition: enNum(enContent?.cursorPosition),
+        cursorActive: includeDeepContentStats && deepCursor !== '',
         verifierVersion: EN_CONTENT_VERIFIER_VERSION,
       },
       bannerAsPoster: toNum(bannerAsPoster as any),
