@@ -83,7 +83,7 @@ const STAT_HINTS: Record<string, string> = {
   nonEnglishContent:
     "Suspected wrong-language CONTENT with a lying/missing marker: the title/overview an English user sees contains non-ASCII, or episode title/overview contains several non-ASCII letter-like characters. Verify+Fix checks the most-popular suspects first against the provider's canonical English title/overview and re-hydrates only real media mismatches; episode suspects rehydrate the parent show in English. Verified rows are remembered and leave this count (content changes re-arm them), so the number DRAINS as runs complete. Rows that fail are parked for 24h so normal runs keep advancing. Deep mode verifies every row — catches pure-ASCII foreign media titles/overviews — and shows its own backlog/cursor stats when selected. A nightly Scheduled Job keeps it converged. No user data touched.",
   bannerAsPoster:
-    'Rows whose poster is actually a TVDB BANNER (wide artwork in a poster slot) — legacy of a swapped TVDB artwork mapping. Repair re-hydrates them from TVDB, which re-picks the correct poster (type 2) and backdrop (type 3). Most-visible first, stops early on TVDB rate limits. No user data touched.',
+    'Rows whose poster is actually a TVDB BANNER (wide artwork in a poster slot), or whose TVDB artwork URL has a duplicated host prefix. Repair normalizes malformed TVDB URLs first, then re-hydrates true banner-as-poster rows from TVDB so the corrected mapper re-picks poster type 2/backdrop type 3. Most-visible first, stops early on TVDB rate limits. No user data touched.',
   missingRating:
     'Rows with no community rating — mostly TVDB-hydrated shows (anime/animation): TVDB exposes no public 0–10 rating (its score is a popularity rank), so those rows are born unrated. Backfill resolves TMDB\u2019s vote_average per row: stored TMDB id, else the tvdb_id \u2192 TMDB /find chain, else the IMDB id from TVDB \u2192 /find. One light call per hop, most-popular first, stopping early on rate limits. Rows with no rating at the source are remembered and skipped for 90 days, so the nightly Scheduled Job keeps this drained. No user data touched.',
 };
@@ -656,7 +656,7 @@ export default function MetadataHealthPage() {
             <MetricCard
               label="Banner as Poster"
               value={stats.bannerAsPoster}
-              sub="wide TVDB banner in the poster slot"
+              sub="wide banner or malformed TVDB poster URL"
               hint={STAT_HINTS.bannerAsPoster}
               highlight={stats.bannerAsPoster > 0}
               action={

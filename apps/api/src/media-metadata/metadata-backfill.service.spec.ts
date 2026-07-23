@@ -1290,6 +1290,8 @@ describe('MetadataBackfillService.repairNonEnglishContent', () => {
     expect(sql).toContain('enContentVerifiedEpisodeFingerprint');
     expect(sql).toContain('episodes e');
     expect(sql).toContain('regexp_replace');
+    expect(sql).toContain('md5');
+    expect(sql).toContain('string_agg');
     expect(sql).toContain('ORDER BY m.popularity DESC');
   });
 
@@ -1309,8 +1311,22 @@ describe('MetadataBackfillService.repairBannerPosters', () => {
   it('clears the freshness stamp and re-hydrates from TVDB (fixed mapper re-picks artworks)', async () => {
     const prisma = mockPrisma();
     prisma.$queryRaw.mockResolvedValue([
-      { id: 'm1', title: 'Show A', type: 'SHOW', tvdb: '368495' },
-      { id: 'm2', title: 'Movie B', type: 'MOVIE', tvdb: '777' },
+      {
+        id: 'm1',
+        title: 'Show A',
+        type: 'SHOW',
+        tvdb: '368495',
+        posterUrl: 'https://artworks.thetvdb.com/banners/v4/series/368495/banners/foo.jpg',
+        posterUrls: null,
+      },
+      {
+        id: 'm2',
+        title: 'Movie B',
+        type: 'MOVIE',
+        tvdb: '777',
+        posterUrl: 'https://artworks.thetvdb.com/banners/v4/movie/777/banners/foo.jpg',
+        posterUrls: null,
+      },
     ]);
     const meta = mockMeta();
     const service = new MetadataBackfillService(
@@ -1333,5 +1349,48 @@ describe('MetadataBackfillService.repairBannerPosters', () => {
     expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(368495);
     expect(meta.ensureMovieFullTvdb).toHaveBeenCalledWith(777);
     expect(res).toEqual(expect.objectContaining({ processed: 2, succeeded: 2, failed: 0 }));
+  });
+
+  it('normalizes duplicated TVDB artwork prefixes without re-hydrating proper poster URLs', async () => {
+    const prisma = mockPrisma();
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'm1',
+        title: 'Show A',
+        type: 'SHOW',
+        tvdb: '417289',
+        posterUrl:
+          'https://artworks.thetvdb.com/banners/https://artworks.thetvdb.com/banners/v4/series/417289/posters/621e6277de9a1.jpg',
+        posterUrls: {
+          en: 'https://artworks.thetvdb.com/banners/https://artworks.thetvdb.com/banners/v4/series/417289/posters/621e6277de9a1.jpg',
+        },
+      },
+    ]);
+    const meta = mockMeta();
+    const service = new MetadataBackfillService(
+      prisma,
+      meta,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    const res = await service.repairBannerPosters();
+
+    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'm1' },
+      data: {
+        posterUrl:
+          'https://artworks.thetvdb.com/banners/v4/series/417289/posters/621e6277de9a1.jpg',
+        posterUrls: {
+          en: 'https://artworks.thetvdb.com/banners/v4/series/417289/posters/621e6277de9a1.jpg',
+        },
+      },
+    });
+    expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+    expect(res).toEqual(expect.objectContaining({ processed: 1, succeeded: 1, failed: 0 }));
   });
 });

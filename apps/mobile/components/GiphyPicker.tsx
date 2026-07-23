@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { MasonryFlashList } from '@shopify/flash-list';
+import { FlashList  } from '@shopify/flash-list';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { EmptyState, T } from './primitives';
@@ -228,18 +228,12 @@ export function GiphyPicker({ visible, lang, onClose, onSelect }: Props) {
             onLayout={(e) => setContainerWidth(e.nativeEvent.layout.width)}
           >
             {/* key remount on column change avoids dynamic-numColumns layout glitches */}
-            <MasonryFlashList
+            <FlashList
               data={items}
               key={`masonry-${numColumns}`}
               numColumns={numColumns}
-              estimatedItemSize={ESTIMATED_ITEM_SIZE}
               optimizeItemArrangement
-              overrideItemLayout={(layout, item: GiphyGif) => {
-                const aspect = item.width && item.height ? item.width / item.height : 1;
-                // Estimated cell height so MasonryFlashList can pack the
-                // shortest column. It self-corrects after measuring each cell.
-                layout.size = (columnSlot - GAP) / aspect + GAP;
-              }}
+              masonry
               keyExtractor={(gif: GiphyGif) => gif.id}
               renderItem={renderCell}
               onEndReached={handleEndReached}

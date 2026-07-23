@@ -287,7 +287,9 @@ export class MetadataBackfillService {
               AND EXISTS (SELECT 1 FROM shows sh JOIN seasons s ON s.show_id = sh.id JOIN episodes e ON e.season_id = s.id WHERE sh.media_id = m.id)
               AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
                     IS DISTINCT FROM COALESCE((
-                      SELECT count(e.id)::text || ':' || COALESCE(max(e.updated_at)::text, '')
+                      SELECT count(e.id)::text || ':' || md5(COALESCE(string_agg(
+                        e.id || ':' || COALESCE(NULLIF(e.titles->>'en',''), e.title) || ':' || COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''),
+                        '|' ORDER BY e.id), ''))
                       FROM shows sh
                       JOIN seasons s ON s.show_id = sh.id
                       JOIN episodes e ON e.season_id = s.id
@@ -322,7 +324,9 @@ export class MetadataBackfillService {
               AND EXISTS (SELECT 1 FROM shows sh JOIN seasons s ON s.show_id = sh.id JOIN episodes e ON e.season_id = s.id WHERE sh.media_id = m.id)
               AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
                     IS DISTINCT FROM COALESCE((
-                      SELECT count(e.id)::text || ':' || COALESCE(max(e.updated_at)::text, '')
+                      SELECT count(e.id)::text || ':' || md5(COALESCE(string_agg(
+                        e.id || ':' || COALESCE(NULLIF(e.titles->>'en',''), e.title) || ':' || COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''),
+                        '|' ORDER BY e.id), ''))
                       FROM shows sh
                       JOIN seasons s ON s.show_id = sh.id
                       JOIN episodes e ON e.season_id = s.id
@@ -351,7 +355,9 @@ export class MetadataBackfillService {
               AND EXISTS (SELECT 1 FROM shows sh JOIN seasons s ON s.show_id = sh.id JOIN episodes e ON e.season_id = s.id WHERE sh.media_id = m.id)
               AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
                     IS DISTINCT FROM COALESCE((
-                      SELECT count(e.id)::text || ':' || COALESCE(max(e.updated_at)::text, '')
+                      SELECT count(e.id)::text || ':' || md5(COALESCE(string_agg(
+                        e.id || ':' || COALESCE(NULLIF(e.titles->>'en',''), e.title) || ':' || COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''),
+                        '|' ORDER BY e.id), ''))
                       FROM shows sh
                       JOIN seasons s ON s.show_id = sh.id
                       JOIN episodes e ON e.season_id = s.id
@@ -370,7 +376,17 @@ export class MetadataBackfillService {
       // Fixed by a TVDB rehydration (the corrected mapper re-picks poster=type 2).
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
-        WHERE m.poster_url ~ '/banners/[^/]+$'
+        WHERE (
+            m.poster_url ~ '/banners/[^/]+$'
+            OR m.poster_url LIKE 'https://artworks.thetvdb.com/banners/https://artworks.thetvdb.com/banners/%'
+            OR m.poster_url LIKE 'http://artworks.thetvdb.com/banners/http://artworks.thetvdb.com/banners/%'
+            OR EXISTS (
+              SELECT 1 FROM jsonb_each_text(COALESCE(m.poster_urls, '{}'::jsonb)) p
+              WHERE p.value ~ '/banners/[^/]+$'
+                 OR p.value LIKE 'https://artworks.thetvdb.com/banners/https://artworks.thetvdb.com/banners/%'
+                 OR p.value LIKE 'http://artworks.thetvdb.com/banners/http://artworks.thetvdb.com/banners/%'
+            )
+          )
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB')`,
       // Actionable rating backlog: no rating stored, has a provider id to resolve
       // one from, and not already checked (and found unrated at the source) in the
@@ -677,7 +693,7 @@ export class MetadataBackfillService {
           SELECT m.id, m.title, m.metadata_provenance AS "metadataProvenance"
           FROM media_items m
           JOIN shows sh ON sh.media_id = m.id
-          WHERE m.type = ${MediaType.SHOW}
+          WHERE m.type::text = ${MediaType.SHOW}
             AND COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '') <= ${noIdRearmThreshold}
             AND EXISTS (
               SELECT 1
@@ -694,12 +710,12 @@ export class MetadataBackfillService {
                 AND EXISTS (
                   SELECT 1 FROM episode_external_ids tmdb_ep
                   WHERE tmdb_ep.episode_id = e.id
-                    AND tmdb_ep.provider = ${ExternalProvider.TMDB}
+                    AND tmdb_ep.provider::text = ${ExternalProvider.TMDB}
                 )
                 AND NOT EXISTS (
                   SELECT 1 FROM episode_external_ids tvdb_ep
                   WHERE tvdb_ep.episode_id = e.id
-                    AND tvdb_ep.provider = ${ExternalProvider.THE_TVDB}
+                    AND tvdb_ep.provider::text = ${ExternalProvider.THE_TVDB}
                 )
             )
           ORDER BY m.title ASC
@@ -1918,7 +1934,9 @@ export class MetadataBackfillService {
       { mediaId: string; fingerprint: string | null; hasSuspect: boolean | null }[]
     >`
       SELECT sh.media_id AS "mediaId",
-             count(e.id)::text || ':' || COALESCE(max(e.updated_at)::text, '') AS "fingerprint",
+             count(e.id)::text || ':' || md5(COALESCE(string_agg(
+               e.id || ':' || COALESCE(NULLIF(e.titles->>'en',''), e.title) || ':' || COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''),
+               '|' ORDER BY e.id), '')) AS "fingerprint",
              bool_or(
                length(regexp_replace(COALESCE(NULLIF(e.titles->>'en',''), e.title), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
                OR length(regexp_replace(COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
@@ -2053,7 +2071,9 @@ export class MetadataBackfillService {
                 AND EXISTS (SELECT 1 FROM shows sh JOIN seasons s ON s.show_id = sh.id JOIN episodes e ON e.season_id = s.id WHERE sh.media_id = m.id)
                 AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
                       IS DISTINCT FROM COALESCE((
-                        SELECT count(e.id)::text || ':' || COALESCE(max(e.updated_at)::text, '')
+                        SELECT count(e.id)::text || ':' || md5(COALESCE(string_agg(
+                          e.id || ':' || COALESCE(NULLIF(e.titles->>'en',''), e.title) || ':' || COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''),
+                          '|' ORDER BY e.id), ''))
                         FROM shows sh
                         JOIN seasons s ON s.show_id = sh.id
                         JOIN episodes e ON e.season_id = s.id
@@ -2106,7 +2126,9 @@ export class MetadataBackfillService {
                 AND EXISTS (SELECT 1 FROM shows sh JOIN seasons s ON s.show_id = sh.id JOIN episodes e ON e.season_id = s.id WHERE sh.media_id = m.id)
                 AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
                       IS DISTINCT FROM COALESCE((
-                        SELECT count(e.id)::text || ':' || COALESCE(max(e.updated_at)::text, '')
+                        SELECT count(e.id)::text || ':' || md5(COALESCE(string_agg(
+                          e.id || ':' || COALESCE(NULLIF(e.titles->>'en',''), e.title) || ':' || COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''),
+                          '|' ORDER BY e.id), ''))
                         FROM shows sh
                         JOIN seasons s ON s.show_id = sh.id
                         JOIN episodes e ON e.season_id = s.id
@@ -2293,6 +2315,43 @@ export class MetadataBackfillService {
   // ---- TVDB banner-as-poster rows (legacy of the swapped series artwork mapping) ----
   private bannerFixRunning = false;
 
+  private normalizeDuplicatedTvdbArtworkUrl(url?: string | null): string | null | undefined {
+    if (!url) return url;
+    const bases = ['https://artworks.thetvdb.com/banners/', 'http://artworks.thetvdb.com/banners/'];
+    let out = url.trim();
+    let changed = false;
+    for (const base of bases) {
+      const duplicate = `${base}${base}`;
+      while (out.startsWith(duplicate)) {
+        out = out.slice(base.length);
+        changed = true;
+      }
+    }
+    return changed ? out : url;
+  }
+
+  private normalizePosterUrlMap(value: unknown): { value: unknown; changed: boolean } {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { value, changed: false };
+    }
+    let changed = false;
+    const next: Record<string, unknown> = {};
+    for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof raw === 'string') {
+        const normalized = this.normalizeDuplicatedTvdbArtworkUrl(raw);
+        next[key] = normalized;
+        if (normalized !== raw) changed = true;
+      } else {
+        next[key] = raw;
+      }
+    }
+    return changed ? { value: next, changed } : { value, changed: false };
+  }
+
+  private isTvdbBannerPosterUrl(url?: string | null): boolean {
+    return !!url && /\/banners\/[^/]+$/.test(url);
+  }
+
   /**
    * Rehydrate rows whose POSTER is a TVDB banner (wide artwork in a poster slot) — the
    * old swapped series artwork mapping (type 1=banner taken as poster) wrote
@@ -2324,14 +2383,31 @@ export class MetadataBackfillService {
     try {
       const take = Math.max(1, Math.min(limit ?? 500, 100000));
       const candidates = await this.prisma.$queryRaw<
-        { id: string; title: string; type: string; tvdb: string }[]
+        {
+          id: string;
+          title: string;
+          type: string;
+          tvdb: string;
+          posterUrl: string | null;
+          posterUrls: unknown;
+        }[]
       >`
-        SELECT m.id, m.title, m.type,
+        SELECT m.id, m.title, m.type, m.poster_url AS "posterUrl", m.poster_urls AS "posterUrls",
                (SELECT e.value FROM external_ids e
-                 WHERE e.media_id = m.id AND e.provider = 'THE_TVDB'
-                 ORDER BY e.value LIMIT 1) AS tvdb
+                  WHERE e.media_id = m.id AND e.provider = 'THE_TVDB'
+                  ORDER BY e.value LIMIT 1) AS tvdb
         FROM media_items m
-        WHERE m.poster_url ~ '/banners/[^/]+$'
+        WHERE (
+            m.poster_url ~ '/banners/[^/]+$'
+            OR m.poster_url LIKE 'https://artworks.thetvdb.com/banners/https://artworks.thetvdb.com/banners/%'
+            OR m.poster_url LIKE 'http://artworks.thetvdb.com/banners/http://artworks.thetvdb.com/banners/%'
+            OR EXISTS (
+              SELECT 1 FROM jsonb_each_text(COALESCE(m.poster_urls, '{}'::jsonb)) p
+              WHERE p.value ~ '/banners/[^/]+$'
+                 OR p.value LIKE 'https://artworks.thetvdb.com/banners/https://artworks.thetvdb.com/banners/%'
+                 OR p.value LIKE 'http://artworks.thetvdb.com/banners/http://artworks.thetvdb.com/banners/%'
+            )
+          )
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB')
         ORDER BY m.popularity DESC, m.id
         LIMIT ${take}`;
@@ -2349,6 +2425,26 @@ export class MetadataBackfillService {
           current: m.title,
         });
         try {
+          const normalizedPosterUrl = this.normalizeDuplicatedTvdbArtworkUrl(m.posterUrl);
+          const normalizedPosterUrls = this.normalizePosterUrlMap(m.posterUrls);
+          if (normalizedPosterUrl !== m.posterUrl || normalizedPosterUrls.changed) {
+            const data: any = {};
+            if (normalizedPosterUrl !== m.posterUrl) data.posterUrl = normalizedPosterUrl;
+            if (normalizedPosterUrls.changed) data.posterUrls = normalizedPosterUrls.value;
+            await this.prisma.mediaItem.update({ where: { id: m.id }, data });
+          }
+          const localizedHasBanner =
+            normalizedPosterUrls.value &&
+            typeof normalizedPosterUrls.value === 'object' &&
+            !Array.isArray(normalizedPosterUrls.value) &&
+            Object.values(normalizedPosterUrls.value as Record<string, unknown>).some(
+              (v) => typeof v === 'string' && this.isTvdbBannerPosterUrl(v),
+            );
+          if (!this.isTvdbBannerPosterUrl(normalizedPosterUrl) && !localizedHasBanner) {
+            succeeded++;
+            if (sample.length < 5) sample.push(m.title);
+            continue;
+          }
           // Clear the freshness stamp so the TVDB rehydration actually re-fetches
           // (and re-picks artworks with the fixed mapper).
           await this.prisma.mediaItem.update({

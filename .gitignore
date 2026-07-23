@@ -42,9 +42,7 @@ production-docs/
 apps/api/prisma/migrations/dev.db
 apps/api/prisma/*.db
 # Mobile
-/apps/app.json
-/app.json
-apps/mobile/app.json
+
 apps/mobile/build-top.gradle
 apps/mobile/build.gradle
 apps/mobile/keystoreprod.keystore
@@ -54,5 +52,8 @@ apps/mobile/android/
 apps/mobile/web-build/
 google-services.json
 GoogleService-Info.plist
+/apps/app.json
+/app.json
+apps/mobile/app.json
 mermaid-diagram.png
 mermaid-diagram.svg

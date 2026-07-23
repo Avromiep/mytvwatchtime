@@ -9,13 +9,13 @@ module.exports = (config) => ({
   },
   frameworks: ['SwiftUI', 'WidgetKit'],
   deploymentTarget: '17.0',
+  bundleIdentifier: ".widget",
   entitlements: {
-    'com.apple.security.application-groups': config.ios?.entitlements?.[
-      'com.apple.security.application-groups'
-    ] ?? ['group.app.tvwatchtime.mobile'],
-    // Must match the main app's first keychain-access-groups entry: tokens live in
-    // this shared group (written by expo-secure-store) so the widget never handles
-    // a UserDefaults copy. Keep in sync with app.json ios.entitlements.
-    'keychain-access-groups': ['$(AppIdentifierPrefix)app.tvwatchtime.mobile.shared'],
+    "com.apple.security.application-groups": [
+      "group.app.tvwatchtime.mobile",
+    ],
+    "keychain-access-groups": [
+      "$(AppIdentifierPrefix)app.tvwatchtime.mobile.shared",
+    ],
   },
 });

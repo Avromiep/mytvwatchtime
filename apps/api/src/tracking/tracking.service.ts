@@ -12,7 +12,7 @@ export class TrackingService {
     private readonly prisma: PrismaService,
     private readonly events: EventEmitter2,
     private readonly redis: RedisService,
-  ) { }
+  ) {}
 
   private async invalidateUserCache(userId: string) {
     // The per-user watch-next / upcoming caches are language-suffixed
@@ -49,7 +49,14 @@ export class TrackingService {
     // already-watched episode leaves watchedAt and watchCount untouched.
     await this.prisma.userEpisodeStatus.upsert({
       where: { userId_episodeId: { userId, episodeId } },
-      create: { userId, episodeId, watched: true, watchedAt: now, watchCount: 1, device: dto.device },
+      create: {
+        userId,
+        episodeId,
+        watched: true,
+        watchedAt: now,
+        watchCount: 1,
+        device: dto.device,
+      },
       update: becameWatched
         ? { watched: true, watchedAt: now, watchCount: 1, device: dto.device }
         : { device: dto.device },
@@ -82,7 +89,7 @@ export class TrackingService {
     if (dto.rating) await this.upsertEpisodeRating(userId, episodeId, dto.rating);
     if (dto.reaction) await this.upsertReaction(userId, episodeId, dto.reaction);
     await this.invalidateUserCache(userId);
-    return { watched: true, watchCount: becameWatched ? 1 : prev?.watchCount ?? 0 };
+    return { watched: true, watchCount: becameWatched ? 1 : (prev?.watchCount ?? 0) };
   }
 
   /**
@@ -198,7 +205,13 @@ export class TrackingService {
       if (toCreate.length) {
         ops.unshift(
           this.prisma.userEpisodeStatus.createMany({
-            data: toCreate.map((e) => ({ userId, episodeId: e.id, watched: true, watchedAt: now, watchCount: 1 })),
+            data: toCreate.map((e) => ({
+              userId,
+              episodeId: e.id,
+              watched: true,
+              watchedAt: now,
+              watchCount: 1,
+            })),
           }),
         );
       }
@@ -285,7 +298,7 @@ export class TrackingService {
       if (dto.rating) await this.upsertMediaRating(userId, mediaId, dto.rating);
       this.events.emit('watch.movie', { userId, mediaId });
     }
-    return { watched: true, watchCount: becameWatched ? 1 : prev?.watchCount ?? 0 };
+    return { watched: true, watchCount: becameWatched ? 1 : (prev?.watchCount ?? 0) };
   }
 
   /** Record another viewing of an already-watched movie (see rewatchEpisode). */
@@ -326,7 +339,9 @@ export class TrackingService {
       where: { userId_mediaId: { userId, mediaId } },
       data: { watched: false, watchedAt: null, watchCount: 0 },
     });
-    await this.prisma.watchHistory.deleteMany({ where: { userId, mediaId, mediaType: MediaType.MOVIE } });
+    await this.prisma.watchHistory.deleteMany({
+      where: { userId, mediaId, mediaType: MediaType.MOVIE },
+    });
     this.events.emit('unwatch.movie', { userId, mediaId });
     return { watched: false };
   }
@@ -338,29 +353,46 @@ export class TrackingService {
    * on first create and when watchedCount catches up to the known total (new episodes may
    * have aired) — not on every single watch.
    */
-  private async bumpShowCount(userId: string, mediaId: string, delta: number, lastWatchedAt?: Date) {
-    const existing = await this.prisma.userShowStatus.findUnique({
-      where: { userId_mediaId: { userId, mediaId } },
-    });
-    const last = lastWatchedAt ? { lastWatchedAt } : {};
-
-    if (existing) {
+  private async bumpShowCount(
+    userId: string,
+    mediaId: string,
+    delta: number,
+    lastWatchedAt?: Date,
+  ) {
+    const updateExisting = async (existing: {
+      id: string;
+      watchedCount: number;
+      totalCount: number;
+      dropped: boolean;
+    }) => {
       const nextWatched = Math.max(0, (existing.watchedCount ?? 0) + delta);
       // Recompute the total only if we may have caught up (new episodes could have aired).
       const mayHaveNewEpisodes = nextWatched >= (existing.totalCount ?? 0);
       const total = mayHaveNewEpisodes
         ? await this.prisma.episode.count({
-          where: { season: { show: { mediaId }, isSpecial: false }, airDate: { lte: new Date() } },
-        })
-        : existing.totalCount ?? 0;
+            where: {
+              season: { show: { mediaId }, isSpecial: false },
+              airDate: { lte: new Date() },
+            },
+          })
+        : (existing.totalCount ?? 0);
       // Watching an episode again un-drops the show (resurfaces it in
       // watch-next / upcoming). Only a positive delta (a watch, not an unwatch)
       // clears the dropped flag.
       const unDrop = delta > 0 && existing.dropped ? { dropped: false } : {};
+      const last = lastWatchedAt ? { lastWatchedAt } : {};
       await this.prisma.userShowStatus.update({
         where: { id: existing.id },
         data: { watchedCount: nextWatched, totalCount: total, ...unDrop, ...last },
       });
+    };
+
+    const existing = await this.prisma.userShowStatus.findUnique({
+      where: { userId_mediaId: { userId, mediaId } },
+    });
+
+    if (existing) {
+      await updateExisting(existing);
       return;
     }
 
@@ -368,9 +400,28 @@ export class TrackingService {
     const total = await this.prisma.episode.count({
       where: { season: { show: { mediaId }, isSpecial: false }, airDate: { lte: new Date() } },
     });
-    await this.prisma.userShowStatus.create({
-      data: { userId, mediaId, watchedCount: Math.max(0, delta), totalCount: total, ...last },
-    });
+    try {
+      await this.prisma.userShowStatus.create({
+        data: {
+          userId,
+          mediaId,
+          watchedCount: Math.max(0, delta),
+          totalCount: total,
+          ...(lastWatchedAt ? { lastWatchedAt } : {}),
+        },
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const raced = await this.prisma.userShowStatus.findUnique({
+          where: { userId_mediaId: { userId, mediaId } },
+        });
+        if (raced) {
+          await updateExisting(raced);
+          return;
+        }
+      }
+      throw e;
+    }
   }
 
   private async upsertEpisodeRating(userId: string, episodeId: string, rating: number) {
@@ -402,8 +453,14 @@ export class TrackingService {
     });
   }
 
-  async updateEpisodeFeedback(userId: string, episodeId: string, dto: { rating?: number; reaction?: string; device?: string }) {
-    const status = await this.prisma.userEpisodeStatus.findUnique({ where: { userId_episodeId: { userId, episodeId } } });
+  async updateEpisodeFeedback(
+    userId: string,
+    episodeId: string,
+    dto: { rating?: number; reaction?: string; device?: string },
+  ) {
+    const status = await this.prisma.userEpisodeStatus.findUnique({
+      where: { userId_episodeId: { userId, episodeId } },
+    });
     if (!status) throw new NotFoundException('Episode not tracked — mark as watched first');
 
     if (dto.rating !== undefined) await this.upsertEpisodeRating(userId, episodeId, dto.rating);

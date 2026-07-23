@@ -48,15 +48,27 @@ private func refreshDate() -> Date {
 private func downloadImages<T: Identifiable>(
   for items: [T],
   url: (T) -> String?
-) async -> [T.ID: UIImage] where T.ID: Hashable {
+) async -> [T.ID: UIImage]
+where T.ID: Hashable & Sendable {
   await withTaskGroup(of: (T.ID, UIImage?).self) { group in
     for item in items {
-      group.addTask { (item.id, await WidgetAPI.shared.loadImage(url(item))) }
+      let id = item.id
+      let imageURL = url(item)
+
+      group.addTask {
+        let image = await WidgetAPI.shared.loadImage(imageURL)
+        return (id, image)
+      }
     }
+
     var map: [T.ID: UIImage] = [:]
+
     for await (id, image) in group {
-      if let image { map[id] = image }
+      if let image {
+        map[id] = image
+      }
     }
+
     return map
   }
 }
