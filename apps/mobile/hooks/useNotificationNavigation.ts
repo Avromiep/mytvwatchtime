@@ -19,8 +19,9 @@ const handledResponses = new Set<string>();
  * (whitelisted target) or a legacy `link`/deep-link. Registered once at the root —
  * warm taps via the listener, cold starts via the last queued response.
  */
-export function useNotificationNavigation() {
+export function useNotificationNavigation(enabled: boolean = true) {
   useEffect(() => {
+    if (!enabled) return;
     if (Platform.OS === 'web') return;
     const open = (response: Notifications.NotificationResponse | null) => {
       if (!response) return;
@@ -56,5 +57,5 @@ export function useNotificationNavigation() {
       .then(open)
       .catch(() => undefined);
     return () => sub.remove();
-  }, []);
+  }, [enabled]);
 }
