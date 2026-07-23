@@ -21,5 +21,6 @@
   "cast": "演职员",
   "comments": "评论",
   "showMoreEpisodes": "再显示 {{count}} 集",
-  "originalTitle": "原标题"
+  "originalTitle": "原标题",
+  "rateShow": "为这部剧评分"
 }

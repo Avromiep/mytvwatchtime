@@ -9,6 +9,7 @@ const INITIAL_EPISODES = 20;
 import { Header } from '../../components/Header';
 import { BadgeGrid, Carousel } from '../../components/cards';
 import { RatingChart } from '../../components/RatingChart';
+import { StarRatingControl, VotingSection } from '../../components/voting';
 import {
   Box,
   Button,
@@ -32,6 +33,7 @@ import {
   useRewatchEpisode,
   useShow,
   useShowEpisodes,
+  useShowVotes,
   useToggleFavorite,
   useToggleWatchlist,
 } from '../../api/hooks';
@@ -40,12 +42,14 @@ import { useAppearance } from '../../context/PreferencesProvider';
 import { useConfetti } from '../../components/Confetti';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../theme/theme';
+import { showError } from '../../lib/dialog';
 
 export default function ShowDetailScreen() {
   const { tokens } = useAppearance();
-  const { t } = useTranslation(['showDetail', 'common']);
+  const { t } = useTranslation(['showDetail', 'common', 'episode']);
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: show, isLoading, refetch } = useShow(id);
+  const votes = useShowVotes(id);
   const [tab, setTab] = useState<'about' | 'episodes'>('episodes');
   const watchlist = useToggleWatchlist();
   const favorite = useToggleFavorite();
@@ -65,6 +69,7 @@ export default function ShowDetailScreen() {
   }, [show?.userProgress]);
 
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
+  const onVoteError = () => showError({ description: t('episode:voteFailed') });
 
   if (isLoading || !show) return <Screen><Header showBack /><Spinner /></Screen>;
 
@@ -112,6 +117,19 @@ export default function ShowDetailScreen() {
               <Ionicons name={show.favorite ? 'heart' : 'heart-outline'} size={22} color={show.favorite ? tokens.favorite : tokens.textPrimary} />
             </Pressable>
           </View>
+
+          {show.interactions?.rating ? (
+            <View style={{ marginTop: spacing.lg }}>
+              <VotingSection title={t('showDetail:rateShow')}>
+                <StarRatingControl
+                  section={show.interactions.rating}
+                  onSelect={(v) => votes.rating.mutate(v, { onError: onVoteError })}
+                  pending={votes.rating.isPending}
+                  t={t}
+                />
+              </VotingSection>
+            </View>
+          ) : null}
         </View>
 
         <View style={[styles.tabs, { paddingHorizontal: spacing.lg }]}>

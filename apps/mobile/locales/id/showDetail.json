@@ -21,5 +21,6 @@
   "cast": "Pemeran",
   "comments": "Komentar",
   "showMoreEpisodes": "Tampilkan {{count}} lainnya",
-  "originalTitle": "Judul asli"
+  "originalTitle": "Judul asli",
+  "rateShow": "Beri rating acara ini"
 }

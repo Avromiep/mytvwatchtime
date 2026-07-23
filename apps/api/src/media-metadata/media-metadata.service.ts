@@ -1484,7 +1484,7 @@ export class MediaMetadataService {
               favorites: { where: { userId }, select: { id: true } },
               movieStatuses: {
                 where: { userId },
-                select: { id: true, watched: true, watchedAt: true },
+                select: { id: true, watched: true, watchedAt: true, watchCount: true },
               },
             }
           : {}),

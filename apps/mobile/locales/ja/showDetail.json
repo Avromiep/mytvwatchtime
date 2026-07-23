@@ -21,5 +21,6 @@
   "cast": "キャスト",
   "comments": "コメント",
   "showMoreEpisodes": "さらに{{count}}件表示",
-  "originalTitle": "原題"
+  "originalTitle": "原題",
+  "rateShow": "この番組を評価"
 }

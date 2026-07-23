@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -36,6 +36,11 @@ export class MoviesController {
   @Post('movies/:id/rewatch')
   rewatchMovie(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.tracking.rewatchMovie(userId, id);
+  }
+
+  @Put('movies/:id/vote/rating')
+  voteRating(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { value: number }) {
+    return this.movies.voteRating(userId, id, body.value);
   }
 
   @Post('movies/:id/watchlist')

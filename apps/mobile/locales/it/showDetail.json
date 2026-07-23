@@ -21,5 +21,6 @@
   "cast": "Cast",
   "comments": "Commenti",
   "showMoreEpisodes": "Mostra altri {{count}}",
-  "originalTitle": "Titolo originale"
+  "originalTitle": "Titolo originale",
+  "rateShow": "Valuta questa serie"
 }

@@ -4,10 +4,25 @@ import { FeatureFlagService } from '../feature-flag.service';
 import { SettingService } from '../setting.service';
 import { CapabilityService } from '../capability.service';
 import { EmailService } from '../email.service';
+import { MediaVotesService } from '../media-votes.service';
 
 @Global()
 @Module({
-  providers: [PrismaService, FeatureFlagService, SettingService, CapabilityService, EmailService],
-  exports: [PrismaService, FeatureFlagService, SettingService, CapabilityService, EmailService],
+  providers: [
+    PrismaService,
+    FeatureFlagService,
+    SettingService,
+    CapabilityService,
+    EmailService,
+    MediaVotesService,
+  ],
+  exports: [
+    PrismaService,
+    FeatureFlagService,
+    SettingService,
+    CapabilityService,
+    EmailService,
+    MediaVotesService,
+  ],
 })
 export class PrismaModule {}

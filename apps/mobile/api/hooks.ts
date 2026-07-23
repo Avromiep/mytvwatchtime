@@ -957,6 +957,78 @@ export function useEpisodeVotes(episodeId: string) {
   return { device, rating, reaction, character };
 }
 
+export function useMovieVotes(movieId: string) {
+  const qc = useQueryClient();
+  const key = qk.movie(movieId);
+
+  const rating = useMutation({
+    mutationFn: (value: number) =>
+      api.put<VoteSectionDto>(`/movies/${movieId}/vote/rating`, { value }),
+    onMutate: async (value) => {
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<MovieDetailDto>(key);
+      qc.setQueryData<MovieDetailDto>(key, (old) =>
+        old?.interactions
+          ? {
+              ...old,
+              interactions: {
+                ...old.interactions,
+                rating: recomputeVoteSection(old.interactions.rating, String(value)),
+              },
+            }
+          : old,
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+    },
+    onSuccess: (data) => {
+      qc.setQueryData<MovieDetailDto>(key, (old) =>
+        old ? { ...old, interactions: { ...old.interactions, rating: data } } : old,
+      );
+    },
+  });
+
+  return { rating };
+}
+
+export function useShowVotes(showId: string) {
+  const qc = useQueryClient();
+  const key = qk.show(showId);
+
+  const rating = useMutation({
+    mutationFn: (value: number) =>
+      api.put<VoteSectionDto>(`/shows/${showId}/vote/rating`, { value }),
+    onMutate: async (value) => {
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<ShowDetailDto>(key);
+      qc.setQueryData<ShowDetailDto>(key, (old) =>
+        old?.interactions
+          ? {
+              ...old,
+              interactions: {
+                ...old.interactions,
+                rating: recomputeVoteSection(old.interactions.rating, String(value)),
+              },
+            }
+          : old,
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+    },
+    onSuccess: (data) => {
+      qc.setQueryData<ShowDetailDto>(key, (old) =>
+        old ? { ...old, interactions: { ...old.interactions, rating: data } } : old,
+      );
+    },
+  });
+
+  return { rating };
+}
+
 export const useToggleMovieWatchlist = () => {
   const qc = useQueryClient();
   return useMutation({

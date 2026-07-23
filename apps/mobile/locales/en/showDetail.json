@@ -25,5 +25,6 @@
   "seasonLabel": "Season {{number}}",
   "chartCaption": "Swipe ‹ › for other seasons · y: user rating (0–5, unrated = 0)",
   "showMoreEpisodes": "Show {{count}} more",
-  "originalTitle": "Original title"
+  "originalTitle": "Original title",
+  "rateShow": "Rate this show"
 }

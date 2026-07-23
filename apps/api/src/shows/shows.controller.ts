@@ -81,6 +81,11 @@ export class ShowsController {
     return this.shows.voteFavoriteCharacter(userId, id, body.value ?? null);
   }
 
+  @Put('shows/:id/vote/rating')
+  voteShowRating(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { value: number }) {
+    return this.shows.voteShowRating(userId, id, body.value);
+  }
+
   @Patch('episodes/:id/feedback')
   updateFeedback(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { rating?: number; reaction?: string; device?: string }) {
     return this.tracking.updateEpisodeFeedback(userId, id, body);

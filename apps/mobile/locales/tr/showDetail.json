@@ -21,5 +21,6 @@
   "cast": "Oyuncular",
   "comments": "Yorumlar",
   "showMoreEpisodes": "{{count}} tane daha göster",
-  "originalTitle": "Orijinal başlık"
+  "originalTitle": "Orijinal başlık",
+  "rateShow": "Bu diziyi puanla"
 }

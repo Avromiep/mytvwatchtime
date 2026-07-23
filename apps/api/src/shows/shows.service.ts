@@ -8,6 +8,7 @@ import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
 import { TvdbProvider } from '../media-metadata/providers/tvdb.provider';
 import { mapEpisode } from '../common/utils/mapper.util';
 import { localized } from '../common/utils/localization.util';
+import { MediaVotesService } from '../common/media-votes.service';
 
 @Injectable()
 export class ShowsService {
@@ -17,7 +18,13 @@ export class ShowsService {
     private readonly tmdb: TmdbProvider,
     private readonly tvdb: TvdbProvider,
     private readonly metadataBackfill: MetadataBackfillService,
+    private readonly mediaVotes?: MediaVotesService,
   ) {}
+
+  private async withShowInteractions(detail: any, userId?: string) {
+    if (!detail || typeof detail !== 'object' || !this.mediaVotes) return detail;
+    return { ...detail, interactions: await this.mediaVotes.getShowInteractions(detail.id, userId) };
+  }
 
   async getShow(id: string, userId?: string) {
     const media = await this.prisma.mediaItem.findUnique({
@@ -29,7 +36,7 @@ export class ShowsService {
       if (this.tmdb.enabled && /^\d+$/.test(id)) {
         const fullId = await this.meta.ensureShowFull(Number(id));
         await this.meta.ensureAirtimes(fullId).catch(() => undefined);
-        return this.meta.getShowDetail(fullId, userId);
+        return this.withShowInteractions(await this.meta.getShowDetail(fullId, userId), userId);
       }
     } else {
       const lang = currentLanguage();
@@ -73,9 +80,13 @@ export class ShowsService {
       await this.meta.ensureAirtimes(id).catch(() => undefined);
       // Classify on every detail view (cheap + deduped per hydration version).
       await this.meta.scheduleClassification(id).catch(() => undefined);
-      return this.meta.getShowDetail(id, userId);
+      return this.withShowInteractions(await this.meta.getShowDetail(id, userId), userId);
     }
-    return this.meta.getShowDetail(id, userId);
+    return this.withShowInteractions(await this.meta.getShowDetail(id, userId), userId);
+  }
+
+  voteShowRating(userId: string, mediaId: string, value: number) {
+    return this.mediaVotes!.voteShowRating(userId, mediaId, value);
   }
 
   async getSeasons(id: string, userId?: string) {

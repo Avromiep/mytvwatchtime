@@ -21,5 +21,6 @@
   "cast": "Distribution",
   "comments": "Commentaires",
   "showMoreEpisodes": "Afficher {{count}} de plus",
-  "originalTitle": "Titre original"
+  "originalTitle": "Titre original",
+  "rateShow": "Notez cette série"
 }

@@ -5,6 +5,7 @@ import { currentLanguage } from '../common/language.context';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
 import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
 import { TvdbProvider } from '../media-metadata/providers/tvdb.provider';
+import { MediaVotesService } from '../common/media-votes.service';
 
 @Injectable()
 export class MoviesService {
@@ -13,14 +14,20 @@ export class MoviesService {
     private readonly meta: MediaMetadataService,
     private readonly tmdb: TmdbProvider,
     private readonly tvdb: TvdbProvider,
+    private readonly mediaVotes: MediaVotesService,
   ) {}
+
+  private async withInteractions(detail: any, userId?: string) {
+    if (!detail || typeof detail !== 'object') return detail;
+    return { ...detail, interactions: await this.mediaVotes.getMovieInteractions(detail.id, userId) };
+  }
 
   async getMovie(id: string, userId?: string) {
     const media = await this.prisma.mediaItem.findUnique({ where: { id }, include: { externalIds: true } });
     if (!media) {
       if (this.tmdb.enabled && /^\d+$/.test(id)) {
         const fullId = await this.meta.ensureMovieFull(Number(id));
-        return this.meta.getMovieDetail(fullId, userId);
+        return this.withInteractions(await this.meta.getMovieDetail(fullId, userId), userId);
       }
     } else {
       const lang = currentLanguage();
@@ -41,9 +48,13 @@ export class MoviesService {
       }
       // Classify on every detail view (cheap + deduped per hydration version).
       await this.meta.scheduleClassification(id).catch(() => undefined);
-      return this.meta.getMovieDetail(id, userId);
+      return this.withInteractions(await this.meta.getMovieDetail(id, userId), userId);
     }
-    return this.meta.getMovieDetail(id, userId);
+    return this.withInteractions(await this.meta.getMovieDetail(id, userId), userId);
+  }
+
+  voteRating(userId: string, mediaId: string, value: number) {
+    return this.mediaVotes.voteMovieRating(userId, mediaId, value);
   }
 
   async upcomingMovies(userId: string) {

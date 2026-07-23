@@ -21,5 +21,6 @@
   "cast": "출연진",
   "comments": "댓글",
   "showMoreEpisodes": "{{count}}개 더 보기",
-  "originalTitle": "원제"
+  "originalTitle": "원제",
+  "rateShow": "이 프로그램 평가하기"
 }

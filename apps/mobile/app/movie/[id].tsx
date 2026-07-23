@@ -4,9 +4,11 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../../components/Header';
 import { Button, Card, PosterImage, ProgressBar, Screen, SectionHeader, Spinner, T, useWatchMenu } from '../../components/primitives';
+import { StarRatingControl, VotingSection } from '../../components/voting';
 import {
   useMarkMovieWatched,
   useMovie,
+  useMovieVotes,
   useRewatchMovie,
   useToggleFavorite,
   useToggleMovieWatchlist,
@@ -15,12 +17,14 @@ import { useAddToList } from '../../hooks/useAddToList';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../theme/theme';
+import { showError } from '../../lib/dialog';
 
 export default function MovieDetailScreen() {
   const { tokens } = useAppearance();
-  const { t } = useTranslation(['movies', 'common']);
+  const { t } = useTranslation(['movies', 'common', 'episode']);
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: movie, isLoading, refetch } = useMovie(id);
+  const votes = useMovieVotes(id);
   const watched = useMarkMovieWatched();
   const rewatch = useRewatchMovie();
   const movieWatchlist = useToggleMovieWatchlist();
@@ -29,6 +33,7 @@ export default function MovieDetailScreen() {
   const addToList = useAddToList();
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
+  const onVoteError = () => showError({ description: t('episode:voteFailed') });
 
   if (isLoading || !movie) return <Screen><Header showBack /><Spinner /></Screen>;
 
@@ -95,6 +100,17 @@ export default function MovieDetailScreen() {
               <Ionicons name={movie.favorite ? 'heart' : 'heart-outline'} size={22} color={movie.favorite ? tokens.favorite : tokens.textPrimary} />
             </Pressable>
           </View>
+
+          {movie.watched && movie.interactions?.rating ? (
+            <VotingSection title={t('movies:rateMovie')}>
+              <StarRatingControl
+                section={movie.interactions.rating}
+                onSelect={(v) => votes.rating.mutate(v, { onError: onVoteError })}
+                pending={votes.rating.isPending}
+                t={t}
+              />
+            </VotingSection>
+          ) : null}
 
           <Card>
             <T variant="h2" style={{ marginBottom: spacing.sm }}>{t('movies:overview')}</T>

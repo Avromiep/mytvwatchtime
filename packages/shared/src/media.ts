@@ -76,6 +76,16 @@ export interface EpisodeInteractionsDto {
   character: CharacterVoteSectionDto | null;
 }
 
+/** Whole movie interaction voting categories. */
+export interface MovieInteractionsDto {
+  rating: VoteSectionDto;
+}
+
+/** Whole show interaction voting categories. */
+export interface ShowInteractionsDto {
+  rating: VoteSectionDto;
+}
+
 export interface SeasonSummaryDto {
   id: string;
   number: number;
@@ -163,6 +173,7 @@ export interface ShowDetailDto extends ShowDto {
   seasons: SeasonSummaryDto[];
   seasonsWithSpecials?: SeasonSummaryDto[];
   communityRatings?: { season: number; rating: number; votes: number }[];
+  interactions: ShowInteractionsDto;
 }
 
 export interface EpisodeDetailDto extends EpisodeDto {
@@ -179,6 +190,7 @@ export interface EpisodeDetailDto extends EpisodeDto {
 
 export interface MovieDetailDto extends MovieDto {
   similar: MovieDto[];
+  interactions: MovieInteractionsDto;
 }
 
 // ---------------- Networks ----------------
