@@ -57,6 +57,10 @@ export class MoviesService {
     return this.mediaVotes.voteMovieRating(userId, mediaId, value);
   }
 
+  voteReaction(userId: string, mediaId: string, value: string) {
+    return this.mediaVotes.voteMovieReaction(userId, mediaId, value);
+  }
+
   async upcomingMovies(userId: string) {
     const watchlist = await this.prisma.watchlistItem.findMany({
       where: { userId, media: { type: 'MOVIE' as const, movie: { releaseDate: { gte: new Date() } } } },

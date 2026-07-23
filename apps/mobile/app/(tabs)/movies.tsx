@@ -47,13 +47,18 @@ export default function MoviesScreen() {
   const cols = Math.max(2, Math.floor((containerW + gap) / (160 + gap))); // wider cards for movies
   const cellW = Math.floor((containerW - gap * (cols - 1)) / cols);
 
-  const watchedIds = new Set(watched.items.map((h: any) => h.mediaId));
+  const watchedMovieMap = new Map<string, MovieItem>();
+  for (const h of watched.items as any[]) {
+    if (watchedMovieMap.has(h.mediaId)) continue;
+    watchedMovieMap.set(h.mediaId, {
+      id: h.mediaId, title: h.title, posterUrl: h.posterUrl, watched: true, progress: 1, rating: h.rating ?? null,
+    });
+  }
+  const watchedItems: MovieItem[] = [...watchedMovieMap.values()];
+  const watchedIds = new Set(watchedMovieMap.keys());
   const watchlistItems: MovieItem[] = watchlist.items
     .filter((m: any) => !watchedIds.has(m.id))
     .map((m: any) => ({ id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, rating: m.rating ?? null }));
-  const watchedItems: MovieItem[] = watched.items.map((h: any) => ({
-    id: h.mediaId, title: h.title, posterUrl: h.posterUrl, watched: true, progress: 1, rating: h.rating ?? null,
-  }));
   const favoriteItems = favorites.items.map((m: any) => {
     const watched = watchedIds.has(m.id);
     return { id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, watched, progress: watched ? 1 : undefined, rating: m.rating ?? null };

@@ -79,6 +79,7 @@ export interface EpisodeInteractionsDto {
 /** Whole movie interaction voting categories. */
 export interface MovieInteractionsDto {
   rating: VoteSectionDto;
+  reaction: ReactionVoteSectionDto;
 }
 
 /** Whole show interaction voting categories. */

@@ -43,6 +43,11 @@ export class MoviesController {
     return this.movies.voteRating(userId, id, body.value);
   }
 
+  @Put('movies/:id/vote/reaction')
+  voteReaction(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { value: string }) {
+    return this.movies.voteReaction(userId, id, body.value);
+  }
+
   @Post('movies/:id/watchlist')
   addWatchlist(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.collections.addWatchlist(userId, id);

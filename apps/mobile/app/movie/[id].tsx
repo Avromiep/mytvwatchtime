@@ -4,7 +4,7 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../../components/Header';
 import { Button, Card, PosterImage, ProgressBar, Screen, SectionHeader, Spinner, T, useWatchMenu } from '../../components/primitives';
-import { StarRatingControl, VotingSection } from '../../components/voting';
+import { ReactionGrid, StarRatingControl, VotingSection } from '../../components/voting';
 import {
   useMarkMovieWatched,
   useMovie,
@@ -107,6 +107,17 @@ export default function MovieDetailScreen() {
                 section={movie.interactions.rating}
                 onSelect={(v) => votes.rating.mutate(v, { onError: onVoteError })}
                 pending={votes.rating.isPending}
+                t={t}
+              />
+            </VotingSection>
+          ) : null}
+
+          {movie.watched && movie.interactions?.reaction ? (
+            <VotingSection title={t('episode:howDidItFeel')}>
+              <ReactionGrid
+                section={movie.interactions.reaction}
+                onSelect={(v) => votes.reaction.mutate(v, { onError: onVoteError })}
+                pending={votes.reaction.isPending}
                 t={t}
               />
             </VotingSection>

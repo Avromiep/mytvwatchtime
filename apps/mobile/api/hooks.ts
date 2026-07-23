@@ -990,7 +990,46 @@ export function useMovieVotes(movieId: string) {
     },
   });
 
-  return { rating };
+  const reaction = useMutation({
+    mutationFn: (value: string) =>
+      api.put<ReactionVoteSectionDto>(`/movies/${movieId}/vote/reaction`, { value }),
+    onMutate: async (value) => {
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<MovieDetailDto>(key);
+      qc.setQueryData<MovieDetailDto>(key, (old) =>
+        old?.interactions
+          ? {
+              ...old,
+              interactions: {
+                ...old.interactions,
+                reaction: recomputeReactionSection(old.interactions.reaction, value),
+              },
+            }
+          : old,
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+    },
+    onSuccess: (data) => {
+      const norm = normalizeReactionSection(data);
+      qc.setQueryData<MovieDetailDto>(key, (old) => {
+        if (!old) return old;
+        const current = old.interactions.reaction;
+        const userVotes = current?.userVotes ?? norm.userVotes;
+        return {
+          ...old,
+          interactions: {
+            ...old.interactions,
+            reaction: { userVotes, total: norm.total, options: norm.options },
+          },
+        };
+      });
+    },
+  });
+
+  return { rating, reaction };
 }
 
 export function useShowVotes(showId: string) {

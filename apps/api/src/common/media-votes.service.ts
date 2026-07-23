@@ -6,6 +6,20 @@ export class MediaVotesService {
   constructor(private readonly prisma: PrismaService) {}
 
   private readonly RATING_OPTIONS = ['1', '2', '3', '4', '5'] as const;
+  private readonly REACTION_OPTIONS = [
+    'SHOCKED',
+    'FRUSTRATED',
+    'SAD',
+    'REFLECTIVE',
+    'TOUCHED',
+    'AMUSED',
+    'SCARED',
+    'BORED',
+    'UNDERSTANDING',
+    'THRILLED',
+    'CONFUSED',
+    'TENSE',
+  ] as const;
 
   private buildRatingSection(counts: Map<string, number>, userVote: string | null) {
     const options = this.RATING_OPTIONS.map((value) => ({ value, count: counts.get(value) ?? 0 }));
@@ -30,7 +44,11 @@ export class MediaVotesService {
   }
 
   async getMovieInteractions(mediaId: string, userId?: string) {
-    return { rating: await this.getMediaRatingSection(mediaId, userId) };
+    const [rating, reaction] = await Promise.all([
+      this.getMediaRatingSection(mediaId, userId),
+      this.getMediaReactionSection(mediaId, userId),
+    ]);
+    return { rating, reaction };
   }
 
   async getShowInteractions(mediaId: string, userId?: string) {
@@ -51,10 +69,51 @@ export class MediaVotesService {
     return this.buildRatingSection(counts, userRating ? String(userRating.rating) : null);
   }
 
+  private async getMediaReactionSection(mediaId: string, userId?: string) {
+    const userRows = userId
+      ? await this.prisma.reaction.findMany({
+          where: { userId, mediaId },
+          select: { reaction: true },
+        })
+      : [];
+    const userVotes = userRows.map((row) => row.reaction as string);
+
+    const [distinctUsers, groups] = await Promise.all([
+      this.prisma.reaction.groupBy({ by: ['userId'], where: { mediaId }, _count: { _all: true } }),
+      this.prisma.reaction.groupBy({ by: ['reaction'], where: { mediaId }, _count: { _all: true } }),
+    ]);
+    const counts = new Map<string, number>();
+    for (const group of groups) counts.set(group.reaction as string, group._count._all);
+    return {
+      userVotes,
+      total: distinctUsers.length,
+      options: (this.REACTION_OPTIONS as readonly string[]).map((value) => ({
+        value,
+        count: counts.get(value) ?? 0,
+      })),
+    };
+  }
+
   async voteMovieRating(userId: string, mediaId: string, value: number) {
     await this.requireWatchedMovie(userId, mediaId);
     await this.upsertMediaRating(userId, mediaId, value);
     return this.getMediaRatingSection(mediaId, userId);
+  }
+
+  async voteMovieReaction(userId: string, mediaId: string, value: string) {
+    await this.requireWatchedMovie(userId, mediaId);
+    if (!(this.REACTION_OPTIONS as readonly string[]).includes(value)) {
+      throw new BadRequestException('Invalid reaction');
+    }
+    const existing = await this.prisma.reaction.findUnique({
+      where: { userId_mediaId_reaction: { userId, mediaId, reaction: value as any } },
+    });
+    if (existing) {
+      await this.prisma.reaction.delete({ where: { id: existing.id } });
+    } else {
+      await this.prisma.reaction.create({ data: { userId, mediaId, reaction: value as any } });
+    }
+    return this.getMediaReactionSection(mediaId, userId);
   }
 
   async voteShowRating(userId: string, mediaId: string, value: number) {
