@@ -80,15 +80,17 @@ export default function MovieDetailScreen() {
                   onUnwatch: () => watched.mutate({ id, on: false }),
                 })
               }
-              style={{ flex: 1 }}
+              style={styles.mainAction}
             />
-            <Button
-              title={movie.inWatchlist ? t('movies:inWatchlist') : t('movies:addWatchlist')}
-              variant={movie.inWatchlist ? 'watched' : 'ghost'}
-              icon={movie.inWatchlist ? 'checkmark' : 'bookmark-outline'}
-              onPress={() => movieWatchlist.mutate({ id, on: !movie.inWatchlist })}
-              style={{ flex: 1, marginLeft: spacing.sm }}
-            />
+            {!movie.watched ? (
+              <Button
+                title={movie.inWatchlist ? t('movies:inWatchlist') : t('movies:addWatchlist')}
+                variant={movie.inWatchlist ? 'watched' : 'ghost'}
+                icon={movie.inWatchlist ? 'checkmark' : 'bookmark-outline'}
+                onPress={() => movieWatchlist.mutate({ id, on: !movie.inWatchlist })}
+                style={styles.watchlistAction}
+              />
+            ) : null}
             <Pressable onPress={() => favorite.mutate({ id, on: !movie.favorite, kind: 'movies' })} style={[styles.favBtn, { backgroundColor: tokens.surfaceElevated }]}>
               <Ionicons name={movie.favorite ? 'heart' : 'heart-outline'} size={22} color={movie.favorite ? tokens.favorite : tokens.textPrimary} />
             </Pressable>
@@ -145,5 +147,7 @@ const styles = StyleSheet.create({
   // stretch (default) so the two action buttons are always equal height — in some
   // languages one label wraps to two lines while the other stays on one.
   actions: { flexDirection: 'row' },
+  mainAction: { flex: 1 },
+  watchlistAction: { flex: 1, marginLeft: spacing.sm },
   favBtn: { marginLeft: spacing.sm, width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center', alignSelf: 'center' },
 });

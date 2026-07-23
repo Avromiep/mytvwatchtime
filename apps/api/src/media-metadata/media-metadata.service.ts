@@ -1169,17 +1169,27 @@ export class MediaMetadataService {
           existingId = undefined;
           prev = null;
         }
-        const base = enData ?? data;
         const genres = await this.upsertGenres(tx, data.genres, lang, enData?.genres);
         const providers = await this.upsertProviders(tx, data.providers);
         const castMembers = await this.upsertCast(tx, data.cast);
 
-        let titles = mergeLocalized(prev?.titles as any, lang, data.title, enData?.title);
+        const englishTranslation = data.translations?.en;
+        const englishBase =
+          enData ??
+          (englishTranslation?.title?.trim()
+            ? {
+                ...data,
+                title: englishTranslation.title.trim(),
+                overview: englishTranslation.overview ?? data.overview,
+              }
+            : undefined);
+
+        let titles = mergeLocalized(prev?.titles as any, lang, data.title, englishBase?.title);
         let overviews = mergeLocalized(
           prev?.overviews as any,
           lang,
           data.overview,
-          enData?.overview,
+          englishBase?.overview,
         );
         // Bulk-store ALL translations from the provider (e.g. TVDB movie meta=translations).
         if (data.translations) {
@@ -1189,6 +1199,7 @@ export class MediaMetadataService {
           }
         }
 
+        const base = englishBase ?? data;
         const mediaData = {
           title: base.title,
           overview: base.overview,
@@ -1201,20 +1212,20 @@ export class MediaMetadataService {
           // The marker describes the base JUST WRITTEN (base = enData ?? data in `lang`).
           // Never inherit prev.titleLocale — a stale non-en marker would survive an
           // English re-hydration and the row would stay "non-English base" forever.
-          titleLocale: enData ? 'en' : lang,
+          titleLocale: englishBase ? 'en' : lang,
           titles,
           overviews,
           posterUrls: mergeLocalized(
             prev?.posterUrls as any,
             lang,
             data.posterUrl,
-            enData?.posterUrl,
+            englishBase?.posterUrl,
           ),
           backdropUrls: mergeLocalized(
             prev?.backdropUrls as any,
             lang,
             data.backdropUrl,
-            enData?.backdropUrl,
+            englishBase?.backdropUrl,
           ),
         };
 
@@ -1275,7 +1286,7 @@ export class MediaMetadataService {
 
         await this.syncGenres(tx, mediaId!, genres);
         await this.syncProviders(tx, mediaId!, providers);
-        await this.syncCast(tx, mediaId!, castMembers, data.cast, lang, enData?.cast);
+        await this.syncCast(tx, mediaId!, castMembers, data.cast, lang, englishBase?.cast);
 
         return mediaId!;
       },

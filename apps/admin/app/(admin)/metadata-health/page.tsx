@@ -19,6 +19,7 @@ interface MetadataHealth {
   castMissingCharacterIds: number;
   movieDataOnShows: number;
   multiTvdbIds: number;
+  providerDuplicateMovies: number;
   nonEnglishBase: number;
   nonEnglishContent: number | null;
   nonEnglishContentParked: number | null;
@@ -53,6 +54,7 @@ const REPAIR_LABELS: Record<string, string> = {
   'character-ids': 'Character IDs backfill',
   'anime-rehydrate': 'Anime → TVDB rehydration',
   'tvdb-id-conflicts': 'TVDB ID conflict repair',
+  'provider-duplicates': 'Provider duplicate movie repair',
   'english-base': 'English base restore',
   'english-content': 'English content verify',
   'banner-posters': 'Banner poster repair',
@@ -78,6 +80,8 @@ const STAT_HINTS: Record<string, string> = {
     'Movie statuses/history wrongly written on shows (import bug). The Repair button above purges these too.',
   multiTvdbIds:
     'Rows carrying more than one TVDB id — merge leftovers (harmless) or id poisoning from an old bug (one id belongs to a DIFFERENT show, mis-routing matches). Repair verifies each id via TMDB and detaches only the wrong ones. User history is never deleted.',
+  providerDuplicateMovies:
+    'Movie rows that have TVDB/IMDB ids but no TMDB id. Repair verifies the TVDB/IMDB id through TMDB /find; when it resolves to an existing TMDB movie row, it moves user data and external ids to that canonical row and deletes the duplicate. No title guessing.',
   nonEnglishBase:
     "Rows explicitly marked as having a non-English base title (title_locale ≠ en). Repair re-hydrates them with a proper English base and restores the 'en' override. Rows that just failed are parked for 24h so repeated runs keep advancing. Rows with an unset marker are NOT counted (most have a fine English base already). No user data touched.",
   nonEnglishContent:
@@ -111,6 +115,9 @@ export default function MetadataHealthPage() {
   const [castResult, setCastResult] = useState<string | null>(null);
   const [repairingTvdbIds, setRepairingTvdbIds] = useState(false);
   const [tvdbIdResult, setTvdbIdResult] = useState<string | null>(null);
+  const [repairingProviderDuplicates, setRepairingProviderDuplicates] = useState(false);
+  const [providerDuplicateResult, setProviderDuplicateResult] = useState<string | null>(null);
+  const [providerDuplicateCount, setProviderDuplicateCount] = useState('200');
   const [repairingEnBase, setRepairingEnBase] = useState(false);
   const [enBaseResult, setEnBaseResult] = useState<string | null>(null);
   const [enBaseCount, setEnBaseCount] = useState('200');
@@ -246,6 +253,22 @@ export default function MetadataHealthPage() {
       })
       .catch(() => setTvdbIdResult('TVDB id-conflict repair failed to start.'))
       .finally(() => setRepairingTvdbIds(false));
+  };
+
+  const runProviderDuplicateRepair = () => {
+    setRepairingProviderDuplicates(true);
+    setProviderDuplicateResult(null);
+    const n = Math.max(1, Number(providerDuplicateCount) || 200);
+    api
+      .post(`/admin/repair-provider-duplicates/run?count=${n}`)
+      .then(() => {
+        setProviderDuplicateResult(
+          `Provider duplicate repair started (${n} rows). Stats refresh in 60s.`,
+        );
+        setTimeout(() => load(), 60000);
+      })
+      .catch(() => setProviderDuplicateResult('Provider duplicate repair failed to start.'))
+      .finally(() => setRepairingProviderDuplicates(false));
   };
 
   const runEnBaseRepair = () => {
@@ -395,6 +418,11 @@ export default function MetadataHealthPage() {
       {tvdbIdResult && (
         <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200">
           {tvdbIdResult}
+        </div>
+      )}
+      {providerDuplicateResult && (
+        <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200">
+          {providerDuplicateResult}
         </div>
       )}
       {enBaseResult && (
@@ -586,6 +614,32 @@ export default function MetadataHealthPage() {
               }
             />
             <MetricCard
+              label="Provider Duplicate Movies"
+              value={stats.providerDuplicateMovies}
+              sub="TVDB/IMDB-only movie rows that may merge into TMDB rows"
+              hint={STAT_HINTS.providerDuplicateMovies}
+              highlight={stats.providerDuplicateMovies > 0}
+              action={
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={providerDuplicateCount}
+                    onChange={(e) => setProviderDuplicateCount(e.target.value)}
+                    className="w-20 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+                    title="Rows per run"
+                  />
+                  <button
+                    onClick={runProviderDuplicateRepair}
+                    disabled={repairingProviderDuplicates}
+                    className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    {repairingProviderDuplicates ? 'Starting…' : 'Repair Duplicates'}
+                  </button>
+                </div>
+              }
+            />
+            <MetricCard
               label="Non-English Base"
               value={stats.nonEnglishBase}
               sub="rows missing a trusted English base"
@@ -619,7 +673,7 @@ export default function MetadataHealthPage() {
               sub={
                 stats.nonEnglishContent === null
                   ? 'expensive scan skipped on page load'
-                  : `titles/overviews/episodes — most-visible first${(stats.nonEnglishContentParked ?? 0) > 0 ? ` · ${stats.nonEnglishContentParked?.toLocaleString()} parked 24h` : ''}`
+                  : `${enContentDeep ? 'media + episode text' : 'media titles/overviews'} — most-visible first${(stats.nonEnglishContentParked ?? 0) > 0 ? ` · ${stats.nonEnglishContentParked?.toLocaleString()} parked 24h` : ''}`
               }
               hint={STAT_HINTS.nonEnglishContent}
               highlight={(stats.nonEnglishContent ?? 0) > 0}

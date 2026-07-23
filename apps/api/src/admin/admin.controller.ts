@@ -124,6 +124,26 @@ export class AdminController {
     };
   }
 
+  @Post('repair-provider-duplicates/run')
+  @RequireRoles('ADMIN')
+  runRepairProviderDuplicates(@Query('count') count?: string) {
+    const n = count ? Number(count) : undefined;
+    this.metadataBackfill
+      .repairProviderDuplicateMovies(n)
+      .then((res) =>
+        console.log(
+          `[Provider duplicates] DONE: ${res.merged} merged, ${res.skipped} skipped, ${res.failed} failed, ${res.rateLimited} rate-limited`,
+          res.sample.length ? JSON.stringify(res.sample) : '',
+        ),
+      )
+      .catch((e) => {
+        console.error('[Provider duplicates] FAILED:', (e as Error)?.message ?? e);
+      });
+    return {
+      message: `Provider duplicate repair started (${n ?? 200} rows max). Check API logs for the report.`,
+    };
+  }
+
   @Post('repair-non-english-base/run')
   @RequireRoles('ADMIN')
   runRepairNonEnglishBase(@Query('count') count?: string) {

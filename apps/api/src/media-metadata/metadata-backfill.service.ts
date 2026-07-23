@@ -39,6 +39,7 @@ export class MetadataBackfillService {
   /** Start time of the in-flight anime→TVDB batch (null = idle). A guard older
    *  than 3h means the run's promise HUNG and never settled — auto-released. */
   private animeFixStartedAt: number | null = null;
+  private providerDuplicateRepairRunning = false;
 
   // ---- Live repair progress (admin Metadata Health page) ----
   private readonly repairProgress = new Map<
@@ -142,26 +143,6 @@ export class MetadataBackfillService {
         WITH external_media AS (
           SELECT DISTINCT media_id FROM external_ids
         ),
-        episode_suspects AS (
-          SELECT sh.media_id
-          FROM shows sh
-          JOIN seasons s ON s.show_id = sh.id
-          JOIN episodes e ON e.season_id = s.id
-          WHERE length(regexp_replace(COALESCE(NULLIF(e.titles->>'en',''), e.title), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
-             OR length(regexp_replace(COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''), '[[:space:] -~‘’“”„‟‚‛‹›«»‐‑‒–—―…·•°©®™]', '', 'g')) >= 3
-          GROUP BY sh.media_id
-        ),
-        episode_fingerprints AS (
-          SELECT sh.media_id,
-                 count(e.id)::text || ':' || md5(COALESCE(string_agg(
-                   e.id || ':' || COALESCE(NULLIF(e.titles->>'en',''), e.title) || ':' || COALESCE(NULLIF(e.overviews->>'en',''), e.overview, ''),
-                   '|' ORDER BY e.id), '')) AS fingerprint
-          FROM shows sh
-          JOIN episode_suspects suspect ON suspect.media_id = sh.media_id
-          JOIN seasons s ON s.show_id = sh.id
-          JOIN episodes e ON e.season_id = s.id
-          GROUP BY sh.media_id
-        ),
         health AS (
           SELECT m.id,
                  x.media_id IS NOT NULL AS has_external,
@@ -170,7 +151,6 @@ export class MetadataBackfillService {
                  (
                    COALESCE(NULLIF(m.titles->>'en',''), m.title) ~ '[^ -~]'
                    OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '') ~ '[^ -~]'
-                   OR suspect.media_id IS NOT NULL
                  ) AS is_suspect,
                  (
                    COALESCE(NULLIF(m.titles->>'en',''), m.title)
@@ -182,17 +162,9 @@ export class MetadataBackfillService {
                              THEN (m.metadata_provenance->>'enContentVerifiedVersion')::int
                              ELSE 0 END,
                         0) < ${EN_CONTENT_VERIFIER_VERSION}
-                   OR (
-                     m.type = 'SHOW'
-                     AND suspect.media_id IS NOT NULL
-                     AND COALESCE(m.metadata_provenance->>'enContentVerifiedEpisodeFingerprint', '')
-                           IS DISTINCT FROM COALESCE(ep.fingerprint, '')
-                   )
                  ) AS needs_verification
           FROM media_items m
           LEFT JOIN external_media x ON x.media_id = m.id
-          LEFT JOIN episode_suspects suspect ON suspect.media_id = m.id
-          LEFT JOIN episode_fingerprints ep ON ep.media_id = m.id
         )
         SELECT count(*) FILTER (WHERE has_external AND is_suspect AND NOT parked AND needs_verification)::bigint AS "nonEnglishContent",
                count(*) FILTER (WHERE parked)::bigint AS "nonEnglishContentParked",
@@ -282,6 +254,7 @@ export class MetadataBackfillService {
       castMissingCharacterIds,
       movieDataOnShows,
       multiTvdbIds,
+      providerDuplicateMovies,
       nonEnglishBase,
       englishContentHealth,
       bannerAsPoster,
@@ -370,6 +343,15 @@ export class MetadataBackfillService {
           GROUP BY media_id, provider_entity_kind
           HAVING count(*) > 1
         ) x`,
+      // Same real movie split across provider rows: a TVDB/IMDB-only movie row can resolve
+      // through TMDB /find to a separate TMDB movie row. The repair verifies via provider IDs
+      // only (no title guessing), moves user data/external IDs to the TMDB row, then deletes
+      // the duplicate source row.
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c FROM media_items m
+        WHERE m.type='MOVIE'
+          AND NOT EXISTS (SELECT 1 FROM external_ids tm WHERE tm.media_id = m.id AND tm.provider = 'TMDB' AND tm.provider_entity_kind = 'MOVIE')
+          AND EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id AND x.provider IN ('THE_TVDB','IMDB') AND x.provider_entity_kind = 'MOVIE')`,
       // Rows EXPLICITLY marked as non-English base (title_locale set and != 'en') — the
       // only cheap SQL signal for wrong-language bases. Rows with an UNSET marker are
       // not counted (most have a fine English base title and just predate the overrides
@@ -439,6 +421,7 @@ export class MetadataBackfillService {
       castMissingCharacterIds: toNum(castMissingCharacterIds as any),
       movieDataOnShows: toNum(movieDataOnShows as any),
       multiTvdbIds: toNum(multiTvdbIds as any),
+      providerDuplicateMovies: toNum(providerDuplicateMovies as any),
       nonEnglishBase: toNum(nonEnglishBase as any),
       nonEnglishContent: includeContentStats ? enNum(enContent?.nonEnglishContent) : null,
       nonEnglishContentParked: includeContentStats ? enNum(enContent?.nonEnglishContentParked) : null,
@@ -1024,6 +1007,242 @@ export class MetadataBackfillService {
   /** Definitive provider 404 / cached 404: retrying immediately will only churn the batch. */
   private isNotFoundError(e: unknown): boolean {
     return isProviderError(e) && e.category === 'not_found';
+  }
+
+  // ---- Same-type provider duplicate repair (TVDB/IMDB-only movie row + TMDB movie row) ----
+  async repairProviderDuplicateMovies(limit?: number): Promise<{
+    processed: number;
+    merged: number;
+    skipped: number;
+    failed: number;
+    rateLimited: number;
+    sample: string[];
+  }> {
+    const empty = {
+      processed: 0,
+      merged: 0,
+      skipped: 0,
+      failed: 0,
+      rateLimited: 0,
+      sample: [] as string[],
+    };
+    if (this.providerDuplicateRepairRunning) {
+      this.logger.log('Provider duplicate movie repair already running — skipping');
+      return empty;
+    }
+    this.providerDuplicateRepairRunning = true;
+    this.trackRepair('provider-duplicates', {
+      running: true,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      finishedAt: null,
+    });
+    try {
+      const take = Math.max(1, Math.min(limit ?? 200, 100000));
+      const candidates = await this.prisma.$queryRaw<
+        { id: string; title: string; tvdbId: string | null; imdbId: string | null }[]
+      >`
+        SELECT m.id,
+               m.title,
+               (SELECT e.value FROM external_ids e
+                WHERE e.media_id = m.id AND e.provider = 'THE_TVDB' AND e.provider_entity_kind = 'MOVIE'
+                LIMIT 1) AS "tvdbId",
+               (SELECT e.value FROM external_ids e
+                WHERE e.media_id = m.id AND e.provider = 'IMDB' AND e.provider_entity_kind = 'MOVIE'
+                LIMIT 1) AS "imdbId"
+        FROM media_items m
+        WHERE m.type = 'MOVIE'
+          AND NOT EXISTS (SELECT 1 FROM external_ids tm WHERE tm.media_id = m.id AND tm.provider = 'TMDB' AND tm.provider_entity_kind = 'MOVIE')
+          AND EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id AND x.provider IN ('THE_TVDB','IMDB') AND x.provider_entity_kind = 'MOVIE')
+        ORDER BY m.added_count DESC, m.created_at ASC
+        LIMIT ${take}`;
+
+      this.trackRepair('provider-duplicates', { total: candidates.length });
+      let merged = 0;
+      let skipped = 0;
+      let failed = 0;
+      let rateLimited = 0;
+      const sample: string[] = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const c = candidates[i];
+        this.trackRepair('provider-duplicates', {
+          processed: i + 1,
+          succeeded: merged,
+          failed,
+          current: c.title,
+        });
+        try {
+          const targetId = await this.resolveProviderDuplicateMovieTarget(c);
+          if (!targetId || targetId === c.id) {
+            skipped++;
+            continue;
+          }
+          await this.mergeDuplicateMovieRows(c.id, targetId);
+          merged++;
+          if (sample.length < 5) sample.push(c.title);
+        } catch (e) {
+          if (this.isRateLimitError(e)) {
+            rateLimited++;
+            this.logger.warn(`Provider duplicate repair rate-limited after ${i} rows`);
+            break;
+          }
+          failed++;
+          if (failed <= 10) {
+            this.logger.warn(
+              `provider duplicate repair failed for ${c.title} (${c.id}): ${(e as Error).message}`,
+            );
+          }
+        }
+      }
+      this.trackRepair('provider-duplicates', {
+        running: false,
+        processed: candidates.length,
+        succeeded: merged,
+        failed,
+        finishedAt: new Date(),
+      });
+      this.logger.log(
+        `Provider duplicate movie repair: ${merged}/${candidates.length} merged, ${skipped} skipped, ${failed} failed, ${rateLimited} rate-limited`,
+      );
+      return { processed: candidates.length, merged, skipped, failed, rateLimited, sample };
+    } finally {
+      this.providerDuplicateRepairRunning = false;
+    }
+  }
+
+  private async resolveProviderDuplicateMovieTarget(candidate: {
+    id: string;
+    tvdbId: string | null;
+    imdbId: string | null;
+  }): Promise<string | null> {
+    if (!this.tmdbProvider.enabled) return null;
+    let tmdbId: number | null = null;
+    if (candidate.tvdbId) {
+      const found = await this.tmdbProvider.findByExternalIdStrict(candidate.tvdbId, 'tvdb_id');
+      tmdbId = found?.movie?.tmdbId ?? null;
+    }
+    if (!tmdbId && candidate.imdbId) {
+      const found = await this.tmdbProvider.findByExternalIdStrict(candidate.imdbId, 'imdb_id');
+      tmdbId = found?.movie?.tmdbId ?? null;
+    }
+    if (!tmdbId) return null;
+    const target = await this.prisma.externalId.findFirst({
+      where: {
+        provider: ExternalProvider.TMDB,
+        providerEntityKind: ProviderEntityKind.MOVIE,
+        value: String(tmdbId),
+        mediaId: { not: candidate.id },
+        media: { type: MediaType.MOVIE },
+      },
+      select: { mediaId: true },
+    });
+    return target?.mediaId ?? null;
+  }
+
+  private async mergeDuplicateMovieRows(sourceMediaId: string, targetMediaId: string): Promise<void> {
+    await this.prisma.$transaction(
+      async (tx: any) => {
+        const [source, target] = await Promise.all([
+          tx.mediaItem.findUnique({
+            where: { id: sourceMediaId },
+            select: { type: true, title: true },
+          }),
+          tx.mediaItem.findUnique({
+            where: { id: targetMediaId },
+            select: { type: true, title: true },
+          }),
+        ]);
+        if (!source || !target) throw new Error('source or target media row missing');
+        if (source.type !== MediaType.MOVIE || target.type !== MediaType.MOVIE) {
+          throw new Error('provider duplicate merge only supports movie rows');
+        }
+
+        await tx.$executeRaw`
+          UPDATE external_ids e
+          SET media_id = ${targetMediaId}
+          WHERE e.media_id = ${sourceMediaId}
+            AND NOT EXISTS (
+              SELECT 1 FROM external_ids t
+              WHERE t.media_id = ${targetMediaId}
+                AND t.provider = e.provider
+                AND t.provider_entity_kind = e.provider_entity_kind
+                AND t.value = e.value
+            )`;
+
+        await tx.$executeRaw`
+          UPDATE user_movie_status s
+          SET media_id = ${targetMediaId}
+          WHERE s.media_id = ${sourceMediaId}
+            AND NOT EXISTS (
+              SELECT 1 FROM user_movie_status t
+              WHERE t.media_id = ${targetMediaId} AND t.user_id = s.user_id
+            )`;
+        await tx.$executeRaw`
+          UPDATE user_movie_status t
+          SET watched = (t.watched OR s.watched),
+              watched_at = LEAST(COALESCE(t.watched_at, s.watched_at), COALESCE(s.watched_at, t.watched_at)),
+              watch_count = GREATEST(t.watch_count, s.watch_count),
+              updated_at = NOW()
+          FROM user_movie_status s
+          WHERE s.media_id = ${sourceMediaId}
+            AND t.media_id = ${targetMediaId}
+            AND t.user_id = s.user_id`;
+        await tx.userMovieStatus.deleteMany({ where: { mediaId: sourceMediaId } });
+
+        await tx.watchHistory.updateMany({
+          where: { mediaId: sourceMediaId, mediaType: MediaType.MOVIE },
+          data: { mediaId: targetMediaId },
+        });
+
+        await tx.$executeRaw`
+          UPDATE watchlist_items w SET media_id = ${targetMediaId}
+          WHERE w.media_id = ${sourceMediaId}
+            AND NOT EXISTS (SELECT 1 FROM watchlist_items t WHERE t.media_id = ${targetMediaId} AND t.user_id = w.user_id)`;
+        await tx.watchlistItem.deleteMany({ where: { mediaId: sourceMediaId } });
+
+        await tx.$executeRaw`
+          UPDATE favorites f SET media_id = ${targetMediaId}
+          WHERE f.media_id = ${sourceMediaId}
+            AND NOT EXISTS (SELECT 1 FROM favorites t WHERE t.media_id = ${targetMediaId} AND t.user_id = f.user_id)`;
+        await tx.favorite.deleteMany({ where: { mediaId: sourceMediaId } });
+
+        await tx.$executeRaw`
+          UPDATE ratings r SET media_id = ${targetMediaId}
+          WHERE r.media_id = ${sourceMediaId}
+            AND NOT EXISTS (SELECT 1 FROM ratings t WHERE t.media_id = ${targetMediaId} AND t.user_id = r.user_id)`;
+        await tx.rating.deleteMany({ where: { mediaId: sourceMediaId } });
+
+        await tx.$executeRaw`
+          UPDATE reactions r SET media_id = ${targetMediaId}
+          WHERE r.media_id = ${sourceMediaId}
+            AND NOT EXISTS (
+              SELECT 1 FROM reactions t
+              WHERE t.media_id = ${targetMediaId} AND t.user_id = r.user_id AND t.reaction = r.reaction
+            )`;
+        await tx.reaction.deleteMany({ where: { mediaId: sourceMediaId } });
+
+        await tx.$executeRaw`
+          UPDATE custom_list_items i SET media_id = ${targetMediaId}
+          WHERE i.media_id = ${sourceMediaId}
+            AND NOT EXISTS (SELECT 1 FROM custom_list_items t WHERE t.media_id = ${targetMediaId} AND t.list_id = i.list_id)`;
+        await tx.customListItem.deleteMany({ where: { mediaId: sourceMediaId } });
+
+        await tx.comment.updateMany({
+          where: { mediaId: sourceMediaId, mediaType: MediaType.MOVIE },
+          data: { mediaId: targetMediaId, threadId: targetMediaId },
+        });
+        await tx.externalReview.updateMany({
+          where: { mediaId: sourceMediaId },
+          data: { mediaId: targetMediaId },
+        });
+
+        await tx.mediaItem.delete({ where: { id: sourceMediaId } });
+      },
+      { timeout: 60_000 },
+    );
+    this.logger.log(`Merged duplicate movie ${sourceMediaId} into ${targetMediaId}`);
   }
 
   // ---- Structural type mismatch repair (admin button) ----
