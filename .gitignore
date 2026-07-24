@@ -5,6 +5,9 @@ dist/
 build/
 screenshots/
 .kilo/
+.kimi-code/
+.rtk/
+CLAUDE.md
 *.tsbuildinfo
 app-web/
 .env

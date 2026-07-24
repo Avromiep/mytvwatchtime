@@ -18,10 +18,7 @@
       "distribution": "internal"
     },
     "production": {
-      "autoIncrement": true,
-      "cache": {
-        "key": "v7"
-      }
+      "autoIncrement": true
     }
   },
   "submit": {

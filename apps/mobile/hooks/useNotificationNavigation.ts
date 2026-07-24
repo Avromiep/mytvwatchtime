@@ -42,7 +42,7 @@ function isDuplicateTarget(target: string) {
 export function useNotificationNavigation() {
   useEffect(() => {
     if (Platform.OS === 'web') return;
-    const open = (response: Notifications.NotificationResponse | null) => {
+    const open = (response: Notifications.NotificationResponse | null, delayMs = 0) => {
       if (!response) return;
       const data = response.notification.request.content.data as
         Record<string, unknown> | undefined;
@@ -68,16 +68,18 @@ export function useNotificationNavigation() {
           target: data.actionTarget as AnnouncementTarget,
           params: actionParams,
         };
-        runAnnouncementAction(action);
+        setTimeout(() => runAnnouncementAction(action), delayMs);
         return;
       }
 
       // Legacy link / deep-link field.
-      navigateFromLink(link);
+      setTimeout(() => navigateFromLink(link), delayMs);
     };
     const sub = Notifications.addNotificationResponseReceivedListener(open);
     Notifications.getLastNotificationResponseAsync()
-      .then(open)
+      // Cold-start taps can arrive before Expo Router's initial index redirect
+      // finishes; delay just this path so it doesn't get replaced by home.
+      .then((response) => open(response, 1200))
       .catch(() => undefined);
     return () => sub.remove();
   }, []);

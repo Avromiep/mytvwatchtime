@@ -1,0 +1,23 @@
+# Push Delivery — Registration, Timing & Timezones
+
+Deep operational reference for mobile push internals. Relocated from `AGENTS.md`.
+Summaries: `docs/NOTIFICATIONS.md`, `docs/DOCUMENTATION.md` §12 and §23.
+Read this file BEFORE touching push registration, scheduling, or notification navigation handling.
+
+## Non-negotiable invariants
+- Register notification-tap handling exactly once at the app root; never add a second response listener.
+- Compute delivery dates and catch-up behavior in the user's IANA timezone with DST-safe helpers.
+- Device registration must continue updating timezone data for existing mobile and web subscriptions.
+- Keep registration, tap navigation, and delivery scheduling as separate responsibilities.
+
+## Registration & tap handling
+- `usePushNotifications(enabled)` hook in `apps/mobile/hooks/usePushNotifications.ts` (registration only — notification TAP handling lives exclusively in `useNotificationNavigation` at the app root; never add a second response listener, duplicate pushes result).
+- Called from `(tabs)/_layout.tsx` with `enabled = !!user`.
+
+## Delivery modes
+- Expo Go: works via Expo Push API with `EXPO_ACCESS_TOKEN`.
+- Dev build: requires Firebase `google-services.json` in `android/app/` + gradle plugins in both `build.gradle` files.
+- Self-hosted: `PUSH_MODE=relay` sends through public server's `/api/push/relay` endpoint.
+
+## Episode notification timing (per-user timezone spread)
+- Episode notifications spread across afternoon (noon→3pm→4pm...), computed **per user in their device timezone** (devices register with `timezone` from `Intl.DateTimeFormat().resolvedOptions().timeZone`; latest active device wins, then `NotificationPreference.timezone`, then server tz). "Today" is the user's local day (`common/utils/timezone.util.ts` — Intl-based, DST-safe). Devices re-register on every app start, which also backfills tz for pre-feature users — including WEB (`useWebPush` re-registers even when a PushSubscription already exists; the old early-return left pre-tz web devices at tz=NULL forever). A slot that already passed fires +10min when it's before 21:00 local, and DEFERS to the next day's first spread slot (user tz) at/after 21:00 local (`catchUpPushAt`) — notifications are NEVER skipped and never land as midnight "airs today" pushes (quiet-hours prefs exist but are NOT enforced anywhere).

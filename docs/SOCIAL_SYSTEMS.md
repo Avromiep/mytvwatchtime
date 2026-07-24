@@ -1,0 +1,30 @@
+# Social Systems — Comments, External Reviews, Spoilers, Voting, Account Deletion
+
+Deep operational reference for the social domain. Relocated from `AGENTS.md`.
+Summaries: `docs/DATA_MODEL.md` (voting), `docs/DOCUMENTATION.md` §13 (Comments & Images) and §21 (Data Export & Deletion).
+Read this file BEFORE touching `apps/api/src/social/**`, `apps/api/src/users/**` deletion paths, `apps/mobile/components/voting/**`, or comment/review UI.
+
+## Non-negotiable invariants
+- Never delete a user row directly; use the anonymize-and-delete helper so comments and counters remain consistent.
+- Character votes are keyed by `media_cast.id`/`cast_id`, never by character name.
+- Voting percentages come from real aggregates and remain hidden until the user has voted in that category.
+- Replies to comments or external reviews stay out of the top-level feed.
+- Preserve localization, spoiler shielding, and profile-navigation restrictions for deleted users.
+
+## External reviews (TMDB reviews as first-class thread roots)
+- TMDB reviews: page-1 `reviews` from the hydration append is persisted to `external_reviews` (replace-per-target, `ExternalReviewsService.syncMediaReviews` in `persistShow/persistMovie`; TVDB hydrations carry none and are skipped). Targets synced before reviews existed are lazily backfilled when a comments thread opens (`reviewsSyncedAt` on MediaItem/Episode; never-synced → ONE light standalone fetch inline — `/movie|tv/{id}/reviews` or `/tv/{id}/season/{s}/episode/{e}/reviews`; stale >30d → background refresh; 404 = sync EMPTY, transient = stays unsynced). `GET /social/comments` merges the stored set as `externalReviews` on page 1 for SHOW/MOVIE/EPISODE threads; the mobile feed renders them below user comments with a TMDB badge that opens the canonical review URL (`ExternalReviewCard`). Reviews are first-class thread roots: they merge INTO the main feed as pseudo-comments (`kind='review'`, TMDB badge, pseudo author) sorted with the comments (page-1 merge, capped 10). Users like them (`external_review_likes` + denormalized `likesCount`, POST/DELETE `/social/external-reviews/:id/like`) and open a full thread page (`/review/[id]` mobile route; header = `GET /social/external-reviews/:id` with thread target + likedByMe). Users reply via `Comment.externalReviewId` (FK; alternative to `parentId`, validated on create) — review replies are EXCLUDED from the top-level feed (`externalReviewId: null` in the list query) exactly like comment replies, `GET /social/external-reviews/:id/replies` lists them, nested replies use `parentId` normally.
+
+## Comment spoilers
+- Comment spoilers: `Comment.isSpoiler` + `Comment.spoilerCount` + `comment_spoiler_reports` (one row per user+comment). Community flagging via `POST /social/comments/:id/spoiler-report` (idempotent, no self-reports); `isSpoiler` flips at `COMMENT_SPOILER_THRESHOLD = 5` (shared constant in `packages/shared/src/social.ts`). Authors self-mark at creation (`isSpoiler` on the create DTO; composer eye-off toggle). Imported spoiler state comes from TV Time `is_spoiler`/`spoiler_count` columns. The DTO carries `isSpoiler`/`spoilerCount`/`spoilerReportedByMe`; mobile `CommentCard` censors spoiler comments behind a "view anyway" cover (per-card session state, body + attachments hidden).
+
+## Episode interaction voting (IMPORTANT)
+- Four categories on watched episodes: **device** / **rating** / **reaction** (multi-select) / **character** (single-select). Writes are upsert-style — one active vote per user+episode+category, except reactions which toggle on/off (`reactions` table, one row per user+episode+reaction).
+- **Character vote is keyed by `cast_id`** (FK → `media_cast.id`). NEVER key it by character name (breaks on duplicate names, multi-role actors, renames). The cast DTO exposes `creditId` = `media_cast.id` for this.
+- **Percentages are hidden until the user votes** in that category (`reveal = userVote != null` / `userVotes.length > 0`). Once voted, every option's percentage shows; returning voters see them immediately. Percentages come from **real aggregates** (never hardcoded). Single-select categories use largest-remainder (sum to 100); multi-select reactions use independent rounding.
+- Client state: `useEpisodeVotes` runs four independent optimistic mutations, each on its own slice of the `['episode', id]` cache (sections never overwrite each other), with rollback on error and server reconcile on success. Do NOT invalidate/refetch the whole episode on a vote.
+- Reusable components live in `apps/mobile/components/voting/`; the math is in `packages/shared/src/vote-math.ts` (shared by API + mobile).
+
+## Account deletion (anonymize-and-delete)
+- Both paths (`DataDeletionService.confirmDeletion`, `UsersService.deleteMe`) call `anonymizeAndDeleteUser` (`apps/api/src/users/lib/deleted-user.ts`): the user's COMMENTS are reassigned to ONE deterministic system account (`deleted-user@system.local` / username `deleted-user`) and everything else cascades away as before. Reassigning first also fixes the `comments.parent_id` NoAction FK failure that made deletion fail for users whose comments had replies. Denormalized `likesCount`/`spoilerCount` on surviving comments are decremented for the deleted user's cascaded likes/reports. Never delete a user row directly — use the helper.
+- Clients render the system account via `PublicUserDto.isDeletedUser` (set in `mapPublicUser`): localized `common:deletedUser` label (shared `authorDisplayName` in mobile `components/comments/thread-utils.ts`), no profile navigation, no avatar. The username `deleted-user` is reserved at registration and profile update (`RESERVED_USERNAMES`).
+- RECLAIM: if the same person re-registers and re-imports, `applyComments` returns their comments — a staged OWNER-authored candidate whose (source, sourceKey) exists under the deleted-user account is reassigned to the importing user instead of dedupe-skipped (guarded by `userId` in the update; third-party/shadow candidates never reclaim; no audit rows so rollback can't delete the pre-existing comments).

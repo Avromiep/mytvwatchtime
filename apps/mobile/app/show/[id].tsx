@@ -118,7 +118,7 @@ export default function ShowDetailScreen() {
             </Pressable>
           </View>
 
-          {show.interactions?.rating ? (
+          {show.inWatchlist && (show.userProgress ?? 0) > 0 && show.interactions?.rating ? (
             <View style={{ marginTop: spacing.lg }}>
               <VotingSection title={t('showDetail:rateShow')}>
                 <StarRatingControl
