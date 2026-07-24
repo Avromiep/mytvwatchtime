@@ -81,7 +81,7 @@ const STAT_HINTS: Record<string, string> = {
   multiTvdbIds:
     'Rows carrying more than one TVDB id — merge leftovers (harmless) or id poisoning from an old bug (one id belongs to a DIFFERENT show, mis-routing matches). Repair verifies each id via TMDB and detaches only the wrong ones. User history is never deleted.',
   providerDuplicateMovies:
-    'Movie rows that have TVDB/IMDB ids but no TMDB id. Repair verifies the TVDB/IMDB id through TMDB /find; when it resolves to an existing TMDB movie row, it moves user data and external ids to that canonical row and deletes the duplicate. No title guessing.',
+    'Movie rows that have TVDB/IMDB ids but no TMDB id. Repair verifies the TVDB/IMDB id through TMDB /find; when TMDB /find is wrong or missing, it only falls back to a local TMDB movie with the same normalized title, release year, overview, and compatible runtime. Ambiguous matches are skipped.',
   nonEnglishBase:
     "Rows explicitly marked as having a non-English base title (title_locale ≠ en). Repair re-hydrates them with a proper English base and restores the 'en' override. Rows that just failed are parked for 24h so repeated runs keep advancing. Rows with an unset marker are NOT counted (most have a fine English base already). No user data touched.",
   nonEnglishContent:

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -133,6 +134,7 @@ export class AdminController {
       .then((res) =>
         console.log(
           `[Provider duplicates] DONE: ${res.merged} merged, ${res.skipped} skipped, ${res.failed} failed, ${res.rateLimited} rate-limited`,
+          Object.keys(res.skipReasons).length ? JSON.stringify(res.skipReasons) : '',
           res.sample.length ? JSON.stringify(res.sample) : '',
         ),
       )
@@ -142,6 +144,25 @@ export class AdminController {
     return {
       message: `Provider duplicate repair started (${n ?? 200} rows max). Check API logs for the report.`,
     };
+  }
+
+  @Post('repair-provider-duplicate-comments/run')
+  @RequireRoles('ADMIN')
+  runRepairProviderDuplicateComments(
+    @Query('source') source?: string,
+    @Query('target') target?: string,
+  ) {
+    if (!source || !target || source === target) {
+      throw new BadRequestException('source and target media ids are required and must differ');
+    }
+    return this.metadataBackfill.repairMergedMovieThreadComments(source, target);
+  }
+
+  @Post('repair-movie-thread-self-attachments/run')
+  @RequireRoles('ADMIN')
+  runRepairMovieThreadSelfAttachments(@Query('target') target?: string) {
+    if (!target) throw new BadRequestException('target media id is required');
+    return this.metadataBackfill.clearMovieThreadSelfAttachments(target);
   }
 
   @Post('repair-non-english-base/run')

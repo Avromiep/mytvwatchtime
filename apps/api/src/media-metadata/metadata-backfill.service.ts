@@ -1016,6 +1016,7 @@ export class MetadataBackfillService {
     skipped: number;
     failed: number;
     rateLimited: number;
+    skipReasons: Record<string, number>;
     sample: string[];
   }> {
     const empty = {
@@ -1024,6 +1025,7 @@ export class MetadataBackfillService {
       skipped: 0,
       failed: 0,
       rateLimited: 0,
+      skipReasons: {} as Record<string, number>,
       sample: [] as string[],
     };
     if (this.providerDuplicateRepairRunning) {
@@ -1064,6 +1066,10 @@ export class MetadataBackfillService {
       let skipped = 0;
       let failed = 0;
       let rateLimited = 0;
+      const skipReasons = new Map<string, number>();
+      const recordSkipReason = (reason: string) => {
+        skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
+      };
       const sample: string[] = [];
       for (let i = 0; i < candidates.length; i++) {
         const c = candidates[i];
@@ -1074,12 +1080,15 @@ export class MetadataBackfillService {
           current: c.title,
         });
         try {
-          const targetId = await this.resolveProviderDuplicateMovieTarget(c);
-          if (!targetId || targetId === c.id) {
+          const resolution = await this.resolveProviderDuplicateMovieTarget(c);
+          if (!resolution.targetId || resolution.targetId === c.id) {
             skipped++;
+            recordSkipReason(
+              resolution.targetId === c.id ? 'resolved to the same row' : resolution.reason,
+            );
             continue;
           }
-          await this.mergeDuplicateMovieRows(c.id, targetId);
+          await this.mergeDuplicateMovieRows(c.id, resolution.targetId);
           merged++;
           if (sample.length < 5) sample.push(c.title);
         } catch (e) {
@@ -1106,7 +1115,20 @@ export class MetadataBackfillService {
       this.logger.log(
         `Provider duplicate movie repair: ${merged}/${candidates.length} merged, ${skipped} skipped, ${failed} failed, ${rateLimited} rate-limited`,
       );
-      return { processed: candidates.length, merged, skipped, failed, rateLimited, sample };
+      if (skipReasons.size > 0) {
+        this.logger.log(
+          `Provider duplicate movie skip summary: ${JSON.stringify(Object.fromEntries(skipReasons))}`,
+        );
+      }
+      return {
+        processed: candidates.length,
+        merged,
+        skipped,
+        failed,
+        rateLimited,
+        skipReasons: Object.fromEntries(skipReasons),
+        sample,
+      };
     } finally {
       this.providerDuplicateRepairRunning = false;
     }
@@ -1116,8 +1138,8 @@ export class MetadataBackfillService {
     id: string;
     tvdbId: string | null;
     imdbId: string | null;
-  }): Promise<string | null> {
-    if (!this.tmdbProvider.enabled) return null;
+  }): Promise<{ targetId: string | null; reason: string }> {
+    if (!this.tmdbProvider.enabled) return { targetId: null, reason: 'TMDB provider disabled' };
     let tmdbId: number | null = null;
     if (candidate.tvdbId) {
       const found = await this.tmdbProvider.findByExternalIdStrict(candidate.tvdbId, 'tvdb_id');
@@ -1127,7 +1149,9 @@ export class MetadataBackfillService {
       const found = await this.tmdbProvider.findByExternalIdStrict(candidate.imdbId, 'imdb_id');
       tmdbId = found?.movie?.tmdbId ?? null;
     }
-    if (!tmdbId) return null;
+    if (!tmdbId) {
+      return this.resolveProviderDuplicateMovieTargetByMetadata(candidate.id);
+    }
     const target = await this.prisma.externalId.findFirst({
       where: {
         provider: ExternalProvider.TMDB,
@@ -1138,7 +1162,196 @@ export class MetadataBackfillService {
       },
       select: { mediaId: true },
     });
-    return target?.mediaId ?? null;
+    if (!target?.mediaId) return { targetId: null, reason: 'resolved TMDB movie is not local' };
+    return { targetId: target.mediaId, reason: 'matched local TMDB movie' };
+  }
+
+  private async resolveProviderDuplicateMovieTargetByMetadata(
+    sourceMediaId: string,
+  ): Promise<{ targetId: string | null; reason: string }> {
+    const sourceRows = await this.prisma.$queryRaw<
+      {
+        id: string;
+        title: string;
+        overview: string | null;
+        titles: unknown;
+        overviews: unknown;
+        releaseYear: number | null;
+        runtimeMinutes: number | null;
+      }[]
+    >`
+      SELECT m.id,
+             m.title,
+             m.overview,
+             m.titles,
+             m.overviews,
+             mv.release_year AS "releaseYear",
+             mv.runtime_minutes AS "runtimeMinutes"
+      FROM media_items m
+      JOIN movies mv ON mv.media_id = m.id
+      WHERE m.id = ${sourceMediaId}`;
+    const source = sourceRows[0];
+    if (!source) return { targetId: null, reason: 'source row missing' };
+    if (!source.releaseYear) {
+      return { targetId: null, reason: 'metadata fallback missing source release year' };
+    }
+
+    const sourceTitles = this.normalizedDuplicateValues(source.title, source.titles, 2);
+    const sourceOverviews = this.normalizedDuplicateValues(source.overview, source.overviews, 40);
+    if (sourceTitles.size === 0 || sourceOverviews.size === 0) {
+      return { targetId: null, reason: 'metadata fallback missing title or overview' };
+    }
+
+    const candidates = await this.prisma.$queryRaw<
+      {
+        id: string;
+        title: string;
+        overview: string | null;
+        titles: unknown;
+        overviews: unknown;
+        runtimeMinutes: number | null;
+      }[]
+    >`
+      SELECT m.id,
+             m.title,
+             m.overview,
+             m.titles,
+             m.overviews,
+             mv.runtime_minutes AS "runtimeMinutes"
+      FROM media_items m
+      JOIN movies mv ON mv.media_id = m.id
+      WHERE m.type = 'MOVIE'
+        AND m.id != ${sourceMediaId}
+        AND mv.release_year = ${source.releaseYear}
+        AND EXISTS (
+          SELECT 1 FROM external_ids e
+          WHERE e.media_id = m.id
+            AND e.provider = 'TMDB'
+            AND e.provider_entity_kind = 'MOVIE'
+        )`;
+
+    const matches = candidates.filter((candidate) => {
+      const candidateTitles = this.normalizedDuplicateValues(
+        candidate.title,
+        candidate.titles,
+        2,
+      );
+      const candidateOverviews = this.normalizedDuplicateValues(
+        candidate.overview,
+        candidate.overviews,
+        40,
+      );
+      return (
+        this.hasSetIntersection(sourceTitles, candidateTitles) &&
+        this.hasSetIntersection(sourceOverviews, candidateOverviews) &&
+        this.movieRuntimeCompatible(source.runtimeMinutes, candidate.runtimeMinutes)
+      );
+    });
+
+    if (matches.length === 1) {
+      return { targetId: matches[0].id, reason: 'matched local TMDB movie by metadata' };
+    }
+    if (matches.length > 1) {
+      return { targetId: null, reason: 'metadata fallback ambiguous' };
+    }
+    return { targetId: null, reason: 'no local TMDB movie matched by metadata' };
+  }
+
+  private normalizedDuplicateValues(
+    base: string | null | undefined,
+    localized: unknown,
+    minLength: number,
+  ): Set<string> {
+    const values = new Set<string>();
+    const add = (value: unknown) => {
+      if (typeof value !== 'string') return;
+      const normalized = this.normalizeDuplicateText(value);
+      if (normalized.length >= minLength) values.add(normalized);
+    };
+    add(base);
+    if (localized && typeof localized === 'object') {
+      for (const value of Object.values(localized as Record<string, unknown>)) add(value);
+    }
+    return values;
+  }
+
+  private normalizeDuplicateText(value: string): string {
+    return value
+      .normalize('NFKD')
+      .replace(/\p{Mark}/gu, '')
+      .toLowerCase()
+      .replace(/[‘’]/g, "'")
+      .replace(/[“”]/g, '"')
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .trim()
+      .replace(/\s+/g, ' ');
+  }
+
+  private hasSetIntersection(a: Set<string>, b: Set<string>): boolean {
+    for (const value of a) if (b.has(value)) return true;
+    return false;
+  }
+
+  private movieRuntimeCompatible(a: number | null, b: number | null): boolean {
+    if (a == null || b == null) return true;
+    return Math.abs(a - b) <= 2;
+  }
+
+  async repairMergedMovieThreadComments(
+    sourceMediaId: string,
+    targetMediaId: string,
+  ): Promise<{ comments: number; externalReviews: number }> {
+    if (!sourceMediaId || !targetMediaId || sourceMediaId === targetMediaId) {
+      throw new Error('source and target media ids are required and must differ');
+    }
+    const target = await this.prisma.mediaItem.findUnique({
+      where: { id: targetMediaId },
+      select: { type: true },
+    });
+    if (!target || target.type !== MediaType.MOVIE) {
+      throw new Error('target media row must be an existing movie');
+    }
+    const [threadComments, attachedComments, externalReviews] = await this.prisma.$transaction([
+      this.prisma.comment.updateMany({
+        where: { threadType: 'MOVIE', threadId: sourceMediaId },
+        data: { threadId: targetMediaId },
+      }),
+      this.prisma.comment.updateMany({
+        where: { mediaType: MediaType.MOVIE, mediaId: sourceMediaId },
+        data: { mediaId: targetMediaId },
+      }),
+      this.prisma.externalReview.updateMany({
+        where: { mediaId: sourceMediaId },
+        data: { mediaId: targetMediaId },
+      }),
+    ]);
+    const comments = threadComments.count + attachedComments.count;
+    this.logger.log(
+      `Repointed ${comments} movie comments and ${externalReviews.count} external reviews from ${sourceMediaId} to ${targetMediaId}`,
+    );
+    return { comments, externalReviews: externalReviews.count };
+  }
+
+  async clearMovieThreadSelfAttachments(targetMediaId: string): Promise<{ comments: number }> {
+    if (!targetMediaId) throw new Error('target media id is required');
+    const target = await this.prisma.mediaItem.findUnique({
+      where: { id: targetMediaId },
+      select: { type: true },
+    });
+    if (!target || target.type !== MediaType.MOVIE) {
+      throw new Error('target media row must be an existing movie');
+    }
+    const res = await this.prisma.comment.updateMany({
+      where: {
+        threadType: 'MOVIE',
+        threadId: targetMediaId,
+        mediaType: MediaType.MOVIE,
+        mediaId: targetMediaId,
+      },
+      data: { mediaType: null, mediaId: null },
+    });
+    this.logger.log(`Cleared ${res.count} self-attachments from movie thread ${targetMediaId}`);
+    return { comments: res.count };
   }
 
   private async mergeDuplicateMovieRows(sourceMediaId: string, targetMediaId: string): Promise<void> {
@@ -1209,11 +1422,40 @@ export class MetadataBackfillService {
         await tx.favorite.deleteMany({ where: { mediaId: sourceMediaId } });
 
         await tx.$executeRaw`
+          UPDATE ratings t
+          SET rating = s.rating,
+              source = s.source,
+              source_key = s.source_key,
+              created_at = LEAST(t.created_at, s.created_at),
+              updated_at = GREATEST(t.updated_at, s.updated_at)
+          FROM ratings s
+          WHERE s.media_id = ${sourceMediaId}
+            AND t.media_id = ${targetMediaId}
+            AND t.user_id = s.user_id
+            AND s.updated_at > t.updated_at`;
+        await tx.$executeRaw`
           UPDATE ratings r SET media_id = ${targetMediaId}
           WHERE r.media_id = ${sourceMediaId}
             AND NOT EXISTS (SELECT 1 FROM ratings t WHERE t.media_id = ${targetMediaId} AND t.user_id = r.user_id)`;
         await tx.rating.deleteMany({ where: { mediaId: sourceMediaId } });
 
+        await tx.$executeRaw`
+          UPDATE reactions t
+          SET source = CASE
+                WHEN COALESCE(s.updated_at, s.created_at) > COALESCE(t.updated_at, t.created_at)
+                THEN s.source ELSE t.source END,
+              source_key = CASE
+                WHEN COALESCE(s.updated_at, s.created_at) > COALESCE(t.updated_at, t.created_at)
+                THEN s.source_key ELSE t.source_key END,
+              updated_at = GREATEST(
+                COALESCE(t.updated_at, t.created_at),
+                COALESCE(s.updated_at, s.created_at)
+              )
+          FROM reactions s
+          WHERE s.media_id = ${sourceMediaId}
+            AND t.media_id = ${targetMediaId}
+            AND t.user_id = s.user_id
+            AND t.reaction = s.reaction`;
         await tx.$executeRaw`
           UPDATE reactions r SET media_id = ${targetMediaId}
           WHERE r.media_id = ${sourceMediaId}
@@ -1230,8 +1472,12 @@ export class MetadataBackfillService {
         await tx.customListItem.deleteMany({ where: { mediaId: sourceMediaId } });
 
         await tx.comment.updateMany({
-          where: { mediaId: sourceMediaId, mediaType: MediaType.MOVIE },
-          data: { mediaId: targetMediaId, threadId: targetMediaId },
+          where: { threadType: 'MOVIE', threadId: sourceMediaId },
+          data: { threadId: targetMediaId },
+        });
+        await tx.comment.updateMany({
+          where: { mediaType: MediaType.MOVIE, mediaId: sourceMediaId },
+          data: { mediaId: targetMediaId },
         });
         await tx.externalReview.updateMany({
           where: { mediaId: sourceMediaId },
