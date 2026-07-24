@@ -2323,7 +2323,7 @@ export class MetadataBackfillService {
       (e) => e.provider === 'TMDB' && e.providerEntityKind !== 'EPISODE',
     );
     const tvdbExt = m.externalIds.find((e) => e.provider === 'THE_TVDB');
-    if (this.isAnimeMedia(m)) {
+    if (m.type === 'SHOW' && this.isAnimeMedia(m)) {
       if (tvdbExt) {
         await this.meta.ensureShowFullTvdb(Number(tvdbExt.value));
       } else {
@@ -2395,10 +2395,22 @@ export class MetadataBackfillService {
     }
     const tvdbExt = m.externalIds.find((e) => e.provider === 'THE_TVDB');
     if (tvdbExt && this.tvdb.enabled) {
-      const base =
-        m.type === 'SHOW'
-          ? await this.tvdb.localizedShowBase(Number(tvdbExt.value), 'eng')
-          : await this.tvdb.localizedMovieBase(Number(tvdbExt.value), 'eng');
+      let base: { title?: string | null; overview?: string | null } | null | undefined;
+      try {
+        base =
+          m.type === 'SHOW'
+            ? await this.tvdb.localizedShowBase(Number(tvdbExt.value), 'eng')
+            : await this.tvdb.localizedMovieBase(Number(tvdbExt.value), 'eng');
+      } catch (e) {
+        // TVDB sometimes has English in the extended meta=translations payload even when
+        // the standalone /translations/eng endpoint 404s. Do not park those rows as
+        // unfixable; fall back to the full English-normalized mapper.
+        if (!this.isNotFoundError(e)) throw e;
+        base =
+          m.type === 'SHOW'
+            ? await this.tvdb.getShow(Number(tvdbExt.value), 'en')
+            : await this.tvdb.getMovie(Number(tvdbExt.value), 'en');
+      }
       const title = base?.title?.trim();
       return title ? { title, overview: base?.overview?.trim() || '' } : null;
     }
@@ -2790,6 +2802,64 @@ export class MetadataBackfillService {
     } finally {
       this.enContentFixRunning = false;
     }
+  }
+
+  async repairOneEnglishContent(mediaId: string): Promise<{ fixed: boolean; reason?: string }> {
+    const m = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      select: {
+        id: true,
+        title: true,
+        titles: true,
+        overview: true,
+        overviews: true,
+        type: true,
+        contentClassification: true,
+        show: { select: { keywords: true } },
+        movie: { select: { keywords: true } },
+        externalIds: { select: { provider: true, value: true, providerEntityKind: true } },
+        genres: { select: { genre: { select: { slug: true, name: true } } } },
+      },
+    });
+    if (!m) throw new Error('media not found');
+    const providerBase = await this.resolveProviderEnglishBase(m);
+    if (!providerBase) {
+      await this.stampEnglishContentRepairFailure(mediaId, 'no provider English base').catch(
+        () => undefined,
+      );
+      return { fixed: false, reason: 'no provider English base' };
+    }
+    await this.forceEnglishRehydrate(m);
+    const refreshedEp = (await this.getEpisodeContentStats([mediaId])).get(mediaId) ?? {
+      fingerprint: '',
+      hasSuspect: false,
+    };
+    const refreshedContent = await this.readEnglishVisibleContent(mediaId, providerBase);
+    const titleMatches =
+      this.normTitleForCompare(providerBase.title) ===
+      this.normTitleForCompare(refreshedContent.title);
+    const overviewMatches =
+      !refreshedContent.overview ||
+      (!!providerBase.overview &&
+        this.normTitleForCompare(providerBase.overview) ===
+          this.normTitleForCompare(refreshedContent.overview));
+    const stillWrongReasons = [
+      !titleMatches ? 'title still differs after rehydrate' : null,
+      !overviewMatches ? 'overview still differs after rehydrate' : null,
+      refreshedEp.hasSuspect ? 'episode text still suspicious after rehydrate' : null,
+    ].filter(Boolean) as string[];
+    if (stillWrongReasons.length) {
+      const reason = stillWrongReasons.join('; ');
+      await this.stampEnglishContentRepairFailure(mediaId, reason).catch(() => undefined);
+      return { fixed: false, reason };
+    }
+    await this.stampEnglishContentVerified(
+      mediaId,
+      refreshedContent.title,
+      refreshedContent.overview,
+      refreshedEp.fingerprint,
+    );
+    return { fixed: true };
   }
 
   // ---- TVDB banner-as-poster rows (legacy of the swapped series artwork mapping) ----

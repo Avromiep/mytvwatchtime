@@ -13,15 +13,34 @@ import { runAnnouncementAction, navigateFromLink } from '../lib/announcement';
 // response persists until a newer one arrives), and the app must have exactly ONE
 // tap handler (a second listener elsewhere once pushed every route twice).
 const handledResponses = new Set<string>();
+let lastHandledTarget: { target: string; at: number } | null = null;
+
+function parseActionParams(value: unknown): AnnouncementActionParams | undefined {
+  if (!value) return undefined;
+  if (typeof value === 'object') return value as AnnouncementActionParams;
+  if (typeof value !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? (parsed as AnnouncementActionParams) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isDuplicateTarget(target: string) {
+  const now = Date.now();
+  if (lastHandledTarget?.target === target && now - lastHandledTarget.at < 1500) return true;
+  lastHandledTarget = { target, at: now };
+  return false;
+}
 
 /**
  * Listens for push-notification taps and navigates to the configured action
  * (whitelisted target) or a legacy `link`/deep-link. Registered once at the root —
  * warm taps via the listener, cold starts via the last queued response.
  */
-export function useNotificationNavigation(enabled: boolean = true) {
+export function useNotificationNavigation() {
   useEffect(() => {
-    if (!enabled) return;
     if (Platform.OS === 'web') return;
     const open = (response: Notifications.NotificationResponse | null) => {
       if (!response) return;
@@ -31,10 +50,14 @@ export function useNotificationNavigation(enabled: boolean = true) {
       const hasAction = !!data.actionTarget && data.actionTarget !== 'none';
       const link = typeof data.link === 'string' ? data.link : null;
       if (!hasAction && !link) return;
-      const key = `${response.notification.request.identifier}:${response.notification.date}:${
-        hasAction ? `action:${String(data.actionTarget)}` : link
-      }`;
+
+      const actionParams = parseActionParams(data.actionParams);
+      const target = hasAction
+        ? `action:${String(data.actionTarget)}:${JSON.stringify(actionParams ?? {})}`
+        : `link:${link}`;
+      const key = `${response.notification.request.identifier}:${response.notification.date}:${target}`;
       if (handledResponses.has(key)) return;
+      if (isDuplicateTarget(target)) return;
       if (handledResponses.size > 100) handledResponses.clear();
       handledResponses.add(key);
 
@@ -43,7 +66,7 @@ export function useNotificationNavigation(enabled: boolean = true) {
         const action: AnnouncementAction = {
           type: (data.actionType as AnnouncementAction['type']) || 'navigate',
           target: data.actionTarget as AnnouncementTarget,
-          params: data.actionParams as AnnouncementActionParams | undefined,
+          params: actionParams,
         };
         runAnnouncementAction(action);
         return;
@@ -57,5 +80,5 @@ export function useNotificationNavigation(enabled: boolean = true) {
       .then(open)
       .catch(() => undefined);
     return () => sub.remove();
-  }, [enabled]);
+  }, []);
 }

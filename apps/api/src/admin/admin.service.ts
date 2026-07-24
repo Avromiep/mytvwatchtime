@@ -306,12 +306,22 @@ export class AdminService {
     return updated;
   }
 
-  async sendTestPush(adminId: string, userId: string) {
+  async sendTestPush(adminId: string, userId: string, dto?: { movieId?: string }) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { username: true },
     });
     if (!user) throw new NotFoundException('User not found');
+
+    const movieId = dto?.movieId?.trim();
+    const movie = movieId
+      ? await this.prisma.mediaItem.findFirst({
+          where: { id: movieId, type: 'MOVIE' },
+          select: { id: true, title: true },
+        })
+      : null;
+    if (movieId && !movie) throw new NotFoundException('Movie not found');
+
     const devices = await this.prisma.device.findMany({ where: { userId, active: true } });
     if (devices.length === 0) return { sent: false, devices: 0 };
 
@@ -331,9 +341,13 @@ export class AdminService {
       body: JSON.stringify(
         tokens.map((to) => ({
           to,
-          title: '🔔 Test Notification',
-          body: `This is a test push from admin for ${user.username}`,
-          data: { type: 'admin_test' },
+          title: movie ? 'Test Movie Notification' : '🔔 Test Notification',
+          body: movie
+            ? `Tap to open ${movie.title}`
+            : `This is a test push from admin for ${user.username}`,
+          data: movie
+            ? { type: 'admin_test', link: `tvwatchtime://movie/${movie.id}` }
+            : { type: 'admin_test' },
           sound: 'default',
         })),
       ),
@@ -342,8 +356,9 @@ export class AdminService {
     await this.audit(adminId, 'test_push', 'user', userId, {
       devices: tokens.length,
       success: res.ok,
+      movieId: movie?.id,
     });
-    return { sent: res.ok, devices: tokens.length };
+    return { sent: res.ok, devices: tokens.length, movie };
   }
 
   // ---------------- Hydration Jobs ----------------

@@ -15,6 +15,7 @@ export default function UserDetailPage() {
   const [selectedRole, setSelectedRole] = useState('');
   const [sendingPush, setSendingPush] = useState(false);
   const [pushResult, setPushResult] = useState<string | null>(null);
+  const [testPushMovieId, setTestPushMovieId] = useState('cmryhomulfp32zso7if72qw9y');
 
   useEffect(() => { if (id) api.get(`/admin/users/${id}`).then((r) => { setUser(r.data); setSelectedRole(r.data.role); }); }, [id]);
 
@@ -33,8 +34,13 @@ export default function UserDetailPage() {
     setSendingPush(true);
     setPushResult(null);
     try {
-      const res = await api.post(`/admin/users/${id}/test-push`);
-      setPushResult(res.data?.sent ? `Push sent to ${res.data.devices} device(s)` : 'No registered devices');
+      const movieId = testPushMovieId.trim();
+      const res = await api.post(`/admin/users/${id}/test-push`, movieId ? { movieId } : {});
+      setPushResult(
+        res.data?.sent
+          ? `Push sent to ${res.data.devices} device(s)${res.data.movie?.title ? ` for ${res.data.movie.title}` : ''}`
+          : 'No registered devices',
+      );
     } catch (e: any) {
       setPushResult(e?.response?.data?.message || 'Push failed');
     } finally {
@@ -113,6 +119,12 @@ export default function UserDetailPage() {
           {/* Test push */}
           {me?.role === 'ADMIN' || me?.role === 'SUPER_ADMIN' ? (
             <div className="border-t border-border pt-3 mt-3">
+              <input
+                value={testPushMovieId}
+                onChange={(e) => setTestPushMovieId(e.target.value)}
+                placeholder="Optional movie media id"
+                className="mb-2 w-full px-3 py-2 bg-surface-alt rounded-lg border border-border text-white text-sm"
+              />
               <button
                 onClick={sendTestPush}
                 disabled={sendingPush}

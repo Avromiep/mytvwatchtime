@@ -34,14 +34,10 @@ function Gate() {
   const router = useRouter();
   const segmentsRef = useRef(segments);
   segmentsRef.current = segments;
-  const inAuthGroup = segments[0] === '(auth)';
   const needsPasswordChange = !!user?.mustChangePassword;
-  const notificationNavigationReady =
-    !loading && !!user && !needsPasswordChange && segments.length > 0 && !inAuthGroup;
 
-  // Navigate on push-notification tap once auth/root redirects have settled. Handling
-  // earlier can be replaced by the login/tabs redirect during cold starts.
-  useNotificationNavigation(notificationNavigationReady);
+  // Navigate on push-notification tap (whitelisted action or legacy deep link).
+  useNotificationNavigation();
 
   // Register service worker on web (for PWA + push notifications)
   useEffect(() => {

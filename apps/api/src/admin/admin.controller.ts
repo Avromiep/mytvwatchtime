@@ -190,6 +190,13 @@ export class AdminController {
     };
   }
 
+  @Post('repair-english-content/one')
+  @RequireRoles('ADMIN')
+  runRepairOneEnglishContent(@Query('mediaId') mediaId?: string) {
+    if (!mediaId) throw new BadRequestException('mediaId is required');
+    return this.metadataBackfill.repairOneEnglishContent(mediaId);
+  }
+
   @Post('repair-banner-posters/run')
   @RequireRoles('ADMIN')
   runRepairBannerPosters(@Query('count') count?: string) {
@@ -272,8 +279,12 @@ export class AdminController {
 
   @Post('users/:id/test-push')
   @RequireRoles('ADMIN')
-  testPush(@CurrentUser('id') adminId: string, @Param('id') id: string) {
-    return this.admin.sendTestPush(adminId, id);
+  testPush(
+    @CurrentUser('id') adminId: string,
+    @Param('id') id: string,
+    @Body() body: { movieId?: string },
+  ) {
+    return this.admin.sendTestPush(adminId, id, body);
   }
 
   // ---------------- Admins ----------------
