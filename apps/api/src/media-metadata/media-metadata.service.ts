@@ -1761,30 +1761,58 @@ export class MediaMetadataService {
     // Preserve other locales' characters: read existing JSON before recreating rows.
     const existing = await tx.mediaCast.findMany({
       where: { mediaId },
-      select: { castMemberId: true, characters: true },
+      select: { id: true, castMemberId: true, characters: true, characterExternalId: true },
     });
-    const existingMap = new Map(existing.map((c) => [c.castMemberId, c.characters as any]));
-    await tx.mediaCast.deleteMany({ where: { mediaId } });
+    const existingMap = new Map(existing.map((c) => [c.castMemberId, c]));
+    const retainedIds: string[] = [];
     for (let i = 0; i < castMemberIds.length; i++) {
       const id = castMemberIds[i];
       const c = cast[i];
+      const prev = existingMap.get(id);
       const enChar = enCast?.find(
         (e) => e.tmdbPersonId != null && e.tmdbPersonId === c?.tmdbPersonId,
       )?.character;
-      const characters = mergeLocalized(existingMap.get(id) ?? null, lang, c?.character, enChar);
-      await tx.mediaCast.create({
-        data: {
-          mediaId,
-          castMemberId: id,
-          character: enChar ?? c?.character ?? null,
-          characters,
-          sortOrder: c?.order ?? i,
-          // TVDB character id of the role (null for TMDB-hydrated casts) — enables
-          // local resolution of TVTime character votes without provider calls.
-          characterExternalId: c?.characterExternalId ?? null,
-        },
-      });
+      const prevCharacters =
+        prev?.characters && typeof prev.characters === 'object' && !Array.isArray(prev.characters)
+          ? (prev.characters as Record<string, string>)
+          : null;
+      const characters = mergeLocalized(prevCharacters, lang, c?.character, enChar);
+      const data = {
+        character: enChar ?? c?.character ?? null,
+        characters,
+        sortOrder: c?.order ?? i,
+        // Keep TVDB role ids when a later TMDB refresh lacks them; imported TV Time
+        // character votes depend on this local key.
+        characterExternalId: c?.characterExternalId ?? prev?.characterExternalId ?? null,
+      };
+      if (prev) {
+        await tx.mediaCast.update({
+          where: { id: prev.id },
+          data,
+        });
+        retainedIds.push(prev.id);
+      } else {
+        const created = await tx.mediaCast.create({
+          data: {
+            mediaId,
+            castMemberId: id,
+            ...data,
+          },
+          select: { id: true },
+        });
+        retainedIds.push(created.id);
+      }
     }
+    // Delete stale cast rows only when no character votes point at them. Votes use
+    // media_cast.id as the stable option key, so deleting voted rows would cascade-delete
+    // imported/manual character votes.
+    await tx.mediaCast.deleteMany({
+      where: {
+        mediaId,
+        ...(retainedIds.length ? { id: { notIn: retainedIds } } : {}),
+        characterVotes: { none: {} },
+      },
+    });
   }
 }
 

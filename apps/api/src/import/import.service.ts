@@ -1563,7 +1563,7 @@ export class ImportService {
     const voteItems = items.filter(
       (it) =>
         it.sourceEntityType === 'EPISODE_CHARACTER_VOTE' &&
-        it.status === 'MATCHED' &&
+        (it.status === 'MATCHED' || it.status === 'PENDING_MATCH') &&
         it.matchedEpisodeId &&
         it.matchedMediaId,
     );

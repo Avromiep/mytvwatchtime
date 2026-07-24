@@ -218,7 +218,17 @@ export class ShowsService {
       charTotal += g._count._all;
     }
 
-    const cast = (media.cast ?? [])
+    const baseCastRows = media.cast ?? [];
+    const baseCastIds = new Set(baseCastRows.map((c: any) => c.id));
+    const votedCastIds = voteGroups.map((g) => g.castId).filter((id) => !baseCastIds.has(id));
+    const votedCastRows = votedCastIds.length
+      ? await this.prisma.mediaCast.findMany({
+          where: { id: { in: votedCastIds }, mediaId: media.id },
+          include: { castMember: true },
+        })
+      : [];
+
+    const cast = [...baseCastRows, ...votedCastRows]
       .map((c: any) => ({
         id: c.castMember.id,
         // Stable per-show credit identifier (MediaCast id) used for favorite voting.
