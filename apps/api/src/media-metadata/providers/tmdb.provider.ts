@@ -494,11 +494,18 @@ export class TmdbProvider {
     };
   }
 
-  async getShow(id: number, language?: string): Promise<NormalizedShow> {
+  async getShow(
+    id: number,
+    language?: string,
+    opts?: { skipSeasonDetail?: (seasonNumber: number, episodeCount: number) => boolean },
+  ): Promise<NormalizedShow> {
     // ONE call: base + externals + credits + providers + videos + keywords + translations
     // + reviews + up to 13 seasons appended (TMDB append_to_response caps at 20
     // sub-requests). Seasons beyond the window (or an unappendable season) fall back to
     // the individual season endpoint below — same behavior as before, just fewer calls.
+    // Callers re-hydrating an already-hydrated show can pass skipSeasonDetail to skip
+    // that per-season call for seasons they already store complete (left episode-less
+    // here; the caller filters them out before persisting).
     const seasonAppends = Array.from({ length: 13 }, (_, i) => `season/${i}`).join(',');
     const s = await this.tmdb.get<TmdbShow & Record<string, any>>(
       `/tv/${id}`,
@@ -515,6 +522,12 @@ export class TmdbProvider {
         // Prefer the appended season payload (`season/{n}` key in the same response);
         // fall back to the individual endpoint for seasons outside the appended window.
         const appended = s[`season/${se.number}`] as TmdbSeason | undefined;
+        if (
+          !(appended && Array.isArray(appended.episodes) && appended.episodes.length > 0) &&
+          opts?.skipSeasonDetail?.(se.number, se.episodeCount ?? 0)
+        ) {
+          continue; // caller already stores this season complete — see skipSeasonDetail
+        }
         const detail =
           appended && Array.isArray(appended.episodes) && appended.episodes.length > 0
             ? appended

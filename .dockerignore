@@ -15,7 +15,14 @@ packages/shared/dist
 docs
 production-docs
 gdpr-data*
+db-backup
+data-zips
+ipa-uploader
+public-site
 .kilo
 .kilocode
+.kimi-code
+.playwright-mcp
+.rtk
 .vscode
 *.log

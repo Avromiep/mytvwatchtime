@@ -6,6 +6,7 @@ build/
 screenshots/
 .kilo/
 .kimi-code/
+.playwright-mcp/
 .rtk/
 CLAUDE.md
 *.tsbuildinfo
@@ -27,17 +28,8 @@ apps/admin/.env*
 backups/
 public-site/.env*
 .vscode/
-gdpr-data-rewatch/
-gdpr-data/
-gdpr-data-rewatch/
-gdpr-data-json/
-gdpr-data-tvtime-json/
-gdpr-data2/
-gdpr-data-new/
-gdpr-data-Tv-Time-Out/
-gdpr-data-jjj/
-gdpr-data.zip
-gdpr-data2.zip
+data-zips/
+db-backup/
 fix.ps1
 deploy.ps1
 docs/Docs.zip

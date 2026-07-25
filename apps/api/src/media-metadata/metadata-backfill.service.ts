@@ -351,12 +351,14 @@ export class MetadataBackfillService {
       // Same real movie split across provider rows: a TVDB/IMDB-only movie row can resolve
       // through TMDB /find to a separate TMDB movie row. The repair verifies via provider IDs
       // only (no title guessing), moves user data/external IDs to the TMDB row, then deletes
-      // the duplicate source row.
+      // the duplicate source row. Rows that definitively have no TMDB counterpart (parked
+      // via providerDupNoMatch) are excluded for 180 days so the stat stays actionable.
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
         WHERE m.type='MOVIE'
           AND NOT EXISTS (SELECT 1 FROM external_ids tm WHERE tm.media_id = m.id AND tm.provider = 'TMDB' AND tm.provider_entity_kind = 'MOVIE')
-          AND EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id AND x.provider IN ('THE_TVDB','IMDB') AND x.provider_entity_kind = 'MOVIE')`,
+          AND EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id AND x.provider IN ('THE_TVDB','IMDB') AND x.provider_entity_kind = 'MOVIE')
+          AND COALESCE(m.metadata_provenance #>> '{providerDupNoMatch,at}', '1970-01-01')::timestamptz < NOW() - INTERVAL '180 days'`,
       // Rows EXPLICITLY marked as non-English base (title_locale set and != 'en') — the
       // only cheap SQL signal for wrong-language bases. Rows with an UNSET marker are
       // not counted (most have a fine English base title and just predate the overrides
@@ -845,13 +847,30 @@ export class MetadataBackfillService {
 
     // Stale rows only the TMDB structure has (TMDB episode id, no TVDB one). None →
     // already fully TVDB-structured; nothing to repair.
-    const staleRows = await this.prisma.episode.count({
-      where: {
-        season: { show: { mediaId } },
-        externalIds: { some: { provider: ExternalProvider.TMDB } },
-        NOT: { externalIds: { some: { provider: ExternalProvider.THE_TVDB } } },
-      },
-    });
+    // RAW SQL on purpose: the Prisma equivalent (relation filter + some/NOT-some on
+    // externalIds) compiles to LEFT JOINs with `id IS NOT NULL` guards + IN/NOT IN
+    // subplans — the planner then drives from a FULL seasons scan and materializes
+    // ~1.3M TVDB episode ids to temp (measured 6.7s on prod data, on EVERY anime
+    // detail/episodes view). Correlated EXISTS uses episode_external_ids_episode_id_idx
+    // per candidate row instead — single-digit ms.
+    const staleRows = Number(
+      (
+        await this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c
+        FROM episodes e
+        JOIN seasons s ON s.id = e.season_id
+        JOIN shows sh ON sh.id = s.show_id
+        WHERE sh.media_id = ${mediaId}
+          AND EXISTS (
+            SELECT 1 FROM episode_external_ids x
+            WHERE x.episode_id = e.id AND x.provider = 'TMDB'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM episode_external_ids y
+            WHERE y.episode_id = e.id AND y.provider = 'THE_TVDB'
+          )`
+      )[0]?.c ?? 0,
+    );
     if (staleRows === 0) return notFixed;
 
     const media = await this.prisma.mediaItem.findUnique({
@@ -1020,6 +1039,7 @@ export class MetadataBackfillService {
   async repairProviderDuplicateMovies(limit?: number): Promise<{
     processed: number;
     merged: number;
+    attached: number;
     skipped: number;
     failed: number;
     rateLimited: number;
@@ -1029,6 +1049,7 @@ export class MetadataBackfillService {
     const empty = {
       processed: 0,
       merged: 0,
+      attached: 0,
       skipped: 0,
       failed: 0,
       rateLimited: 0,
@@ -1065,11 +1086,13 @@ export class MetadataBackfillService {
         WHERE m.type = 'MOVIE'
           AND NOT EXISTS (SELECT 1 FROM external_ids tm WHERE tm.media_id = m.id AND tm.provider = 'TMDB' AND tm.provider_entity_kind = 'MOVIE')
           AND EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id AND x.provider IN ('THE_TVDB','IMDB') AND x.provider_entity_kind = 'MOVIE')
+          AND COALESCE(m.metadata_provenance #>> '{providerDupNoMatch,at}', '1970-01-01')::timestamptz < NOW() - INTERVAL '180 days'
         ORDER BY m.added_count DESC, m.created_at ASC
         LIMIT ${take}`;
 
       this.trackRepair('provider-duplicates', { total: candidates.length });
       let merged = 0;
+      let attached = 0;
       let skipped = 0;
       let failed = 0;
       let rateLimited = 0;
@@ -1082,17 +1105,31 @@ export class MetadataBackfillService {
         const c = candidates[i];
         this.trackRepair('provider-duplicates', {
           processed: i + 1,
-          succeeded: merged,
+          succeeded: merged + attached,
           failed,
           current: c.title,
         });
         try {
           const resolution = await this.resolveProviderDuplicateMovieTarget(c);
+          // Verified TMDB id with NO local counterpart: not a duplicate at all — attach
+          // the cross-id to this row (leaves the stat for good) and enrich from TMDB.
+          if (resolution.attachTmdbId) {
+            await this.attachTmdbMovieId(c.id, resolution.attachTmdbId);
+            attached++;
+            if (sample.length < 5) sample.push(`${c.title} (+tmdb ${resolution.attachTmdbId})`);
+            continue;
+          }
           if (!resolution.targetId || resolution.targetId === c.id) {
             skipped++;
             recordSkipReason(
               resolution.targetId === c.id ? 'resolved to the same row' : resolution.reason,
             );
+            // Definitive "nothing to merge into" outcomes are parked for 180 days —
+            // re-attempting them every run only burns provider calls. Ambiguous
+            // matches are NOT parked: new data can disambiguate them.
+            if (resolution.definitive) {
+              await this.stampProviderDupNoMatch(c.id, resolution.reason).catch(() => undefined);
+            }
             continue;
           }
           await this.mergeDuplicateMovieRows(c.id, resolution.targetId);
@@ -1115,12 +1152,12 @@ export class MetadataBackfillService {
       this.trackRepair('provider-duplicates', {
         running: false,
         processed: candidates.length,
-        succeeded: merged,
+        succeeded: merged + attached,
         failed,
         finishedAt: new Date(),
       });
       this.logger.log(
-        `Provider duplicate movie repair: ${merged}/${candidates.length} merged, ${skipped} skipped, ${failed} failed, ${rateLimited} rate-limited`,
+        `Provider duplicate movie repair: ${merged} merged, ${attached} attached, ${skipped} skipped, ${failed} failed, ${rateLimited} rate-limited`,
       );
       if (skipReasons.size > 0) {
         this.logger.log(
@@ -1130,6 +1167,7 @@ export class MetadataBackfillService {
       return {
         processed: candidates.length,
         merged,
+        attached,
         skipped,
         failed,
         rateLimited,
@@ -1141,12 +1179,52 @@ export class MetadataBackfillService {
     }
   }
 
+  /**
+   * Attach a VERIFIED TMDB movie id to a TVDB/IMDB-only row (no local row carries it, so
+   * the row is not a duplicate — it just missed its cross-link). The row leaves the
+   * provider-duplicates stat for good and is enriched from TMDB best-effort.
+   */
+  private async attachTmdbMovieId(mediaId: string, tmdbId: number): Promise<void> {
+    await this.prisma.externalId.create({
+      data: {
+        mediaId,
+        provider: ExternalProvider.TMDB,
+        providerEntityKind: ProviderEntityKind.MOVIE,
+        value: String(tmdbId),
+      },
+    });
+    this.logger.log(`Provider duplicate repair: attached TMDB movie id ${tmdbId} to ${mediaId}`);
+    await this.meta.ensureMovieFull(tmdbId).catch(() => undefined);
+  }
+
+  /** Park a row whose duplicate resolution definitively found nothing to merge into
+   *  (atomic jsonb merge). Parked rows leave the stat + candidate selection for 180 days. */
+  private async stampProviderDupNoMatch(mediaId: string, reason: string): Promise<void> {
+    await this.prisma.$executeRaw`
+      UPDATE media_items
+      SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
+            || jsonb_build_object('providerDupNoMatch',
+                 jsonb_build_object('at', ${new Date().toISOString()}::text, 'reason', ${reason}::text))
+      WHERE id = ${mediaId}`;
+  }
+
   private async resolveProviderDuplicateMovieTarget(candidate: {
     id: string;
     tvdbId: string | null;
     imdbId: string | null;
-  }): Promise<{ targetId: string | null; reason: string }> {
-    if (!this.tmdbProvider.enabled) return { targetId: null, reason: 'TMDB provider disabled' };
+  }): Promise<{
+    targetId: string | null;
+    attachTmdbId: number | null;
+    definitive: boolean;
+    reason: string;
+  }> {
+    const none = (reason: string, definitive = false) => ({
+      targetId: null,
+      attachTmdbId: null,
+      definitive,
+      reason,
+    });
+    if (!this.tmdbProvider.enabled) return none('TMDB provider disabled');
     let tmdbId: number | null = null;
     if (candidate.tvdbId) {
       const found = await this.tmdbProvider.findByExternalIdStrict(candidate.tvdbId, 'tvdb_id');
@@ -1156,8 +1234,15 @@ export class MetadataBackfillService {
       const found = await this.tmdbProvider.findByExternalIdStrict(candidate.imdbId, 'imdb_id');
       tmdbId = found?.movie?.tmdbId ?? null;
     }
+    // TMDB /find does NOT index TVDB movie ids (tvdb_id maps only TV there), so TVDB-only
+    // rows — the bulk of this stat — can never resolve by id. Title+year search is the
+    // only id-grade evidence left for them.
     if (!tmdbId) {
-      return this.resolveProviderDuplicateMovieTargetByMetadata(candidate.id);
+      tmdbId = await this.resolveTmdbMovieIdBySearch(candidate.id);
+    }
+    if (!tmdbId) {
+      const meta = await this.resolveProviderDuplicateMovieTargetByMetadata(candidate.id);
+      return { ...meta, attachTmdbId: null };
     }
     const target = await this.prisma.externalId.findFirst({
       where: {
@@ -1169,14 +1254,47 @@ export class MetadataBackfillService {
       },
       select: { mediaId: true },
     });
-    if (!target?.mediaId) return { targetId: null, reason: 'resolved TMDB movie is not local' };
-    return { targetId: target.mediaId, reason: 'matched local TMDB movie' };
+    // Verified id but no local row: not a duplicate — attach the cross-id instead of skipping.
+    if (!target?.mediaId) {
+      return { targetId: null, attachTmdbId: tmdbId, definitive: true, reason: 'attach TMDB id' };
+    }
+    return { targetId: target.mediaId, attachTmdbId: null, definitive: true, reason: 'matched local TMDB movie' };
   }
 
-  private async resolveProviderDuplicateMovieTargetByMetadata(
-    sourceMediaId: string,
-  ): Promise<{ targetId: string | null; reason: string }> {
-    const sourceRows = await this.prisma.$queryRaw<
+  /** Resolve a TVDB/IMDB-only movie to a TMDB movie id via /search/movie (title+year).
+   *  Only an EXACTLY-one normalized-title + year hit counts — anything else is too weak. */
+  private async resolveTmdbMovieIdBySearch(sourceMediaId: string): Promise<number | null> {
+    const source = await this.loadDuplicateSourceRow(sourceMediaId);
+    if (!source?.releaseYear) return null;
+    const sourceTitles = this.normalizedDuplicateValues(source.title, source.titles, 2);
+    if (sourceTitles.size === 0) return null;
+    // No catch: a 429/throttle must bubble to the batch's rate-limit early break —
+    // swallowing it here would read as "no match" and park rows on bad evidence.
+    const res = await this.tmdbProvider.searchMovies(source.title);
+    const matches = res.items.filter(
+      (item) =>
+        item.year === source.releaseYear &&
+        (sourceTitles.has(this.normalizeDuplicateText(item.title)) ||
+          (item.originalTitle
+            ? sourceTitles.has(this.normalizeDuplicateText(item.originalTitle))
+            : false)),
+    );
+    return matches.length === 1 ? matches[0].tmdbId : null;
+  }
+
+  private async loadDuplicateSourceRow(sourceMediaId: string): Promise<
+    | {
+        id: string;
+        title: string;
+        overview: string | null;
+        titles: unknown;
+        overviews: unknown;
+        releaseYear: number | null;
+        runtimeMinutes: number | null;
+      }
+    | undefined
+  > {
+    const rows = await this.prisma.$queryRaw<
       {
         id: string;
         title: string;
@@ -1197,16 +1315,26 @@ export class MetadataBackfillService {
       FROM media_items m
       JOIN movies mv ON mv.media_id = m.id
       WHERE m.id = ${sourceMediaId}`;
-    const source = sourceRows[0];
-    if (!source) return { targetId: null, reason: 'source row missing' };
+    return rows[0];
+  }
+
+  private async resolveProviderDuplicateMovieTargetByMetadata(
+    sourceMediaId: string,
+  ): Promise<{ targetId: string | null; definitive: boolean; reason: string }> {
+    const source = await this.loadDuplicateSourceRow(sourceMediaId);
+    if (!source) return { targetId: null, definitive: false, reason: 'source row missing' };
     if (!source.releaseYear) {
-      return { targetId: null, reason: 'metadata fallback missing source release year' };
+      return {
+        targetId: null,
+        definitive: true,
+        reason: 'metadata fallback missing source release year',
+      };
     }
 
     const sourceTitles = this.normalizedDuplicateValues(source.title, source.titles, 2);
     const sourceOverviews = this.normalizedDuplicateValues(source.overview, source.overviews, 40);
-    if (sourceTitles.size === 0 || sourceOverviews.size === 0) {
-      return { targetId: null, reason: 'metadata fallback missing title or overview' };
+    if (sourceTitles.size === 0) {
+      return { targetId: null, definitive: true, reason: 'metadata fallback missing title' };
     }
 
     const candidates = await this.prisma.$queryRaw<
@@ -1243,25 +1371,27 @@ export class MetadataBackfillService {
         candidate.titles,
         2,
       );
-      const candidateOverviews = this.normalizedDuplicateValues(
-        candidate.overview,
-        candidate.overviews,
-        40,
-      );
-      return (
-        this.hasSetIntersection(sourceTitles, candidateTitles) &&
-        this.hasSetIntersection(sourceOverviews, candidateOverviews) &&
-        this.movieRuntimeCompatible(source.runtimeMinutes, candidate.runtimeMinutes)
-      );
+      if (!this.hasSetIntersection(sourceTitles, candidateTitles)) return false;
+      // Overview-less sources (typical for TVDB light upserts) can't prove text identity —
+      // title + year + runtime carry the match alone; with an overview, require it too.
+      if (sourceOverviews.size > 0) {
+        const candidateOverviews = this.normalizedDuplicateValues(
+          candidate.overview,
+          candidate.overviews,
+          40,
+        );
+        if (!this.hasSetIntersection(sourceOverviews, candidateOverviews)) return false;
+      }
+      return this.movieRuntimeCompatible(source.runtimeMinutes, candidate.runtimeMinutes);
     });
 
     if (matches.length === 1) {
-      return { targetId: matches[0].id, reason: 'matched local TMDB movie by metadata' };
+      return { targetId: matches[0].id, definitive: true, reason: 'matched local TMDB movie by metadata' };
     }
     if (matches.length > 1) {
-      return { targetId: null, reason: 'metadata fallback ambiguous' };
+      return { targetId: null, definitive: false, reason: 'metadata fallback ambiguous' };
     }
-    return { targetId: null, reason: 'no local TMDB movie matched by metadata' };
+    return { targetId: null, definitive: true, reason: 'no local TMDB movie matched by metadata' };
   }
 
   private normalizedDuplicateValues(

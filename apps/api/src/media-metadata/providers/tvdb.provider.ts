@@ -338,6 +338,13 @@ export class TvdbProvider {
     const requestLocale = tvdbToAppLocale(tvdbLang3(language)) ?? 'en';
     const localizedTitle = allTitles[requestLocale] ?? allTitles['en'] ?? null;
     const localizedOverview = allOverviews[requestLocale] ?? allOverviews['en'] ?? null;
+    // Expose the full locale map (same shape as the TMDB translations payload) so callers
+    // can bulk-store locale overrides and detect which locales the provider actually HAS —
+    // re-requesting a locale TVDB lacks on every view just re-fetches the English fallback.
+    const translations: Record<string, { title?: string; overview?: string }> = {};
+    for (const loc of new Set([...Object.keys(allTitles), ...Object.keys(allOverviews)])) {
+      translations[loc] = { title: allTitles[loc], overview: allOverviews[loc] };
+    }
     // The primary translation marks the series' original language (e.g. jpn → ja) —
     // needed for the anime "Original title" display rule on TVDB-hydrated shows.
     const primaryTvdbLang = tr?.nameTranslations?.find((nt) => nt.isPrimary)?.language;
@@ -426,6 +433,7 @@ export class TvdbProvider {
       providers: [] as NormalizedProvider[],
       seasons,
       nextAirDate: s.nextAired ?? null,
+      translations: Object.keys(translations).length > 0 ? translations : undefined,
     };
   }
 

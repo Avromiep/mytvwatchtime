@@ -133,7 +133,7 @@ export class AdminController {
       .repairProviderDuplicateMovies(n)
       .then((res) =>
         console.log(
-          `[Provider duplicates] DONE: ${res.merged} merged, ${res.skipped} skipped, ${res.failed} failed, ${res.rateLimited} rate-limited`,
+          `[Provider duplicates] DONE: ${res.merged} merged, ${res.attached} attached, ${res.skipped} skipped, ${res.failed} failed, ${res.rateLimited} rate-limited`,
           Object.keys(res.skipReasons).length ? JSON.stringify(res.skipReasons) : '',
           res.sample.length ? JSON.stringify(res.sample) : '',
         ),

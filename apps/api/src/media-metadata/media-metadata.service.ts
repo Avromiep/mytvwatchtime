@@ -635,7 +635,128 @@ export class MediaMetadataService {
     );
   }
 
-  async ensureShowFull(tmdbId: number, userId?: string): Promise<string> {
+  /** Locales the provider had NO translation for are parked this long — re-requesting
+   *  them on every view just re-fetches the same English fallback. */
+  private static readonly LOCALE_UNAVAILABLE_PARK_MS = 7 * DAY_MS;
+
+  /** Parked = we recently confirmed the provider has no translation for `lang` on this row. */
+  isLocaleFetchParked(provenance: unknown, lang: string): boolean {
+    const at = (provenance as any)?.localeUnavailable?.[lang];
+    if (typeof at !== 'string') return false;
+    const t = new Date(at).getTime();
+    return (
+      Number.isFinite(t) && Date.now() - t < MediaMetadataService.LOCALE_UNAVAILABLE_PARK_MS
+    );
+  }
+
+  /** Record that the provider has no translation for `lang` (atomic jsonb merge — no
+   *  read-modify-write of the whole provenance column). */
+  private async stampLocaleUnavailable(mediaId: string, lang: string): Promise<void> {
+    await this.prisma.$executeRaw`
+      UPDATE media_items
+      SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
+            || jsonb_build_object('localeUnavailable',
+                 COALESCE(metadata_provenance->'localeUnavailable', '{}'::jsonb)
+                 || jsonb_build_object(${lang}::text, ${new Date().toISOString()}::text))
+      WHERE id = ${mediaId}`;
+  }
+
+  /** Does the provider's translations map cover `lang`? undefined = the provider gave no
+   *  translations payload, so we can't tell (never park on silence). App locales match
+   *  exactly, then by their 2-letter base (TMDB keys are ISO 639-1: pt-BR → pt). */
+  private translationsCoverLang(
+    translations: Record<string, unknown> | undefined,
+    lang: string,
+  ): boolean | undefined {
+    if (!translations) return undefined;
+    if (translations[lang]) return true;
+    const base = lang.split('-')[0];
+    return base !== lang ? !!translations[base] : false;
+  }
+
+  /**
+   * Fetch + store the request-locale overrides — unless the locale is parked, or the
+   * base payload's translations map proves the provider doesn't have it (then park it
+   * and skip the call). When only the localized response itself can tell (fresh base),
+   * a missing translation is parked WITHOUT storing the provider's English fallback
+   * under the locale key.
+   */
+  private async maybeApplyLocaleOverrides(
+    mediaId: string,
+    type: MediaType,
+    fetchLocalized: () => Promise<NormalizedShow | NormalizedMovie>,
+    baseTranslations: Record<string, { title?: string; overview?: string }> | undefined,
+    existingProvenance: unknown,
+    lang: string,
+  ): Promise<void> {
+    if (lang === 'en') return;
+    if (this.isLocaleFetchParked(existingProvenance, lang)) return;
+    const covered = this.translationsCoverLang(baseTranslations, lang);
+    if (covered === false) {
+      await this.stampLocaleUnavailable(mediaId, lang).catch(() => undefined);
+      return;
+    }
+    const data = await fetchLocalized();
+    if (covered === undefined && this.translationsCoverLang(data.translations, lang) === false) {
+      await this.stampLocaleUnavailable(mediaId, lang).catch(() => undefined);
+      return;
+    }
+    await this.applyLocaleOverrides(mediaId, type, data, lang);
+  }
+
+  /**
+   * Predicate for `TmdbProvider.getShow`: skip the individual season-detail fetch for
+   * seasons we already store COMPLETE and fully aired (re-hydrations only — first
+   * hydrations fetch everything). A season is skippable when ALL hold:
+   *   - not season 0 (specials churn too much),
+   *   - stored episodeCount > 0 and equal to the provider's summary episode_count
+   *     (any structural change → refetch),
+   *   - every stored episode has an airDate and the latest aired > 7 days ago
+   *     (post-air correction buffer).
+   * Skipped seasons are filtered out of the normalized payload before persistShow, so
+   * syncSeasons leaves their rows (airedCount, texts, locale overrides) untouched.
+   */
+  private async airedSeasonSkipper(
+    mediaId: string,
+  ): Promise<(seasonNumber: number, providerEpisodeCount: number) => boolean> {
+    const seasons = await this.prisma.season.findMany({
+      where: { show: { mediaId } },
+      select: { number: true, episodeCount: true, episodes: { select: { airDate: true } } },
+    });
+    const byNumber = new Map(seasons.map((s) => [s.number, s]));
+    const cutoff = Date.now() - 7 * DAY_MS;
+    return (seasonNumber, providerEpisodeCount) => {
+      if (seasonNumber === 0) return false;
+      const stored = byNumber.get(seasonNumber);
+      if (!stored || (stored.episodeCount ?? 0) === 0) return false;
+      if (stored.episodeCount !== providerEpisodeCount) return false;
+      if (stored.episodes.length === 0) return false;
+      let maxAir = 0;
+      for (const e of stored.episodes) {
+        if (!e.airDate) return false;
+        const t = e.airDate.getTime();
+        if (t > maxAir) maxAir = t;
+      }
+      return maxAir < cutoff;
+    };
+  }
+
+  /** Drop seasons whose detail fetch was skipped (no episodes loaded AND the skipper
+   *  covers them) so syncSeasons never upserts a shell over their stored data. */
+  private filterSkippedSeasons(
+    data: NormalizedShow,
+    skip: (seasonNumber: number, providerEpisodeCount: number) => boolean,
+  ): void {
+    data.seasons = data.seasons.filter(
+      (se) => se.episodes.length > 0 || !skip(se.number, se.episodeCount ?? 0),
+    );
+  }
+
+  async ensureShowFull(
+    tmdbId: number,
+    userId?: string,
+    opts?: { skipAiredSeasons?: boolean },
+  ): Promise<string> {
     const lang = currentLanguage();
     const tmdbVal = String(tmdbId);
     const existing = await this.findMediaByExternal(
@@ -646,9 +767,17 @@ export class MediaMetadataService {
     let mediaId: string;
     let externals: { provider: ExternalProvider; value: string }[] = [];
     if (this.isStale(existing)) {
+      // Interactive detail views skip refetching complete+fully-aired old seasons
+      // (latency). Background paths (backfill, repairs, TMDB changes sync) must NOT:
+      // their goal is full-structure correctness — e.g. the english-content repair
+      // rewrites episode text and the changes sync exists to catch old-season edits.
+      const skipSeasonDetail =
+        existing && opts?.skipAiredSeasons ? await this.airedSeasonSkipper(existing.id) : undefined;
+      const getOpts = skipSeasonDetail ? { skipSeasonDetail } : undefined;
       // ONE English call (appended seasons/keywords/translations): base + episodes stay
       // English; show-level locales come from the translations payload — no second fetch.
-      const enData = await this.tmdb.getShow(tmdbId, 'en-US');
+      const enData = await this.tmdb.getShow(tmdbId, 'en-US', getOpts);
+      if (skipSeasonDetail) this.filterSkippedSeasons(enData, skipSeasonDetail);
       externals = enData.externals;
       mediaId = await this.persistShow(
         enData,
@@ -657,18 +786,34 @@ export class MediaMetadataService {
         undefined,
         ExternalProvider.TMDB,
       );
-      if (lang !== 'en') {
-        // Request-locale overrides (top-level + season/episode text) — same flow as before.
-        const data = await this.tmdb.getShow(tmdbId, lang);
-        await this.applyLocaleOverrides(mediaId, MediaType.SHOW, data, lang);
-      }
+      await this.maybeApplyLocaleOverrides(
+        mediaId,
+        MediaType.SHOW,
+        async () => {
+          const data = await this.tmdb.getShow(tmdbId, lang, getOpts);
+          externals = data.externals;
+          return data;
+        },
+        enData.translations,
+        existing?.metadataProvenance,
+        lang,
+      );
     } else if (lang !== 'en' && existing) {
       // Fresh trusted base: store ONLY the request-locale override — no base change,
       // no English re-fetch — so different users' languages never contaminate each other.
-      const data = await this.tmdb.getShow(tmdbId, lang);
-      externals = data.externals;
       mediaId = existing.id;
-      await this.applyLocaleOverrides(mediaId, MediaType.SHOW, data, lang);
+      await this.maybeApplyLocaleOverrides(
+        mediaId,
+        MediaType.SHOW,
+        async () => {
+          const data = await this.tmdb.getShow(tmdbId, lang);
+          externals = data.externals;
+          return data;
+        },
+        undefined,
+        existing.metadataProvenance,
+        lang,
+      );
     } else {
       mediaId = existing!.id;
     }
@@ -729,7 +874,6 @@ export class MediaMetadataService {
     opts?: { skipClassification?: boolean },
   ): Promise<string> {
     const lang = currentLanguage();
-    const data = await this.tvdb.getShow(tvdbId, lang); // pass locale → episodes get correct language
     const tvdbVal = String(tvdbId);
     const existing = await this.findMediaByExternal(
       ExternalProvider.THE_TVDB,
@@ -737,19 +881,37 @@ export class MediaMetadataService {
       ProviderEntityKind.SERIES,
     );
     let mediaId: string;
+    let externals: { provider: ExternalProvider; value: string }[] = [];
     if (this.isStale(existing)) {
+      const data = await this.tvdb.getShow(tvdbId, lang); // pass locale → episodes get correct language
+      externals = data.externals;
       const enData = lang !== 'en' ? await this.tvdb.getShow(tvdbId, 'en') : undefined;
       mediaId = await this.persistShow(data, existing?.id, lang, enData, ExternalProvider.THE_TVDB);
+      // TVDB lacks this locale entirely → park it so fresh views skip the re-fetch.
+      if (lang !== 'en' && this.translationsCoverLang(data.translations, lang) === false) {
+        await this.stampLocaleUnavailable(mediaId, lang).catch(() => undefined);
+      }
     } else if (lang !== 'en' && existing) {
       mediaId = existing.id;
-      await this.applyLocaleOverrides(mediaId, MediaType.SHOW, data, lang);
+      await this.maybeApplyLocaleOverrides(
+        mediaId,
+        MediaType.SHOW,
+        async () => {
+          const data = await this.tvdb.getShow(tvdbId, lang);
+          externals = data.externals;
+          return data;
+        },
+        undefined,
+        existing.metadataProvenance,
+        lang,
+      );
     } else {
       mediaId = existing!.id;
     }
     if (userId) {
       await this.ensureUserShowTotals(userId, mediaId);
     }
-    await this.enrichAirtimes(mediaId, data.externals).catch((e) =>
+    await this.enrichAirtimes(mediaId, externals).catch((e) =>
       this.logger.debug(`TVmaze enrich skipped: ${(e as Error).message}`),
     );
     // Cast-only rehydrations (character-id backfill, import tvdb-rehydrate) skip the
@@ -763,7 +925,6 @@ export class MediaMetadataService {
   /** Fully hydrate a movie resolved from TVDB. ONE call — meta=translations returns ALL locales. */
   async ensureMovieFullTvdb(tvdbId: number): Promise<string> {
     const lang = currentLanguage();
-    const data = await this.tvdb.getMovie(tvdbId, lang);
     const tvdbVal = String(tvdbId);
     const existing = await this.findMediaByExternal(
       ExternalProvider.THE_TVDB,
@@ -772,12 +933,24 @@ export class MediaMetadataService {
     );
     let mediaId: string;
     if (this.isStale(existing)) {
+      const data = await this.tvdb.getMovie(tvdbId, lang);
       // No second call needed: data.translations already has ALL locales (including English).
       // persistMovie bulk-stores them all via mergeLocalized.
       mediaId = await this.persistMovie(data, existing?.id, lang, undefined);
+      // TVDB lacks this locale entirely → park it so fresh views skip the re-fetch.
+      if (lang !== 'en' && this.translationsCoverLang(data.translations, lang) === false) {
+        await this.stampLocaleUnavailable(mediaId, lang).catch(() => undefined);
+      }
     } else if (lang !== 'en' && existing) {
       mediaId = existing.id;
-      await this.applyLocaleOverrides(mediaId, MediaType.MOVIE, data, lang);
+      await this.maybeApplyLocaleOverrides(
+        mediaId,
+        MediaType.MOVIE,
+        () => this.tvdb.getMovie(tvdbId, lang),
+        undefined,
+        existing.metadataProvenance,
+        lang,
+      );
     } else {
       mediaId = existing!.id;
     }
@@ -939,14 +1112,24 @@ export class MediaMetadataService {
       // ONE English call — base + all show-level locales via the translations payload.
       const data = await this.tmdb.getMovie(tmdbId, 'en-US');
       mediaId = await this.persistMovie(data, existing?.id, 'en', undefined);
-      if (lang !== 'en') {
-        const locData = await this.tmdb.getMovie(tmdbId, lang);
-        await this.applyLocaleOverrides(mediaId, MediaType.MOVIE, locData, lang);
-      }
+      await this.maybeApplyLocaleOverrides(
+        mediaId,
+        MediaType.MOVIE,
+        () => this.tmdb.getMovie(tmdbId, lang),
+        data.translations,
+        existing?.metadataProvenance,
+        lang,
+      );
     } else if (lang !== 'en' && existing) {
-      const data = await this.tmdb.getMovie(tmdbId, lang);
       mediaId = existing.id;
-      await this.applyLocaleOverrides(mediaId, MediaType.MOVIE, data, lang);
+      await this.maybeApplyLocaleOverrides(
+        mediaId,
+        MediaType.MOVIE,
+        () => this.tmdb.getMovie(tmdbId, lang),
+        undefined,
+        existing.metadataProvenance,
+        lang,
+      );
     } else {
       mediaId = existing!.id;
     }

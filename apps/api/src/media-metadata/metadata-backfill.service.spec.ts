@@ -1,4 +1,4 @@
-import { ExternalProvider } from '@tvwatch/shared';
+import { ExternalProvider, ProviderEntityKind } from '@tvwatch/shared';
 import { MetadataBackfillService } from './metadata-backfill.service';
 import { ProviderError } from './providers/shared/provider-errors';
 import { ProviderThrottled } from './providers/shared/provider-http';
@@ -24,10 +24,23 @@ function mockPrisma() {
     rating: model(['count']),
     reaction: model(['count']),
     characterVote: model(['count']),
-    $queryRaw: jest.fn().mockResolvedValue([{ c: BigInt(0) }]),
+    $queryRaw: jest.fn(),
     $executeRaw: jest.fn(async () => 0),
     $transaction: jest.fn(async (arg: any) => (Array.isArray(arg) ? Promise.all(arg) : arg(p))),
   } as any;
+  // The anime stale-row count is raw SQL ($queryRaw) — distinguish it from other raw
+  // queries by shape and answer with the per-test __staleRows value.
+  p.__staleRows = 0;
+  p.__setStaleRows = (n: number) => {
+    p.__staleRows = n;
+  };
+  p.$queryRaw.mockImplementation((parts: any) => {
+    const sql = Array.isArray(parts) ? parts.join(' ') : String(parts ?? '');
+    if (!sql.includes('metadataProvenance') && sql.includes('episode_external_ids')) {
+      return Promise.resolve([{ c: BigInt(p.__staleRows) }]);
+    }
+    return Promise.resolve([{ c: BigInt(0) }]);
+  });
   p.userEpisodeStatus.count.mockResolvedValue(0);
   p.rating.count.mockResolvedValue(0);
   p.reaction.count.mockResolvedValue(0);
@@ -409,11 +422,17 @@ describe('MetadataBackfillService', () => {
   describe('rehydrateAnimeFromTvdb', () => {
     /** Candidates for the batch: raw selection + findUnique (fix reload) + ≥1 stale row. */
     const mockCandidates = (list: any[]) => {
-      prisma.$queryRaw.mockResolvedValue(list);
+      prisma.__setStaleRows(1);
+      prisma.$queryRaw.mockImplementation((parts: any) => {
+        const sql = Array.isArray(parts) ? parts.join(' ') : String(parts ?? '');
+        if (!sql.includes('metadataProvenance') && sql.includes('episode_external_ids')) {
+          return Promise.resolve([{ c: BigInt(prisma.__staleRows) }]);
+        }
+        return Promise.resolve(list);
+      });
       prisma.mediaItem.findUnique.mockImplementation(({ where: { id } }: any) =>
         Promise.resolve(list.find((c) => c.id === id) ?? null),
       );
-      prisma.episode.count.mockResolvedValue(1); // ≥1 stale TMDB-only episode row
     };
 
     it('does nothing when TVDB is not configured', async () => {
@@ -553,7 +572,7 @@ describe('MetadataBackfillService', () => {
 
     it('short-circuits without provider calls when no stale rows remain', async () => {
       mockCandidates([animeShow()]);
-      prisma.episode.count.mockResolvedValue(0); // already fully TVDB-structured
+      prisma.__setStaleRows(0); // already fully TVDB-structured
       const res = await service.rehydrateAnimeFromTvdb();
       expect(tmdbProvider.getTvdbIdForShow).not.toHaveBeenCalled();
       expect(tvdb.searchShows).not.toHaveBeenCalled();
@@ -591,7 +610,7 @@ describe('MetadataBackfillService', () => {
   describe('fixAnimeShowFromTvdb', () => {
     it('forces TVDB hydration and remaps when stale rows exist', async () => {
       prisma.mediaItem.findUnique.mockResolvedValue(animeShow());
-      prisma.episode.count.mockResolvedValue(52);
+      prisma.__setStaleRows(52);
       structureRemap.remapShow.mockResolvedValue({ stale: 52, mapped: 50, unmapped: 2 });
       const res = await service.fixAnimeShowFromTvdb('m1');
       // Stale gate bypassed so ensureShowFullTvdb cannot skip a recently-refreshed show.
@@ -613,7 +632,7 @@ describe('MetadataBackfillService', () => {
       prisma.mediaItem.findUnique.mockResolvedValue(
         animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
       );
-      prisma.episode.count.mockResolvedValue(1);
+      prisma.__setStaleRows(1);
       tvdb.searchShows.mockResolvedValue({ items: [], total: 0 });
       const res = await service.fixAnimeShowFromTvdb('m1');
       expect(res.fixed).toBe(false);
@@ -625,7 +644,7 @@ describe('MetadataBackfillService', () => {
       prisma.mediaItem.findUnique.mockResolvedValue(
         animeShow({ metadataProvenance: { animeTvdbKeptUnmapped: 27 } }),
       );
-      prisma.episode.count.mockResolvedValue(27); // == kept count → nothing new
+      prisma.__setStaleRows(27); // == kept count → nothing new
       const res = await service.fixAnimeShowFromTvdb('m1');
       expect(res.fixed).toBe(false);
       expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
@@ -636,7 +655,7 @@ describe('MetadataBackfillService', () => {
       prisma.mediaItem.findUnique.mockResolvedValue(
         animeShow({ metadataProvenance: { animeTvdbKeptUnmapped: 27 } }),
       );
-      prisma.episode.count.mockResolvedValue(28); // new contamination
+      prisma.__setStaleRows(28); // new contamination
       const res = await service.fixAnimeShowFromTvdb('m1');
       expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
       expect(res.fixed).toBe(true);
@@ -644,7 +663,7 @@ describe('MetadataBackfillService', () => {
 
     it('coalesces concurrent repairs for the same show (detail + episodes race)', async () => {
       prisma.mediaItem.findUnique.mockResolvedValue(animeShow());
-      prisma.episode.count.mockResolvedValue(52);
+      prisma.__setStaleRows(52);
       let release!: (v: string) => void;
       meta.ensureShowFullTvdb.mockImplementation(
         () =>
@@ -662,7 +681,7 @@ describe('MetadataBackfillService', () => {
       expect(r1.fixed).toBe(true);
       expect(r2.fixed).toBe(true);
       // After completion the next call is free to repair again if needed.
-      prisma.episode.count.mockResolvedValue(0);
+      prisma.__setStaleRows(0);
       const r3 = await service.fixAnimeShowFromTvdb('m1');
       expect(r3.fixed).toBe(false);
     });
@@ -673,7 +692,7 @@ describe('MetadataBackfillService', () => {
       prisma.mediaItem.findMany.mockResolvedValue([
         { ...animeShow(), genres: [{ genre: { slug: 'animation', name: 'Animation' } }] },
       ]);
-      prisma.episode.count.mockResolvedValue(0); // no existing structure → would normally go TMDB
+      prisma.__setStaleRows(0); // no existing structure → would normally go TMDB
       await service.backfillBatch(10);
       expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
       expect(meta.ensureShowFull).not.toHaveBeenCalled();
@@ -689,7 +708,7 @@ describe('MetadataBackfillService', () => {
           genres: [{ genre: { slug: 'drama', name: 'Drama' } }],
         },
       ]);
-      prisma.episode.count.mockResolvedValue(0);
+      prisma.__setStaleRows(0);
       await service.backfillBatch(10);
       expect(meta.ensureShowFull).toHaveBeenCalledWith(11);
       expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
@@ -1392,5 +1411,181 @@ describe('MetadataBackfillService.repairBannerPosters', () => {
     });
     expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
     expect(res).toEqual(expect.objectContaining({ processed: 1, succeeded: 1, failed: 0 }));
+  });
+});
+
+
+describe('MetadataBackfillService.repairProviderDuplicateMovies', () => {
+  function make(opts: {
+    candidates: any[];
+    sourceRow?: any;
+    localMetaCandidates?: any[];
+    findResult?: any;
+    searchItems?: any[];
+    localTarget?: string | null;
+  }) {
+    const prisma: any = {
+      externalId: {
+        findFirst: jest.fn(async () => (opts.localTarget ? { mediaId: opts.localTarget } : null)),
+        create: jest.fn(async () => ({})),
+      },
+      $queryRaw: jest.fn((parts: any) => {
+        const sql = Array.isArray(parts) ? parts.join(' ') : String(parts ?? '');
+        if (sql.includes('providerDupNoMatch')) return Promise.resolve(opts.candidates);
+        if (sql.includes('release_year AS "releaseYear"') && sql.includes('WHERE m.id =')) {
+          return Promise.resolve(opts.sourceRow ? [opts.sourceRow] : []);
+        }
+        if (sql.includes('mv.release_year =')) {
+          return Promise.resolve(opts.localMetaCandidates ?? []);
+        }
+        return Promise.resolve([]);
+      }),
+      $executeRaw: jest.fn(async () => 0),
+    };
+    const tmdbProvider = {
+      enabled: true,
+      findByExternalIdStrict: jest.fn(async () => opts.findResult ?? null),
+      searchMovies: jest.fn(async () => ({ items: opts.searchItems ?? [], total: (opts.searchItems ?? []).length })),
+    };
+    const meta = mockMeta();
+    const service = new MetadataBackfillService(
+      prisma,
+      meta,
+      {} as any,
+      { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK') } as any,
+      {} as any,
+      {} as any,
+      tmdbProvider as any,
+      {} as any,
+    );
+    const mergeSpy = jest
+      .spyOn(service as any, 'mergeDuplicateMovieRows')
+      .mockResolvedValue(undefined);
+    return { service, prisma, tmdbProvider, meta, mergeSpy };
+  }
+
+  it('attaches a verified TMDB id when no local row carries it (TVDB-only row via search)', async () => {
+    const { service, prisma, tmdbProvider, meta } = make({
+      candidates: [{ id: 'src1', title: 'Serial Rabbit', tvdbId: '310774', imdbId: null }],
+      findResult: null, // TMDB /find does not index TVDB movie ids
+      searchItems: [
+        { tmdbId: 642061, title: 'Serial Rabbit', originalTitle: 'Serial Rabbit', year: 2005 },
+      ],
+      sourceRow: {
+        id: 'src1',
+        title: 'Serial Rabbit',
+        overview: null,
+        titles: null,
+        overviews: null,
+        releaseYear: 2005,
+        runtimeMinutes: 90,
+      },
+      localTarget: null,
+    });
+    const res = await service.repairProviderDuplicateMovies();
+    expect(tmdbProvider.searchMovies).toHaveBeenCalledWith('Serial Rabbit');
+    expect(prisma.externalId.create).toHaveBeenCalledWith({
+      data: {
+        mediaId: 'src1',
+        provider: ExternalProvider.TMDB,
+        providerEntityKind: ProviderEntityKind.MOVIE,
+        value: '642061',
+      },
+    });
+    expect(meta.ensureMovieFull).toHaveBeenCalledWith(642061);
+    expect(res).toMatchObject({ attached: 1, merged: 0, skipped: 0 });
+    expect(prisma.$executeRaw).not.toHaveBeenCalled(); // nothing parked
+  });
+
+  it('merges when the verified TMDB id belongs to a local row', async () => {
+    const { service, mergeSpy } = make({
+      candidates: [{ id: 'src1', title: 'X', tvdbId: null, imdbId: 'tt123' }],
+      findResult: { movie: { tmdbId: 555 } },
+      localTarget: 'dst9',
+    });
+    const res = await service.repairProviderDuplicateMovies();
+    expect(mergeSpy).toHaveBeenCalledWith('src1', 'dst9');
+    expect(res).toMatchObject({ merged: 1, attached: 0 });
+  });
+
+  it('parks rows with provably no TMDB counterpart', async () => {
+    const { service, prisma } = make({
+      candidates: [{ id: 'src1', title: 'Obscure Flick', tvdbId: '1', imdbId: null }],
+      findResult: null,
+      searchItems: [],
+      sourceRow: {
+        id: 'src1',
+        title: 'Obscure Flick',
+        overview: 'A'.repeat(50),
+        titles: null,
+        overviews: null,
+        releaseYear: 2001,
+        runtimeMinutes: 90,
+      },
+      localMetaCandidates: [],
+    });
+    const res = await service.repairProviderDuplicateMovies();
+    expect(res.skipped).toBe(1);
+    expect(res.skipReasons['no local TMDB movie matched by metadata']).toBe(1);
+    const parkSql = (prisma.$executeRaw.mock.calls[0]?.[0] ?? []).join(' ');
+    expect(parkSql).toContain('providerDupNoMatch');
+  });
+
+  it('does NOT park ambiguous metadata matches', async () => {
+    const dup = {
+      title: 'Twin Film',
+      overview: 'B'.repeat(50),
+      titles: null,
+      overviews: null,
+      runtimeMinutes: 95,
+    };
+    const { service, prisma } = make({
+      candidates: [{ id: 'src1', title: 'Twin Film', tvdbId: '1', imdbId: null }],
+      findResult: null,
+      searchItems: [],
+      sourceRow: { id: 'src1', ...dup, releaseYear: 2010 },
+      localMetaCandidates: [{ id: 'd1', ...dup }, { id: 'd2', ...dup }],
+    });
+    const res = await service.repairProviderDuplicateMovies();
+    expect(res.skipReasons['metadata fallback ambiguous']).toBe(1);
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('merges overview-less sources on a single title+year+runtime match', async () => {
+    const { service, mergeSpy } = make({
+      candidates: [{ id: 'src1', title: 'Bing ai', tvdbId: '123448', imdbId: null }],
+      findResult: null,
+      searchItems: [],
+      sourceRow: {
+        id: 'src1',
+        title: 'Bing ai',
+        overview: null,
+        titles: null,
+        overviews: null,
+        releaseYear: 2007,
+        runtimeMinutes: 100,
+      },
+      localMetaCandidates: [
+        {
+          id: 'dst1',
+          title: 'Bing ai',
+          overview: 'C'.repeat(50),
+          titles: null,
+          overviews: null,
+          runtimeMinutes: 102,
+        },
+      ],
+    });
+    const res = await service.repairProviderDuplicateMovies();
+    expect(mergeSpy).toHaveBeenCalledWith('src1', 'dst1');
+    expect(res.merged).toBe(1);
+  });
+
+  it('excludes parked rows from the candidate selection', async () => {
+    const { service, prisma } = make({ candidates: [] });
+    await service.repairProviderDuplicateMovies();
+    const selectionSql = (prisma.$queryRaw.mock.calls[0]?.[0] ?? []).join(' ');
+    expect(selectionSql).toContain('providerDupNoMatch');
+    expect(selectionSql).toContain("INTERVAL '180 days'");
   });
 });

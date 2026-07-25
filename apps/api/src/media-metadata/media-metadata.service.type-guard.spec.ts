@@ -146,6 +146,8 @@ function makeTmdbService(tx: any, getShow: jest.Mock, externalFindFirst?: jest.M
     $transaction: async (fn: any) => fn(tx),
     mediaItem: { findUnique: async () => ({ metadataRefreshedAt: new Date() }) },
     externalId: { findFirst: externalFindFirst ?? (async () => null) },
+    // Read by airedSeasonSkipper on re-hydration — no stored seasons here.
+    season: { findMany: async () => [] },
   };
   return new MediaMetadataService(
     prisma as any,
@@ -239,7 +241,8 @@ describe('MediaMetadataService — single-call TMDB hydration', () => {
     const svc = makeTmdbService(tx, getShow);
     await runInLanguage('en', () => svc.ensureShowFull(65942));
     expect(getShow).toHaveBeenCalledTimes(1);
-    expect(getShow).toHaveBeenCalledWith(65942, 'en-US');
+    // Third arg = skipSeasonDetail opts — absent on the create path (nothing stored yet).
+    expect(getShow).toHaveBeenCalledWith(65942, 'en-US', undefined);
     expect(calls.mediaItemCreate).toHaveLength(1);
   });
 

@@ -111,6 +111,38 @@ describe('TmdbProvider.getShow', () => {
 
     expect(show.network).toBeNull();
   });
+
+  it('skips the per-season fetch when skipSeasonDetail covers the season', async () => {
+    const client = makeClient({
+      '/tv/65942': showPayload({ 'season/0': seasonPayload(2) }), // season/1 NOT appended
+      // no '/tv/65942/season/1' response — an unexpected fetch would throw here
+    });
+    const provider = new TmdbProvider(client);
+    const skipSeasonDetail = jest.fn((n: number) => n === 1);
+    const show = await provider.getShow(65942, 'en-US', { skipSeasonDetail });
+
+    expect(skipSeasonDetail).toHaveBeenCalledTimes(1);
+    expect(skipSeasonDetail).toHaveBeenCalledWith(1, 85);
+    expect(client.get).toHaveBeenCalledTimes(1); // the one appended show call only
+    // The skipped season is left episode-less; the caller filters it out before persisting.
+    expect(show.seasons[1].number).toBe(1);
+    expect(show.seasons[1].episodes).toHaveLength(0);
+    expect(show.seasons[1].episodeCount).toBe(85);
+  });
+
+  it('still fetches the season when skipSeasonDetail returns false', async () => {
+    const client = makeClient({
+      '/tv/65942': showPayload({ 'season/0': seasonPayload(2) }), // season/1 NOT appended
+      '/tv/65942/season/1': seasonPayload(85),
+    });
+    const provider = new TmdbProvider(client);
+    const skipSeasonDetail = jest.fn(() => false);
+    const show = await provider.getShow(65942, 'en-US', { skipSeasonDetail });
+
+    expect(skipSeasonDetail).toHaveBeenCalledWith(1, 85);
+    expect(client.get).toHaveBeenCalledWith('/tv/65942/season/1', {}, 'en-US');
+    expect(show.seasons[1].episodes).toHaveLength(85);
+  });
 });
 
 describe('TmdbProvider.getMovie', () => {

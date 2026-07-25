@@ -34,15 +34,22 @@ export class ShowsService {
     if (!media) {
       // allow fetching by tmdb numeric id when live metadata available
       if (this.tmdb.enabled && /^\d+$/.test(id)) {
-        const fullId = await this.meta.ensureShowFull(Number(id));
+        const fullId = await this.meta.ensureShowFull(Number(id), undefined, {
+          skipAiredSeasons: true,
+        });
         await this.meta.ensureAirtimes(fullId).catch(() => undefined);
         return this.withShowInteractions(await this.meta.getShowDetail(fullId, userId), userId);
       }
     } else {
       const lang = currentLanguage();
       // Re-hydrate when metadata is stale OR the request locale's title override
-      // is missing (so already-hydrated shows still get localized on first view).
-      const localeMissing = lang !== 'en' && !((media.titles as any)?.[lang]);
+      // is missing (so already-hydrated shows still get localized on first view) —
+      // locales the provider provably lacks are parked for 7 days instead of re-fetching
+      // the same English fallback on EVERY open.
+      const localeMissing =
+        lang !== 'en' &&
+        !((media.titles as any)?.[lang]) &&
+        !this.meta.isLocaleFetchParked(media.metadataProvenance, lang);
       const needsHydration =
         !media.metadataRefreshedAt ||
         Date.now() - media.metadataRefreshedAt.getTime() > 1000 * 60 * 60 * 24 ||
@@ -71,7 +78,9 @@ export class ShowsService {
           await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
         } else if (!isAnimation && this.tmdb.enabled && tmdbExt) {
           // Degrade gracefully on hydration failure (don't 500 the detail page).
-          await this.meta.ensureShowFull(Number(tmdbExt.value)).catch(() => undefined);
+          await this.meta
+            .ensureShowFull(Number(tmdbExt.value), undefined, { skipAiredSeasons: true })
+            .catch(() => undefined);
         } else if (this.tvdb?.enabled && tvdbExt) {
           // TVDB-only hydration: degrade gracefully on rate-limit/outage (don't 500 the page).
           await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
