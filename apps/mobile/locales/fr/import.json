@@ -69,5 +69,7 @@
   "resumeDesc": "Vous avez un import inachevé avec {{count}} éléments en attente de révision. Reprenez où vous étiez, ou commencez-en un nouveau — recommencer annule l'ancien import (réimporter ne duplique jamais).",
   "resumeContinue": "Continuer l'import",
   "resumeStartNew": "Nouveau",
-  "resolvedBulk": "{{count}} éléments résolus pour {{title}}"
+  "resolvedBulk": "{{count}} éléments résolus pour {{title}}",
+  "exactMatch": "✓ Correspondance exacte",
+  "seasonsMatch": "✓ {{count}}+ saisons"
 }

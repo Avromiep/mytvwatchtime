@@ -4,6 +4,8 @@
   "addToList": "Ajouter à une liste",
   "addedToList": "Ajouté à la liste",
   "removedFromList": "Retiré de la liste",
+  "reassign": "Réassigner",
+  "reassignSuccess": "Film réassigné",
   "titleField": "Titre",
   "titlePlaceholder": "Mes séries préférées",
   "descField": "Description (facultative)",

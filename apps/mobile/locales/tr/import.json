@@ -69,5 +69,7 @@
   "resumeDesc": "İnceleme bekleyen {{count}} öğesi olan yarım bir içe aktarmanız var. Kaldığınız yerden devam edin ya da yenisini başlatın — yeniden başlatmak eskisini iptal eder (tekrar içe aktarma asla kopyalamaz).",
   "resumeContinue": "İçe aktarmaya devam",
   "resumeStartNew": "Yeni başlat",
-  "resolvedBulk": "{{title}} için {{count}} öğe çözüldü"
+  "resolvedBulk": "{{title}} için {{count}} öğe çözüldü",
+  "exactMatch": "✓ Tam eşleşme",
+  "seasonsMatch": "✓ {{count}}+ sezon"
 }

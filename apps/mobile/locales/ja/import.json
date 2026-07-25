@@ -69,5 +69,7 @@
   "resumeDesc": "レビュー待ちのアイテムが {{count}} 件ある未完了のインポートがあります。続きから再開するか、新しく始めるか選べます。新しく始めると古いインポートは破棄されます（再インポートしても重複しません）。",
   "resumeContinue": "インポートを続ける",
   "resumeStartNew": "新規開始",
-  "resolvedBulk": "{{title}} の {{count}} 件を解決しました"
+  "resolvedBulk": "{{title}} の {{count}} 件を解決しました",
+  "exactMatch": "✓ 完全一致",
+  "seasonsMatch": "✓ {{count}}+ シーズン"
 }

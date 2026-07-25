@@ -69,5 +69,7 @@
   "resumeDesc": "Tienes una importación sin terminar con {{count}} elementos pendientes de revisión. Continúa donde lo dejaste o empieza una nueva: empezar de cero descarta la antigua (reimportar nunca duplica).",
   "resumeContinue": "Continuar importación",
   "resumeStartNew": "Nueva",
-  "resolvedBulk": "{{count}} elementos resueltos para {{title}}"
+  "resolvedBulk": "{{count}} elementos resueltos para {{title}}",
+  "exactMatch": "✓ Coincidencia exacta",
+  "seasonsMatch": "✓ {{count}}+ temporadas"
 }

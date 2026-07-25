@@ -522,7 +522,11 @@ All endpoints under `/api`. Auth: `Authorization: Bearer <token>`.
 1. DB exact normalized title match (0.9 confidence)
 2. DB core-title (strip parentheticals) match (0.85)
 3. DB contains + normalized (0.8)
-4. TMDb exact-title search → light upsert (0.75)
+4. TMDb exact-title search → light upsert (0.75). Among exact-title matches the pick is
+   year-aware + recent-first (`pickBestTitleMatch`): candidates within ±1y of the import's
+   year when known, else the MOST RECENT match (TMDB ranks the classic first on remakes);
+   popularity breaks ties. Same rule in the archive-language retry, the TVDB fallback, and
+   `matchByTitleVerified` (recency only — no import year there).
 5. TMDb fuzzy → light upsert (0.5 → needs_review)
 6. Per-show dedup: one lookup, all episodes resolved locally
 

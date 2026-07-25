@@ -4,6 +4,8 @@
   "addToList": "सूची में जोड़ें",
   "addedToList": "सूची में जोड़ा गया",
   "removedFromList": "सूची से हटाया गया",
+  "reassign": "पुनः असाइन करें",
+  "reassignSuccess": "फ़िल्म पुनः असाइन की गई",
   "titleField": "शीर्षक",
   "titlePlaceholder": "मेरे पसंदीदा शो",
   "descField": "विवरण (वैकल्पिक)",

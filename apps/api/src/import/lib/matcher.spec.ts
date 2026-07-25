@@ -1146,3 +1146,88 @@ describe('ImportMatcher — cross-type id authority (legacy movie-typed show row
     expect(tmdb.searchMovies).not.toHaveBeenCalled();
   });
 });
+
+
+describe('ImportMatcher — pickBestTitleMatch (recency/year-aware title pick)', () => {
+  const meta = () => ({
+    lightUpsertShow: jest.fn(async () => 'm-show'),
+    lightUpsertMovie: jest.fn(async () => 'm-movie'),
+    lightUpsertShowTvdb: jest.fn(async () => 'm-tvdb'),
+    lightUpsertMovieTvdb: jest.fn(async () => 'm-tvdb'),
+    ensureShowFull: jest.fn(async () => undefined),
+  });
+  // TMDB ranks the historically famous entry first: classic precedes the remake.
+  const remakePair = () => [
+    { tmdbId: 1, title: 'Dune', year: 1984, popularity: 95 },
+    { tmdbId: 2, title: 'Dune', year: 2021, popularity: 60 },
+    { tmdbId: 3, title: 'Dune Warriors', year: 2024, popularity: 5 }, // not an exact match
+  ];
+  const tmdbWith = (items: any[]) => ({
+    enabled: true,
+    searchMovies: jest.fn(async () => ({ items, total: items.length })),
+    searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+  });
+  const build = (tmdb: any) => {
+    const m = meta();
+    return {
+      m,
+      tmdb,
+      matcher: new ImportMatcher(fakePrisma({}) as any, m as any, tmdb, {
+        enabled: false,
+      } as any),
+    };
+  };
+
+  it('with an import year, picks the candidate within ±1y (not the first hit)', async () => {
+    const tmdb = tmdbWith(remakePair());
+    const { matcher, m } = build(tmdb);
+    const res = await matcher.matchMedia('dune', 'Dune', 'MOVIE', 2021, null);
+    expect(res.mediaId).toBe('m-movie');
+    // The light upsert must receive the 2021 remake, not the 1984 classic in slot 0.
+    const upserted = (m.lightUpsertMovie as jest.Mock).mock.calls[0]?.[0];
+    expect(upserted?.tmdbId).toBe(2);
+  });
+
+  it('without an import year, picks the MOST RECENT exact match', async () => {
+    const tmdb = tmdbWith(remakePair());
+    const { matcher, m } = build(tmdb);
+    await matcher.matchMedia('dune', 'Dune', 'MOVIE', undefined, null);
+    const upserted = (m.lightUpsertMovie as jest.Mock).mock.calls[0]?.[0];
+    expect(upserted?.tmdbId).toBe(2);
+  });
+
+  it('an old import year still picks the classic (year-aware filter wins)', async () => {
+    const tmdb = tmdbWith(remakePair());
+    const { matcher, m } = build(tmdb);
+    await matcher.matchMedia('dune', 'Dune', 'MOVIE', 1984, null);
+    const upserted = (m.lightUpsertMovie as jest.Mock).mock.calls[0]?.[0];
+    expect(upserted?.tmdbId).toBe(1);
+  });
+
+  it('breaks same-year ties by popularity', async () => {
+    const tmdb = tmdbWith([
+      { tmdbId: 1, title: 'Dune', year: 2021, popularity: 10 },
+      { tmdbId: 2, title: 'Dune', year: 2021, popularity: 90 },
+    ]);
+    const { matcher, m } = build(tmdb);
+    await matcher.matchMedia('dune', 'Dune', 'MOVIE', undefined, null);
+    const upserted = (m.lightUpsertMovie as jest.Mock).mock.calls[0]?.[0];
+    expect(upserted?.tmdbId).toBe(2);
+  });
+
+  it('matchByTitleVerified also prefers the most recent verified hit', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = tmdbWith([
+      { tmdbId: 1, title: 'Dune', originalTitle: 'Dune', year: 1984, popularity: 95 },
+      { tmdbId: 2, title: 'Dune', originalTitle: 'Dune', year: 2021, popularity: 60 },
+    ]);
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, {
+      enabled: false,
+    } as any);
+    const res = await matcher.matchByTitleVerified('dune', 'Dune', 'MOVIE', null);
+    expect(res.mediaId).toBe('m-movie');
+    const upserted = (m.lightUpsertMovie as jest.Mock).mock.calls[0]?.[0];
+    expect(upserted?.tmdbId).toBe(2);
+  });
+});

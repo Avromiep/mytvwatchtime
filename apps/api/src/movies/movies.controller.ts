@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -36,6 +36,14 @@ export class MoviesController {
   @Post('movies/:id/rewatch')
   rewatchMovie(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.tracking.rewatchMovie(userId, id);
+  }
+
+  @Post('movies/:id/reassign')
+  reassign(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() dto: { targetMediaId?: string }) {
+    if (!dto?.targetMediaId || dto.targetMediaId === id) {
+      throw new BadRequestException('targetMediaId is required and must differ from the source');
+    }
+    return this.movies.reassignUserMovie(userId, id, dto.targetMediaId);
   }
 
   @Put('movies/:id/vote/rating')

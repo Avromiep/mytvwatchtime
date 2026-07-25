@@ -49,6 +49,8 @@
   "searchToMatch": "Search to pick the correct match",
   "searchPlaceholder": "Search shows / movies…",
   "noResults": "No results",
+  "exactMatch": "✓ Exact match",
+  "seasonsMatch": "✓ {{count}}+ seasons",
   "applyToAllEpisodes": "Apply to all episodes of this show",
   "applyToAllSeason": "Apply to all season {{season}} episodes of this show",
   "applyToWholeShow": "Apply to the whole TV show",

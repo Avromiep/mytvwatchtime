@@ -83,7 +83,7 @@ export default function ShowDetailScreen() {
             <Header
               showBack
               right={
-                <Pressable hitSlop={10} onPress={() => addToList.openMediaMenu({ id: show.id, title: show.title })}>
+                <Pressable hitSlop={10} onPress={() => addToList.openMediaMenu({ id: show.id, title: show.title, kind: 'show' })}>
                   <Ionicons name="ellipsis-horizontal" size={24} color={tokens.mediaText} />
                 </Pressable>
               }

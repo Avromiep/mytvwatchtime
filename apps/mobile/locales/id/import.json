@@ -69,5 +69,7 @@
   "resumeDesc": "Anda memiliki impor yang belum selesai dengan {{count}} item menunggu tinjauan. Lanjutkan dari terakhir kali, atau mulai yang baru — memulai baru membatalkan impor lama (mengimpor ulang tidak pernah menduplikasi).",
   "resumeContinue": "Lanjutkan impor",
   "resumeStartNew": "Mulai baru",
-  "resolvedBulk": "{{count}} item terselesaikan untuk {{title}}"
+  "resolvedBulk": "{{count}} item terselesaikan untuk {{title}}",
+  "exactMatch": "✓ Hasil persis",
+  "seasonsMatch": "✓ {{count}}+ musim"
 }

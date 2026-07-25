@@ -11,6 +11,7 @@ import { showToast } from '../lib/toast';
 import { PosterImage, T } from '../components/primitives';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
+import { useReassign } from './useReassign';
 
 interface MyList {
   id: string;
@@ -118,6 +119,7 @@ export function useAddToList() {
   const qc = useQueryClient();
   const addItem = useAddListItem();
   const removeItem = useRemoveListItem();
+  const reassign = useReassign();
 
   const invalidateLists = () => {
     // Prefix match: covers ['myLists'] and the picker-scoped keys below.
@@ -180,19 +182,29 @@ export function useAddToList() {
     });
   };
 
-  /** Overflow (⋯) menu for a media detail page. */
-  const openMediaMenu = (media: { id: string; title: string }) => {
+  /** Overflow (⋯) menu for a media detail page. Movies also get a "Reassign" action
+   *  (wrong-match fix); `reassignModal` must be rendered by the calling screen. */
+  const openMediaMenu = (media: { id: string; title: string; kind?: 'movie' | 'show' }) => {
     showDialog({
       title: media.title,
       buttons: [
         // Primary (yellow): the menu's one real action.
         { label: t('lists:addToList'), variant: 'primary', onPress: () => openListPicker(media.id) },
+        ...(media.kind === 'movie'
+          ? [
+              {
+                label: t('lists:reassign'),
+                variant: 'secondary' as const,
+                onPress: () => reassign.openReassign(media),
+              },
+            ]
+          : []),
         { label: t('common:cancel'), variant: 'ghost' },
       ],
     });
   };
 
-  return { openMediaMenu };
+  return { openMediaMenu, reassignModal: reassign.reassignModal };
 }
 
 const styles = StyleSheet.create({

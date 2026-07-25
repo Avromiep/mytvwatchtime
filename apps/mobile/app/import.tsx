@@ -3,13 +3,10 @@ import { useRouter, useNavigation } from 'expo-router';
 import {
   ActivityIndicator,
   FlatList,
-  KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
-  TextInput,
   View,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
@@ -23,7 +20,6 @@ import {
   Card,
   Chip,
   EmptyState,
-  PosterImage,
   ProgressBar,
   Screen,
   Spinner,
@@ -38,9 +34,9 @@ import {
   usePatchImportItem,
   useResolveAllForShow,
   useResolveByName,
-  useSearch,
   useUploadImport,
 } from '../api/hooks';
+import { ResolveMediaModal } from '../components/ResolveMediaModal';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
 import { showError, showInfo, showSuccess, showConfirm, showDialog } from '../lib/dialog';
@@ -374,10 +370,9 @@ export default function ImportScreen() {
           style={{ marginLeft: spacing.sm }}
         />
       </View>
-      <ResolutionModal
+      <ImportResolutionModal
         item={activeItem}
         importId={importId}
-        tokens={tokens}
         onClose={() => setActiveItem(null)}
       />
     </Screen>
@@ -639,64 +634,29 @@ function describeItem(
   return title;
 }
 
-/** Subtitle for a search result: type · seasons (shows) · year. */
-function resultMeta(r: any, t: (k: string, o?: any) => string): string {
-  const parts: string[] = [(r.type ?? '').toLowerCase()];
-  if (r.type === MediaType.SHOW) {
-    if (r.seasonsCount) parts.push(t('import:seasons', { count: r.seasonsCount }));
-    if (r.yearStart) parts.push(String(r.yearStart));
-  } else if (r.releaseYear) {
-    parts.push(String(r.releaseYear));
-  }
-  return parts.filter(Boolean).join(' · ');
-}
-
-/** Modal to manually resolve a staged item: skip it, or search & pick the correct media. */
-function ResolutionModal({
+/**
+ * Import-specific wiring around the shared media-resolve modal: derives the item's
+ * titles/season context and adds the bulk apply-to-season/whole-show + skip actions.
+ */
+function ImportResolutionModal({
   item,
   importId,
-  tokens,
   onClose,
 }: {
   item: any | null;
   importId: string;
-  tokens: ReturnType<typeof useAppearance>['tokens'];
   onClose: () => void;
 }) {
   const { t } = useTranslation(['import', 'common']);
-  const [query, setQuery] = useState('');
-  // Apply-to-all defaults to the active season; the user can switch to "whole show". Mutually
-  // exclusive; both off = resolve just the single item.
-  const [applyToSeason, setApplyToSeason] = useState(true);
-  const [applyToWholeShow, setApplyToWholeShow] = useState(false);
   const patch = usePatchImportItem(importId);
   const resolveAll = useResolveAllForShow(importId);
 
-  // Hooks must run unconditionally (Rules of Hooks). Derive values defensively so that
-  // `useSearch` stays disabled (empty query) when no item is active.
+  const norm = item?.normalizedData ?? {};
   const entityType = item ? String(item.sourceEntityType) : '';
   // LIST_ITEM (and list-staged favorites) carry their kind in normalizedData.mediaType —
   // without it a movie list item would search shows (and resolve against one).
-  const normMediaType = String(item?.normalizedData?.mediaType ?? '').toLowerCase();
+  const normMediaType = String(norm?.mediaType ?? '').toLowerCase();
   const isMovie = /MOVIE/.test(entityType) || normMediaType === 'movie';
-
-  // On open: prefill the search with the show/movie name and reset the checkboxes (season on).
-  useEffect(() => {
-    setApplyToSeason(true);
-    setApplyToWholeShow(false);
-    const n: any = item?.normalizedData ?? {};
-    setQuery((n.showTitle ?? n.movieTitle ?? n.title ?? '').trim());
-  }, [item?.id]);
-  const trimmed = item ? query.trim() : '';
-  // Search BOTH types at once — sources mistype entities (TV Time lists some movies as
-  // shows, e.g. "Pirates of the Caribbean"), so shows and movies arrive in one merged list.
-  const showsQ = useSearch(trimmed, MediaType.SHOW);
-  const moviesQ = useSearch(trimmed, MediaType.MOVIE);
-  const isSearching = showsQ.isFetching || moviesQ.isFetching;
-  const resolveStyles = buildResolveStyles(tokens);
-
-  if (!item) return null;
-  const norm = item.normalizedData ?? {};
   // Episode info for watched episodes / episode ratings/emotions/comments (S16E9 etc.).
   const season = norm.season ?? norm.seasonNumber;
   const episode = norm.episode ?? norm.episodeNumber;
@@ -704,55 +664,23 @@ function ResolutionModal({
   const sourceTitle = norm.showTitle ?? norm.movieTitle ?? norm.title ?? t('import:noTitle');
   const showSourceTitle = norm.showTitle ?? norm.title;
 
-  // useSearch is an infinite query — results live in data.pages[].items. Merged: shows + movies.
-  const rawResults =
-    trimmed.length > 1
-      ? [
-          ...(showsQ.data?.pages ?? []).flatMap((p) => p.items ?? []),
-          ...(moviesQ.data?.pages ?? []).flatMap((p) => p.items ?? []),
-        ]
-      : [];
-
-  // Smart sort: exact title first, then closest season count, then popularity.
-  const targetSeasons = season != null ? season : undefined;
-  const sortedResults = [...rawResults].sort((a: any, b: any) => {
-    const aTitle = (a.title ?? '').toLowerCase();
-    const bTitle = (b.title ?? '').toLowerCase();
-    const q = trimmed.toLowerCase();
-    // 1. Exact title match wins.
-    const aExact = aTitle === q ? 0 : 1;
-    const bExact = bTitle === q ? 0 : 1;
-    if (aExact !== bExact) return aExact - bExact;
-    // 2. Starts-with title.
-    const aStarts = aTitle.startsWith(q) ? 0 : 1;
-    const bStarts = bTitle.startsWith(q) ? 0 : 1;
-    if (aStarts !== bStarts) return aStarts - bStarts;
-    // 3. Closest season count (if we know the target season).
-    if (targetSeasons != null) {
-      const aSeasons = a.seasonsCount ?? 0;
-      const bSeasons = b.seasonsCount ?? 0;
-      // Shows with fewer seasons than the import item can't be right — push them down hard.
-      const aTooFew = aSeasons < targetSeasons ? 1000 : 0;
-      const bTooFew = bSeasons < targetSeasons ? 1000 : 0;
-      if (aTooFew !== bTooFew) return aTooFew - bTooFew;
-      // Among valid candidates, closest season count wins.
-      const aDiff = Math.abs(aSeasons - targetSeasons);
-      const bDiff = Math.abs(bSeasons - targetSeasons);
-      if (aDiff !== bDiff) return aDiff - bDiff;
-    }
-    // 4. Fallback: more episodes = more likely to be a real match.
-    return (b.episodesCount ?? 0) - (a.episodesCount ?? 0);
-  });
-  const results = sortedResults;
-
-  const resolve = async (result: any) => {
+  const resolve = async (
+    result: any,
+    bulk: { applyToSeason: boolean; applyToWholeShow: boolean },
+  ) => {
+    if (!item) return;
     try {
       // A MOVIE target always resolves JUST this item: an episode→movie match is 1:1
       // (a season's episodes are different movies — never the same one), so the
       // apply-to-season/whole-show bulk path is intentionally bypassed for movies.
       const targetIsMovie = result?.type === MediaType.MOVIE;
-      if (!targetIsMovie && !isMovie && showSourceTitle && (applyToSeason || applyToWholeShow)) {
-        const resolveSeason = applyToWholeShow ? null : (season ?? null);
+      if (
+        !targetIsMovie &&
+        !isMovie &&
+        showSourceTitle &&
+        (bulk.applyToSeason || bulk.applyToWholeShow)
+      ) {
+        const resolveSeason = bulk.applyToWholeShow ? null : (season ?? null);
         const r = await resolveAll.mutateAsync({
           matchedMediaId: result.id,
           sourceTitle: showSourceTitle,
@@ -774,6 +702,7 @@ function ResolutionModal({
     }
   };
   const skip = async () => {
+    if (!item) return;
     try {
       await patch.mutateAsync({ itemId: item.id, userResolution: 'skip' });
       onClose();
@@ -783,209 +712,25 @@ function ResolutionModal({
   };
 
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      {/* Keep the bottom sheet above the on-screen keyboard (RN Modal does not do this
-          by itself, especially on Android). */}
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <Pressable style={resolveStyles.backdrop} onPress={onClose}>
-          <Pressable
-            style={[resolveStyles.sheet, { backgroundColor: tokens.surface }]}
-            onPress={(e) => e.stopPropagation()}
-          >
-            <View style={resolveStyles.header}>
-              <T variant="h2" numberOfLines={1}>
-                {t('import:resolve')}
-              </T>
-              <Pressable onPress={onClose} hitSlop={8}>
-                <Ionicons name="close" size={24} color={tokens.textPrimary} />
-              </Pressable>
-            </View>
-
-            <T variant="caption" style={{ marginTop: spacing.xs }}>
-              {t('import:sourceTitle')}:{' '}
-              <T variant="caption" style={{ fontWeight: '700', color: tokens.textPrimary }}>
-                {sourceTitle}
-              </T>
-            </T>
-            <T variant="micro" muted style={{ marginTop: 2 }}>
-              {entityType.replace(/_/g, ' ').toLowerCase()}
-              {episodeTag ? ` · ${episodeTag}` : ''}
-            </T>
-
-            {!isMovie && showSourceTitle ? (
-              <View style={{ marginTop: spacing.sm }}>
-                <Pressable
-                  style={{ flexDirection: 'row', alignItems: 'center' }}
-                  onPress={() =>
-                    setApplyToSeason((prev) => {
-                      const next = !prev;
-                      if (next) setApplyToWholeShow(false);
-                      return next;
-                    })
-                  }
-                  hitSlop={6}
-                >
-                  <Ionicons
-                    name={applyToSeason ? 'checkbox' : 'square-outline'}
-                    size={22}
-                    color={applyToSeason ? tokens.primary : tokens.textMuted}
-                  />
-                  <T variant="caption" style={{ marginLeft: spacing.xs, flex: 1 }}>
-                    {season != null
-                      ? t('import:applyToAllSeason', { season })
-                      : t('import:applyToAllEpisodes')}
-                  </T>
-                </Pressable>
-                <Pressable
-                  style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}
-                  onPress={() =>
-                    setApplyToWholeShow((prev) => {
-                      const next = !prev;
-                      if (next) setApplyToSeason(false);
-                      return next;
-                    })
-                  }
-                  hitSlop={6}
-                >
-                  <Ionicons
-                    name={applyToWholeShow ? 'checkbox' : 'square-outline'}
-                    size={22}
-                    color={applyToWholeShow ? tokens.primary : tokens.textMuted}
-                  />
-                  <T variant="caption" style={{ marginLeft: spacing.xs, flex: 1 }}>
-                    {t('import:applyToWholeShow')}
-                  </T>
-                </Pressable>
-              </View>
-            ) : null}
-
-            <Button
-              title={t('import:skipItem')}
-              variant="ghost"
-              icon="close-circle-outline"
-              onPress={skip}
-              loading={patch.isPending}
-              style={{ marginTop: spacing.md }}
-            />
-
-            <T variant="caption" muted style={{ marginTop: spacing.md, marginBottom: spacing.xs }}>
-              {t('import:searchToMatch')}
-            </T>
-            <TextInput
-              value={query}
-              onChangeText={setQuery}
-              placeholder={t('import:searchPlaceholder')}
-              placeholderTextColor={tokens.textMuted}
-              style={[
-                resolveStyles.input,
-                { color: tokens.textPrimary, borderColor: tokens.divider },
-              ]}
-              autoFocus
-            />
-
-            {isSearching && query.trim().length > 1 ? (
-              <Spinner />
-            ) : results.length === 0 ? (
-              query.trim().length > 1 ? (
-                <T variant="micro" muted style={{ padding: spacing.md, textAlign: 'center' }}>
-                  {t('import:noResults')}
-                </T>
-              ) : null
-            ) : (
-              <ScrollView style={{ maxHeight: 500 }} keyboardShouldPersistTaps="handled">
-                {results.map((r: any) => {
-                  const isExact = (r.title ?? '').toLowerCase() === trimmed.toLowerCase();
-                  const seasonMatch =
-                    targetSeasons != null && (r.seasonsCount ?? 0) >= targetSeasons;
-                  return (
-                    <Pressable
-                      key={r.id}
-                      onPress={() => resolve(r)}
-                      style={[
-                        resolveStyles.resultRow,
-                        isExact && {
-                          backgroundColor: tokens.primary + '15',
-                          borderColor: tokens.primary,
-                          borderWidth: 1,
-                        },
-                      ]}
-                    >
-                      <PosterImage
-                        uri={r.images?.poster ?? r.posterUrl}
-                        style={resolveStyles.poster}
-                      />
-                      <View style={{ flex: 1 }}>
-                        <T variant="body" numberOfLines={1}>
-                          {r.title}
-                        </T>
-                        {r.originalTitle && r.originalTitle !== r.title ? (
-                          <T variant="micro" muted numberOfLines={1}>
-                            {r.originalTitle}
-                          </T>
-                        ) : null}
-                        <T variant="micro" muted>
-                          {resultMeta(r, t)}
-                        </T>
-                        {isExact && (
-                          <T variant="micro" style={{ color: tokens.primary }}>
-                            ✓ Exact match
-                          </T>
-                        )}
-                        {seasonMatch && !isExact && (
-                          <T variant="micro" style={{ color: tokens.primary }}>
-                            ✓ {targetSeasons}+ seasons
-                          </T>
-                        )}
-                      </View>
-                      <Ionicons name="checkmark-circle-outline" size={22} color={tokens.primary} />
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
-            )}
-          </Pressable>
-        </Pressable>
-      </KeyboardAvoidingView>
-    </Modal>
+    <ResolveMediaModal
+      visible={!!item}
+      sourceTitle={sourceTitle}
+      isMovie={isMovie}
+      // Prefill stays empty for untitled items (sourceTitle falls back to "(no title)").
+      initialQuery={(norm.showTitle ?? norm.movieTitle ?? norm.title ?? '').trim()}
+      targetSeason={season ?? null}
+      onClose={onClose}
+      importResolve={{
+        subtitle:
+          entityType.replace(/_/g, ' ').toLowerCase() + (episodeTag ? ` · ${episodeTag}` : ''),
+        season: season ?? null,
+        showBulkOptions: !isMovie && !!showSourceTitle,
+        onConfirm: resolve,
+        onSkip: skip,
+        skipPending: patch.isPending,
+      }}
+    />
   );
-}
-
-function buildResolveStyles(tokens: ReturnType<typeof useAppearance>['tokens']) {
-  return StyleSheet.create({
-    backdrop: { flex: 1, backgroundColor: tokens.overlayStrong, justifyContent: 'flex-end' },
-    sheet: {
-      borderTopLeftRadius: 20,
-      borderTopRightRadius: 20,
-      padding: spacing.lg,
-      paddingBottom: 32,
-    },
-    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    input: {
-      borderWidth: 1,
-      borderRadius: radius.md,
-      paddingHorizontal: spacing.md,
-      paddingVertical: spacing.sm,
-      fontSize: 16,
-    },
-    resultRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingVertical: spacing.sm,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: tokens.divider,
-    },
-
-    poster: {
-      width: 38,
-      height: 57,
-      marginRight: spacing.sm,
-      borderRadius: radius.sm,
-      backgroundColor: tokens.surfaceElevated,
-    },
-  });
 }
 
 const styles = StyleSheet.create({

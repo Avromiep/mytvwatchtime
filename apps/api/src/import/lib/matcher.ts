@@ -32,6 +32,28 @@ export interface MatchResult {
   matchedTitle: string | null;
 }
 
+/**
+ * Pick among EXACT-title matches. When the import carries a year, only candidates within
+ * ±1y are eligible (remakes share titles — the year is the real disambiguator); otherwise
+ * the MOST RECENT candidate wins, because TMDB ranks by historical popularity, which
+ * favors the classic over the remake the user usually means. Popularity breaks ties.
+ */
+function pickBestTitleMatch<
+  T extends { title: string; year?: number | null; popularity?: number | null },
+>(exactMatches: T[], importYear?: number | null): T | undefined {
+  if (exactMatches.length === 0) return undefined;
+  let pool = exactMatches;
+  if (importYear != null) {
+    const near = exactMatches.filter(
+      (c) => c.year != null && Math.abs(c.year - importYear) <= 1,
+    );
+    if (near.length > 0) pool = near;
+  }
+  return [...pool].sort(
+    (a, b) => (b.year ?? 0) - (a.year ?? 0) || (b.popularity ?? 0) - (a.popularity ?? 0),
+  )[0];
+}
+
 @Injectable()
 export class ImportMatcher {
   private readonly logger = new Logger(ImportMatcher.name);
@@ -203,7 +225,7 @@ export class ImportMatcher {
             ? await this.tmdb.searchShows(title, 1)
             : await this.tmdb.searchMovies(title, 1);
         const exactMatches = res.items.filter((i) => normTitle(i.title) === norm);
-        let best = exactMatches[0] ?? res.items[0];
+        let best = pickBestTitleMatch(exactMatches, year) ?? res.items[0];
         // Disambiguate duplicate titles using the import's season/episode footprint: prefer the
         // candidate that has enough seasons AND enough episodes in each referenced season.
         const hasHint =
@@ -237,7 +259,7 @@ export class ImportMatcher {
               ? await this.tmdb.searchShows(title, 1)
               : await this.tmdb.searchMovies(title, 1);
           const exactMatches = r.items.filter((i) => normTitle(i.title) === norm);
-          const b = exactMatches[0] ?? r.items[0];
+          const b = pickBestTitleMatch(exactMatches, year) ?? r.items[0];
           if (!b) return null;
           const mid =
             type === 'SHOW'
@@ -264,7 +286,11 @@ export class ImportMatcher {
           type === 'SHOW'
             ? await this.tvdb.searchShows(title, 1)
             : await this.tvdb.searchMovies(title, 1);
-        const best = res.items.find((i) => normTitle(i.title) === norm) ?? res.items[0];
+        const best =
+          pickBestTitleMatch(
+            res.items.filter((i) => normTitle(i.title) === norm),
+            year,
+          ) ?? res.items[0];
         if (best && best.tvdbId) {
           const sameTitle = normTitle(best.title) === norm;
           const tvdbArgs = {
@@ -370,7 +396,7 @@ export class ImportMatcher {
             : await this.tmdb.searchMovies(title, 1);
         const verified = res.items.filter((i) => nameMatches(i));
         if (verified.length) {
-          let best = verified[0];
+          let best = pickBestTitleMatch(verified)!;
           const hasHint =
             !!hint && (!!hint.maxSeason || !!(hint.seasonEpisodes && hint.seasonEpisodes.length));
           if (type === 'SHOW' && verified.length > 1 && hasHint) {
@@ -396,7 +422,7 @@ export class ImportMatcher {
           type === 'SHOW'
             ? await this.tvdb.searchShows(title, 1)
             : await this.tvdb.searchMovies(title, 1);
-        const best = res.items.find((i) => normTitle(i.title) === norm);
+        const best = pickBestTitleMatch(res.items.filter((i) => normTitle(i.title) === norm));
         if (best && best.tvdbId) {
           const tvdbArgs = {
             tvdbId: best.tvdbId,

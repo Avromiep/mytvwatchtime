@@ -45,7 +45,7 @@ export default function MovieDetailScreen() {
             <Header
               showBack
               right={
-                <Pressable hitSlop={10} onPress={() => addToList.openMediaMenu({ id: movie.id, title: movie.title })}>
+                <Pressable hitSlop={10} onPress={() => addToList.openMediaMenu({ id: movie.id, title: movie.title, kind: 'movie' })}>
                   <Ionicons name="ellipsis-horizontal" size={24} color={tokens.mediaText} />
                 </Pressable>
               }
@@ -164,6 +164,7 @@ export default function MovieDetailScreen() {
         </View>
         <View style={{ height: 40 }} />
       </ScrollView>
+      {addToList.reassignModal}
     </Screen>
   );
 }

@@ -4,6 +4,8 @@
   "addToList": "Tambahkan ke daftar",
   "addedToList": "Ditambahkan ke daftar",
   "removedFromList": "Dihapus dari daftar",
+  "reassign": "Tetapkan ulang",
+  "reassignSuccess": "Film berhasil ditetapkan ulang",
   "titleField": "Judul",
   "titlePlaceholder": "Acara favorit saya",
   "descField": "Deskripsi (opsional)",

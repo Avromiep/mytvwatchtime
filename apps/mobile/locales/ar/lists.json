@@ -4,6 +4,8 @@
   "addToList": "أضف إلى قائمة",
   "addedToList": "تمت الإضافة إلى القائمة",
   "removedFromList": "تمت الإزالة من القائمة",
+  "reassign": "إعادة تعيين",
+  "reassignSuccess": "تمت إعادة تعيين الفيلم",
   "titleField": "العنوان",
   "titlePlaceholder": "مسلسلاتي المفضلة",
   "descField": "الوصف (اختياري)",

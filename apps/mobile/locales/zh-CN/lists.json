@@ -4,6 +4,8 @@
   "addToList": "添加到片单",
   "addedToList": "已添加到片单",
   "removedFromList": "已从片单移除",
+  "reassign": "重新匹配",
+  "reassignSuccess": "电影已重新匹配",
   "titleField": "标题",
   "titlePlaceholder": "我最喜欢的剧集",
   "descField": "描述（可选）",

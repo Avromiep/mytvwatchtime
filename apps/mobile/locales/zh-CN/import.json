@@ -69,5 +69,7 @@
   "resumeDesc": "您有一个未完成的导入，其中 {{count}} 个项目待审核。可以从上次继续，或开始新的导入——重新开始会取消旧导入（重新导入绝不会重复）。",
   "resumeContinue": "继续导入",
   "resumeStartNew": "重新开始",
-  "resolvedBulk": "已为 {{title}} 匹配 {{count}} 个项目"
+  "resolvedBulk": "已为 {{title}} 匹配 {{count}} 个项目",
+  "exactMatch": "✓ 完全匹配",
+  "seasonsMatch": "✓ {{count}}+ 季"
 }

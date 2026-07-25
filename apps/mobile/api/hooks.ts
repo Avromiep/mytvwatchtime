@@ -1143,6 +1143,27 @@ export const useRewatchMovie = () => {
   });
 };
 
+/**
+ * Reassign a movie to a different media entry (fixes a wrong match): the server moves
+ * the user's watch state, ratings, and list membership onto the target movie and
+ * returns a summary of what moved.
+ */
+export const useReassignMedia = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ sourceId, targetMediaId }: { sourceId: string; targetMediaId: string }) =>
+      api.post(`/movies/${sourceId}/reassign`, { targetMediaId }),
+    onSuccess: (_data, { sourceId, targetMediaId }) => {
+      qc.invalidateQueries({ queryKey: qk.movie(sourceId) });
+      qc.invalidateQueries({ queryKey: qk.movie(targetMediaId) });
+      qc.invalidateQueries({ queryKey: ['watchlist'] });
+      qc.invalidateQueries({ queryKey: ['history'] });
+      qc.invalidateQueries({ queryKey: ['favorites'] });
+      qc.invalidateQueries({ queryKey: ['myLists'] });
+    },
+  });
+};
+
 export const useToggleWatchlist = () => {
   const qc = useQueryClient();
   return useMutation({
