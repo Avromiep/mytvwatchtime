@@ -148,21 +148,34 @@ export class AdminController {
 
   @Post('repair-provider-duplicate-comments/run')
   @RequireRoles('ADMIN')
-  runRepairProviderDuplicateComments(
+  async runRepairProviderDuplicateComments(
+    @CurrentUser('id') adminId: string,
     @Query('source') source?: string,
     @Query('target') target?: string,
   ) {
     if (!source || !target || source === target) {
       throw new BadRequestException('source and target media ids are required and must differ');
     }
-    return this.metadataBackfill.repairMergedMovieThreadComments(source, target);
+    const result = await this.metadataBackfill.repairMergedMovieThreadComments(source, target);
+    await this.admin.audit(adminId, 'repair_provider_duplicate_comments', 'media', target, {
+      source,
+      ...result,
+    });
+    return result;
   }
 
   @Post('repair-movie-thread-self-attachments/run')
   @RequireRoles('ADMIN')
-  runRepairMovieThreadSelfAttachments(@Query('target') target?: string) {
+  async runRepairMovieThreadSelfAttachments(
+    @CurrentUser('id') adminId: string,
+    @Query('target') target?: string,
+  ) {
     if (!target) throw new BadRequestException('target media id is required');
-    return this.metadataBackfill.clearMovieThreadSelfAttachments(target);
+    const result = await this.metadataBackfill.clearMovieThreadSelfAttachments(target);
+    await this.admin.audit(adminId, 'repair_movie_thread_self_attachments', 'media', target, {
+      ...result,
+    });
+    return result;
   }
 
   @Post('repair-non-english-base/run')
@@ -192,9 +205,16 @@ export class AdminController {
 
   @Post('repair-english-content/one')
   @RequireRoles('ADMIN')
-  runRepairOneEnglishContent(@Query('mediaId') mediaId?: string) {
+  async runRepairOneEnglishContent(
+    @CurrentUser('id') adminId: string,
+    @Query('mediaId') mediaId?: string,
+  ) {
     if (!mediaId) throw new BadRequestException('mediaId is required');
-    return this.metadataBackfill.repairOneEnglishContent(mediaId);
+    const result = await this.metadataBackfill.repairOneEnglishContent(mediaId);
+    await this.admin.audit(adminId, 'repair_english_content_one', 'media', mediaId, {
+      ...result,
+    });
+    return result;
   }
 
   @Post('repair-banner-posters/run')

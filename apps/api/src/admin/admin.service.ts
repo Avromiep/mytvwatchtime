@@ -903,7 +903,7 @@ export class AdminService {
   }
 
   // ---------------- Audit helper ----------------
-  private async audit(
+  async audit(
     adminId: string,
     action: string,
     targetType?: string,

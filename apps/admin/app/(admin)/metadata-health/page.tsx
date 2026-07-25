@@ -71,7 +71,7 @@ const STAT_HINTS: Record<string, string> = {
   tvdbOnly: 'Shows/movies that exist only on TVDB (no TMDB id) — informational, usually anime.',
   stale: 'Metadata older than 30 days. These refresh lazily on view; Run Backfill for a bulk pass.',
   animeOnTmdb:
-    'Animation-genre shows whose structure came from TMDB (wrong season splits for anime). Fix moves them to TVDB and transfers watch data. Rows whose TVDB id cannot be resolved are parked for 30 days (see "Anime unresolvable" below) and no longer counted here — the nightly/hourly job no longer burns provider calls re-attempting them.',
+    'Animation-genre shows whose structure came from TMDB (wrong season splits for anime). Fix moves them to TVDB and transfers watch data. Rows whose TVDB id cannot be resolved are parked for 30 days (see "Anime unresolvable" below) and no longer counted here — the nightly/hourly job no longer burns provider calls re-attempting them. Fully repaired shows whose few leftover TMDB rows were kept to preserve user data are not counted either; a show re-appears only when NEW TMDB contamination arrives.',
   structuralTypeMismatch:
     'Movie and show merged into ONE row by a bad id cross-link. Repair splits them and transfers watch data.',
   castMissingCharacterIds:

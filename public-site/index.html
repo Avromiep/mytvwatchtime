@@ -165,11 +165,6 @@
       margin: 30px auto 0;
       max-width: 520px;
     }
-    .downloads h3 {
-      font-size: 18px;
-      margin-bottom: 16px;
-      color: var(--text);
-    }
     .download-row {
       display: flex;
       gap: 14px;
@@ -189,18 +184,17 @@
     .store-btn {
       display: inline-flex;
       align-items: center;
-      gap: 10px;
-      padding: 12px 22px;
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      background: var(--card);
-      color: var(--muted);
-      font-size: 14px;
+      justify-content: center;
       cursor: pointer;
+      transition: transform .2s, filter .2s;
     }
-    .store-btn .label { font-size: 11px; color: var(--muted); display: block; }
-    .store-btn .name { font-size: 15px; font-weight: 600; color: var(--text); }
-    .store-btn:hover { text-decoration: none; border-color: var(--accent); }
+    .store-btn:hover { text-decoration: none; transform: translateY(-2px); filter: brightness(1.08); }
+    .store-badge {
+      display: block;
+      width: auto;
+      height: clamp(40px, 10vw, 54px);
+      max-width: min(180px, 44vw);
+    }
 
     /* Footer */
     footer {
@@ -546,6 +540,16 @@
       <a href="https://app.tvwatchtime.org" style="display: inline-block; background: var(--accent); color: var(--bg); padding: 14px 36px; border-radius: 12px; font-size: 18px; font-weight: 800; text-decoration: none; box-shadow: 0 0 30px rgba(255, 214, 10, 0.3); transition: transform .2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
         Launch TV Watch Time →
       </a>
+      <div class="downloads" aria-label="Download TV Watch Time">
+        <div class="download-row">
+          <a href="https://testflight.apple.com/join/YSTAmpwZ" class="store-btn" target="_blank" rel="noopener" aria-label="Join TV Watch Time on TestFlight">
+            <img class="store-badge" src="logos/Download_on_the_App_Store_Badge.svg" alt="Download on the App Store" />
+          </a>
+          <a href="https://play.google.com/store/apps/details?id=app.tvwatchtime.mobile" class="store-btn" target="_blank" rel="noopener" aria-label="Download TV Watch Time on Google Play">
+            <img class="store-badge" src="logos/Google_Play_Store_badge_EN.svg" alt="Get it on Google Play" />
+          </a>
+        </div>
+      </div>
     </div>
 
     <h1 class="hero-title">
@@ -792,24 +796,6 @@
       <p class="gallery-hint">Scroll horizontally or use the arrows. Click a screen to enlarge it.</p>
     </section>
 
-    <div class="downloads">
-      <h3>Get the app</h3>
-      <div class="download-row">
-        <a href="https://testflight.apple.com/join/YSTAmpwZ" class="store-btn" target="_blank" rel="noopener">
-          <span>
-            <span class="label">Join beta on</span>
-            <span class="name">TestFlight</span>
-          </span>
-        </a>
-        <a href="https://github.com/Metalingus/tvwatchtime/releases" class="store-btn" target="_blank" rel="noopener">
-          <span>
-            <span class="label">Get it on</span>
-            <span class="name">Google Play</span>
-          </span>
-        </a>
-      </div>
-    </div>
-
     <div class="self-host">
       <h3>Self-host or contribute</h3>
       <p>TV Watch Time is open source. Run your own instance or contribute on GitHub.</p>
@@ -857,6 +843,9 @@
     </div>
     <div style="margin-top: 8px; color: var(--muted); font-size: 11px;">
       Metadata provided by <a href="https://www.themoviedb.org" style="color: var(--muted); text-decoration: underline;">TMDB</a> and <a href="https://thetvdb.com" style="color: var(--muted); text-decoration: underline;">TheTVDB</a>. Consider <a href="https://thetvdb.com/subscribe" style="color: var(--muted); text-decoration: underline;">subscribing to TheTVDB</a>.
+    </div>
+    <div style="margin-top: 8px; color: var(--muted); font-size: 11px;">
+      TV Watch Time is an independent project and is not affiliated with TV Time or Whip Media. TV Time and related marks belong to their respective owners.
     </div>
   </footer>
 

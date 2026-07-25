@@ -48,7 +48,7 @@
 - After validation, inspect `git status --short`. Unexpected source-adjacent
   `.js`, `.js.map`, or `.d.ts` files mean validation failed and must be
   investigated.
-  
+
 ## Database change workflow
 - For schema changes, create and review the appropriate checked-in migration, then regenerate the Prisma client.
 - Do not apply migrations, run `db push`, seed a shared database, or otherwise write to a shared/staging/production database without explicit approval.
@@ -88,7 +88,7 @@ Never perform the following without explicit user confirmation in the current co
 ## Conventions
 - Search discipline: NEVER run grep/rg from the repo root unscoped. Search `apps/*/src` or
   `packages/*/src` explicitly; never traverse `node_modules`, `dist`, `build`, `.expo`, `coverage`.
-  Use `rtk grep` (or `rg`, which respects .gitignore) — never `grep -r`.
+  Use `rtk grep` (or `rg`, which respects .gitignore) — never `grep -r`. Never use `rtk pnpm` because it invokes tsc without --noEmit, emitting .js files.
 - Always import shared types from `@tvwatch/shared` — do not duplicate DTOs across apps.
 - The Prisma schema (`apps/api/prisma/schema.prisma`) is the source of truth for the data model. Regenerate after edits: `pnpm db:generate`.
 - Mobile NEVER calls third-party media APIs directly. All media data flows through the backend, which normalizes + caches external IDs.

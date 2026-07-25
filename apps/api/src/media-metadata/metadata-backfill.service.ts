@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -283,18 +283,22 @@ export class MetadataBackfillService {
       // union upsert, so partially-switched shows are still counted. The animation genre
       // matches slug OR English name (localized genre rows exist from non-en hydrations).
       // Rows whose TVDB id recently proved UNRESOLVABLE (animeTvdbNoId stamp < 30d) are
-      // excluded — they are parked, not actionable.
+      // excluded — they are parked, not actionable. Rows whose remaining stale rows were
+      // KEPT by a completed remap (animeTvdbKeptUnmapped — unmapped but carrying user
+      // data) are excluded too, mirroring the repair gate: only a stale count that grew
+      // PAST the kept count (new TMDB contamination) makes the show actionable again.
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
           JOIN shows sh ON sh.media_id = m.id
           WHERE m.type='SHOW'
             AND EXISTS (SELECT 1 FROM media_genres mg JOIN genres g ON g.id = mg.genre_id
                         WHERE mg.media_id = m.id AND (g.slug = 'animation' OR lower(g.name) = 'animation'))
-            AND EXISTS (SELECT 1 FROM seasons s
-                        JOIN episodes e ON e.season_id = s.id
-                        JOIN episode_external_ids ee ON ee.episode_id = e.id AND ee.provider = 'TMDB'
-                        WHERE s.show_id = sh.id
-                          AND NOT EXISTS (SELECT 1 FROM episode_external_ids tv
-                                          WHERE tv.episode_id = e.id AND tv.provider = 'THE_TVDB'))
+            AND (SELECT count(DISTINCT e.id) FROM seasons s
+                 JOIN episodes e ON e.season_id = s.id
+                 JOIN episode_external_ids ee ON ee.episode_id = e.id AND ee.provider = 'TMDB'
+                 WHERE s.show_id = sh.id
+                   AND NOT EXISTS (SELECT 1 FROM episode_external_ids tv
+                                   WHERE tv.episode_id = e.id AND tv.provider = 'THE_TVDB'))
+                > COALESCE((m.metadata_provenance->>'animeTvdbKeptUnmapped')::int, 0)
             AND COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '1970-01-01')::timestamptz < NOW() - INTERVAL '30 days'`,
       // Same set, but missing the series-level TVDB id (the fix needs a cross-id lookup).
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
@@ -302,12 +306,13 @@ export class MetadataBackfillService {
           WHERE m.type='SHOW'
             AND EXISTS (SELECT 1 FROM media_genres mg JOIN genres g ON g.id = mg.genre_id
                         WHERE mg.media_id = m.id AND (g.slug = 'animation' OR lower(g.name) = 'animation'))
-            AND EXISTS (SELECT 1 FROM seasons s
-                        JOIN episodes e ON e.season_id = s.id
-                        JOIN episode_external_ids ee ON ee.episode_id = e.id AND ee.provider = 'TMDB'
-                        WHERE s.show_id = sh.id
-                          AND NOT EXISTS (SELECT 1 FROM episode_external_ids tv
-                                          WHERE tv.episode_id = e.id AND tv.provider = 'THE_TVDB'))
+            AND (SELECT count(DISTINCT e.id) FROM seasons s
+                 JOIN episodes e ON e.season_id = s.id
+                 JOIN episode_external_ids ee ON ee.episode_id = e.id AND ee.provider = 'TMDB'
+                 WHERE s.show_id = sh.id
+                   AND NOT EXISTS (SELECT 1 FROM episode_external_ids tv
+                                   WHERE tv.episode_id = e.id AND tv.provider = 'THE_TVDB'))
+                > COALESCE((m.metadata_provenance->>'animeTvdbKeptUnmapped')::int, 0)
             AND NOT EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id AND x.provider = 'THE_TVDB')
             AND COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '1970-01-01')::timestamptz < NOW() - INTERVAL '30 days'`,
       // Cross-type contamination: a MOVIE row carrying a shows row (or the reverse) —
@@ -609,8 +614,10 @@ export class MetadataBackfillService {
    * Re-hydrate Animation-genre shows whose structure came from TMDB. TMDB anime
    * season/episode structures are often wrong, so these shows are TVDB-authoritative.
    *
-   * Selection mirrors the `animeOnTmdb` health stat: genre slug `animation`, has TMDB
-   * episode external ids, no TVDB episode external ids. Per show: resolve the TVDB series
+   * Selection mirrors the `animeOnTmdb` health stat: genre slug `animation`, stale
+   * TMDB-only episode rows (TMDB episode id, no TVDB one) BEYOND the count a completed
+   * remap deliberately kept (`animeTvdbKeptUnmapped` — unmapped rows preserved for their
+   * user data). Per show: resolve the TVDB series
    * id (stored external id → TMDB /external_ids cross-id → STRICT exact-title+year TVDB
    * search), clear `metadataRefreshedAt` to bypass the 24h staleness gate, then
    * ensureShowFullTvdb (union upsert — never deletes existing structure or watch history).
@@ -700,8 +707,8 @@ export class MetadataBackfillService {
               WHERE mg.media_id = m.id
                 AND (g.slug = 'animation' OR lower(g.name) = 'animation')
             )
-            AND EXISTS (
-              SELECT 1
+            AND (
+              SELECT count(DISTINCT e.id)
               FROM seasons s
               JOIN episodes e ON e.season_id = s.id
               WHERE s.show_id = sh.id
@@ -715,7 +722,7 @@ export class MetadataBackfillService {
                   WHERE tvdb_ep.episode_id = e.id
                     AND tvdb_ep.provider::text = ${ExternalProvider.THE_TVDB}
                 )
-            )
+            ) > COALESCE((m.metadata_provenance->>'animeTvdbKeptUnmapped')::int, 0)
           ORDER BY m.title ASC
           LIMIT ${take}`;
       } finally {
@@ -1302,16 +1309,26 @@ export class MetadataBackfillService {
     targetMediaId: string,
   ): Promise<{ comments: number; externalReviews: number }> {
     if (!sourceMediaId || !targetMediaId || sourceMediaId === targetMediaId) {
-      throw new Error('source and target media ids are required and must differ');
+      throw new BadRequestException('source and target media ids are required and must differ');
     }
     const target = await this.prisma.mediaItem.findUnique({
       where: { id: targetMediaId },
       select: { type: true },
     });
     if (!target || target.type !== MediaType.MOVIE) {
-      throw new Error('target media row must be an existing movie');
+      throw new NotFoundException('target media row must be an existing movie');
     }
-    const [threadComments, attachedComments, externalReviews] = await this.prisma.$transaction([
+    // A comment can match BOTH update filters (threadId + mediaId on the source row) —
+    // count the distinct rows once, up front, so the reported number is the truth.
+    const comments = await this.prisma.comment.count({
+      where: {
+        OR: [
+          { threadType: 'MOVIE', threadId: sourceMediaId },
+          { mediaType: MediaType.MOVIE, mediaId: sourceMediaId },
+        ],
+      },
+    });
+    const [, , externalReviews] = await this.prisma.$transaction([
       this.prisma.comment.updateMany({
         where: { threadType: 'MOVIE', threadId: sourceMediaId },
         data: { threadId: targetMediaId },
@@ -1325,7 +1342,6 @@ export class MetadataBackfillService {
         data: { mediaId: targetMediaId },
       }),
     ]);
-    const comments = threadComments.count + attachedComments.count;
     this.logger.log(
       `Repointed ${comments} movie comments and ${externalReviews.count} external reviews from ${sourceMediaId} to ${targetMediaId}`,
     );
@@ -1333,13 +1349,13 @@ export class MetadataBackfillService {
   }
 
   async clearMovieThreadSelfAttachments(targetMediaId: string): Promise<{ comments: number }> {
-    if (!targetMediaId) throw new Error('target media id is required');
+    if (!targetMediaId) throw new BadRequestException('target media id is required');
     const target = await this.prisma.mediaItem.findUnique({
       where: { id: targetMediaId },
       select: { type: true },
     });
     if (!target || target.type !== MediaType.MOVIE) {
-      throw new Error('target media row must be an existing movie');
+      throw new NotFoundException('target media row must be an existing movie');
     }
     const res = await this.prisma.comment.updateMany({
       where: {
@@ -2376,6 +2392,16 @@ export class MetadataBackfillService {
     return s.trim().toLowerCase().replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ');
   }
 
+  /** Overview is fine when there is nothing to compare: no visible text, or the provider
+   *  simply HAS no English overview — a rehydrate cannot fix that, so treating it as a
+   *  mismatch would fail → park → retry the same row forever. */
+  private englishOverviewMatches(providerOverview: string, visibleOverview: string): boolean {
+    if (!visibleOverview || !providerOverview) return true;
+    return (
+      this.normTitleForCompare(providerOverview) === this.normTitleForCompare(visibleOverview)
+    );
+  }
+
   /** The provider's canonical English base in ONE light call (TMDB localized base /
    *  TVDB English payload). null = unverifiable right now (no ids, provider down). */
   private async resolveProviderEnglishBase(m: {
@@ -2707,11 +2733,10 @@ export class MetadataBackfillService {
           const ep = episodeStats.get(m.id) ?? { fingerprint: '', hasSuspect: false };
           const titleMatches =
             this.normTitleForCompare(providerBase.title) === this.normTitleForCompare(visibleTitle);
-          const overviewMatches =
-            !visibleOverview ||
-            (!!providerBase.overview &&
-              this.normTitleForCompare(providerBase.overview) ===
-                this.normTitleForCompare(visibleOverview));
+          const overviewMatches = this.englishOverviewMatches(
+            providerBase.overview,
+            visibleOverview,
+          );
           if (titleMatches && overviewMatches && !ep.hasSuspect) {
             verified++;
             // Remember the verified visible content: the row leaves the suspect pool until
@@ -2733,11 +2758,10 @@ export class MetadataBackfillService {
           const refreshedTitleMatches =
             this.normTitleForCompare(providerBase.title) ===
             this.normTitleForCompare(refreshedContent.title);
-          const refreshedOverviewMatches =
-            !refreshedContent.overview ||
-            (!!providerBase.overview &&
-              this.normTitleForCompare(providerBase.overview) ===
-                this.normTitleForCompare(refreshedContent.overview));
+          const refreshedOverviewMatches = this.englishOverviewMatches(
+            providerBase.overview,
+            refreshedContent.overview,
+          );
           const stillWrongReasons = [
             !refreshedTitleMatches ? 'title still differs after rehydrate' : null,
             !refreshedOverviewMatches ? 'overview still differs after rehydrate' : null,
@@ -2761,6 +2785,15 @@ export class MetadataBackfillService {
           fixed++;
           if (sample.length < 5) sample.push(`${m.title} → ${providerBase.title}`);
         } catch (e) {
+          // A throttled provider would fail (and failure-stamp) every remaining row —
+          // stop the batch like the sibling backfills instead of parking valid repairs.
+          if (this.isRateLimitError(e)) {
+            recordFailureReason('provider rate-limited/throttled');
+            this.logger.warn(
+              `English-content repair rate-limited after ${i} rows — stopping the batch early`,
+            );
+            break;
+          }
           failed++;
           recordFailureReason(classifyFailureReason(e));
           await this.stampEnglishContentRepairFailure(m.id, e).catch(() => undefined);
@@ -2821,7 +2854,7 @@ export class MetadataBackfillService {
         genres: { select: { genre: { select: { slug: true, name: true } } } },
       },
     });
-    if (!m) throw new Error('media not found');
+    if (!m) throw new NotFoundException('media not found');
     const providerBase = await this.resolveProviderEnglishBase(m);
     if (!providerBase) {
       await this.stampEnglishContentRepairFailure(mediaId, 'no provider English base').catch(
@@ -2838,11 +2871,10 @@ export class MetadataBackfillService {
     const titleMatches =
       this.normTitleForCompare(providerBase.title) ===
       this.normTitleForCompare(refreshedContent.title);
-    const overviewMatches =
-      !refreshedContent.overview ||
-      (!!providerBase.overview &&
-        this.normTitleForCompare(providerBase.overview) ===
-          this.normTitleForCompare(refreshedContent.overview));
+    const overviewMatches = this.englishOverviewMatches(
+      providerBase.overview,
+      refreshedContent.overview,
+    );
     const stillWrongReasons = [
       !titleMatches ? 'title still differs after rehydrate' : null,
       !overviewMatches ? 'overview still differs after rehydrate' : null,

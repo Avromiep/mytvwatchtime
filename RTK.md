@@ -75,6 +75,7 @@ rtk pnpm install        # Compact install output (90%)
 rtk npm run <script>    # Compact npm script output
 rtk npx <cmd>           # Compact npx command output
 rtk prisma              # Prisma without ASCII art (88%)
+Never use `rtk pnpm` because it invokes tsc without --noEmit, emitting .js files.
 ```
 
 ### Files & Search (60-75% savings)

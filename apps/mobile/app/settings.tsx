@@ -212,7 +212,7 @@ export default function SettingsScreen() {
           <Row icon="logo-discord" label={t('settings:joinDiscord')} onPress={() => WebBrowser.openBrowserAsync('https://discord.gg/g9JBPUeqQV')} />
           <Row icon="globe-outline" label={t('settings:website')} onPress={() => WebBrowser.openBrowserAsync('https://tvwatchtime.org/')} />
           <Row icon="logo-apple" label={t('settings:iosTestFlight')} onPress={() => WebBrowser.openBrowserAsync(IOS_TESTFLIGHT_URL)} />
-          <Row icon="logo-github" label={t('settings:githubReleases')} onPress={() => WebBrowser.openBrowserAsync('https://github.com/Metalingus/tvwatchtime/releases')} />
+          <Row icon="logo-android" label={t('settings:githubReleases')} onPress={() => WebBrowser.openBrowserAsync('https://play.google.com/store/apps/details?id=app.tvwatchtime.mobile')} />
           <Row icon="download-outline" label={t('settings:exportData')} onPress={async () => {
             try {
               const res = await api.post<{ downloadUrl: string }>('/me/export-request');

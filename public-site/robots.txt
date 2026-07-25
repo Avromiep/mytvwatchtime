@@ -1,5 +1,6 @@
 User-agent: *
 Allow: /
-Disallow: /reset-password.html
+# reset-password.html and delete-account.html carry a noindex meta — do NOT Disallow
+# them here, or crawlers can never see the noindex and may index the URLs content-less.
 
 Sitemap: https://tvwatchtime.org/sitemap.xml
