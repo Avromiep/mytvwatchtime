@@ -5,6 +5,7 @@
     "jsx": "react-jsx",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "ignoreDeprecations": "6.0",
     "paths": {
       "@/*": ["./*"],
       "@tvwatch/shared": ["../../packages/shared/src/index.ts"]

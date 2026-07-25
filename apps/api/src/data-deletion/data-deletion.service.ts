@@ -5,6 +5,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { EmailService } from '../common/email.service';
 import { anonymizeAndDeleteUser } from '../users/lib/deleted-user';
+import { AppleAuthService } from '../auth/apple-auth.service';
 
 @Injectable()
 export class DataDeletionService {
@@ -15,6 +16,7 @@ export class DataDeletionService {
     private readonly email: EmailService,
     private readonly config: ConfigService,
     private readonly redis: RedisService,
+    private readonly apple: AppleAuthService,
   ) {}
 
   async requestDeletion(email: string): Promise<{ sent: boolean; link?: string }> {
@@ -85,6 +87,7 @@ export class DataDeletionService {
 
     // Anonymize-and-delete: comments move to the system "Deleted user" account (threads
     // survive, incl. other users' replies); everything personal cascades away.
+    await this.revokeAppleProviders(req.userId);
     // Evict the JWT existence cache BEFORE the row delete so in-flight requests
     // re-check the DB instead of racing through on the stale positive entry.
     await this.redis.del(`auth:user:${req.userId}`);
@@ -97,5 +100,17 @@ export class DataDeletionService {
 
     this.logger.log(`User ${user.username} (${req.userId}) deleted all data via deletion request`);
     return { deleted: true, username: user.username };
+  }
+
+  private async revokeAppleProviders(userId: string) {
+    const providers = await this.prisma.userAuthProvider.findMany({
+      where: { userId, provider: 'APPLE', refreshToken: { not: null } },
+      select: { id: true, refreshToken: true },
+    });
+    await Promise.all(
+      providers.map((provider) =>
+        this.apple.revokeEncryptedRefreshToken(provider.refreshToken, provider.id),
+      ),
+    );
   }
 }

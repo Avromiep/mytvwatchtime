@@ -9,20 +9,22 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { AuthProvider, Prisma } from '@prisma/client';
 import { OAuth2Client } from 'google-auth-library';
-import * as appleSignin from 'apple-signin-auth';
 import * as argon2 from 'argon2';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { EmailService } from '../common/email.service';
 import type { JwtPayload } from './jwt.strategy';
-import { EmailLoginDto, EmailRegisterDto, SocialLoginDto } from './dto/auth.dto';
+import { AppleLoginDto, EmailLoginDto, EmailRegisterDto, SocialLoginDto } from './dto/auth.dto';
 import {
   isDeletedUserAccount,
   RESERVED_USER_EMAILS,
   RESERVED_USERNAMES,
 } from '../users/lib/deleted-user';
-import type { AuthSessionDto } from '@tvwatch/shared';
+import { AuthErrorCode, type AppleAuthNonceDto, type AuthSessionDto } from '@tvwatch/shared';
+import { AppleAuthService, type SocialProfile } from './apple-auth.service';
+import { badRequestAuth, conflictAuth, unauthorizedAuth } from './auth-errors';
 
 function uid(len = 6): string {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -30,12 +32,6 @@ function uid(len = 6): string {
   let out = '';
   for (let i = 0; i < len; i++) out += alphabet[bytes[i] % alphabet.length];
   return out;
-}
-
-interface SocialProfile {
-  providerUid: string;
-  email?: string;
-  name?: string;
 }
 
 @Injectable()
@@ -48,6 +44,7 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     private readonly email: EmailService,
+    private readonly apple: AppleAuthService,
   ) {
     this.googleClient = new OAuth2Client(this.config.get<string>('auth.google.clientId'));
   }
@@ -191,55 +188,131 @@ export class AuthService {
     });
   }
 
-  async socialLogin(dto: {
-    provider: any;
-    token?: string;
-    authorizationCode?: string;
-    nonce?: string;
-    username?: string;
-    redirectUri?: string;
-  }): Promise<AuthSessionDto> {
+  createAppleNonce(): Promise<AppleAuthNonceDto> {
+    return this.apple.createNonce();
+  }
+
+  async appleLogin(dto: AppleLoginDto): Promise<AuthSessionDto> {
+    const result = await this.apple.verifyNativeCredential(dto);
+    return this.authenticateSocial(AuthProvider.APPLE, result.profile, {
+      refreshToken: result.refreshToken,
+    });
+  }
+
+  async socialLogin(dto: SocialLoginDto): Promise<AuthSessionDto> {
+    if (dto.provider === AuthProvider.APPLE) {
+      throw badRequestAuth(
+        AuthErrorCode.APPLE_AUTH_UNAVAILABLE,
+        'Use the native Sign in with Apple endpoint',
+      );
+    }
+
     const profile = dto.token
-      ? dto.provider === 'GOOGLE'
+      ? dto.provider === AuthProvider.GOOGLE
         ? await this.verifyGoogle(dto.token)
-        : dto.provider === 'APPLE'
-          ? await this.verifyApple(dto.token)
-          : dto.provider === 'FACEBOOK'
-            ? await this.verifyFacebook(dto.token)
-            : (() => {
-                throw new UnauthorizedException('Unsupported provider');
-              })()
+        : dto.provider === AuthProvider.FACEBOOK
+          ? await this.verifyFacebook(dto.token)
+          : (() => {
+              throw new UnauthorizedException('Unsupported provider');
+            })()
       : dto.authorizationCode && dto.redirectUri
         ? await this.exchangeCode(dto.provider, dto.authorizationCode, dto.redirectUri)
         : (() => {
             throw new UnauthorizedException('Token or authorization code required');
           })();
 
+    return this.authenticateSocial(dto.provider, profile);
+  }
+
+  private async authenticateSocial(
+    provider: AuthProvider,
+    profile: SocialProfile,
+    tokens?: { refreshToken?: string },
+  ): Promise<AuthSessionDto> {
     const existing = await this.prisma.userAuthProvider.findUnique({
-      where: { provider_providerUid: { provider: dto.provider, providerUid: profile.providerUid } },
+      where: { provider_providerUid: { provider, providerUid: profile.providerUid } },
       include: { user: true },
     });
 
     let user = existing?.user;
-    if (!user) {
-      const email = profile.email || `${dto.provider}_${profile.providerUid}@social.local`;
-      if (RESERVED_USER_EMAILS.has(email.toLowerCase())) {
-        throw new UnauthorizedException('Invalid social profile');
+    if (user) {
+      if (provider === AuthProvider.APPLE && tokens?.refreshToken) {
+        await this.prisma.userAuthProvider.update({
+          where: { id: existing!.id },
+          data: { refreshToken: this.apple.encryptProviderToken(tokens.refreshToken) },
+        });
       }
-      const baseName = dto.username || profile.name || `user_${uid(6)}`;
-      const username = await this.ensureUniqueUsername(baseName);
-      user = await this.prisma.user.create({
-        data: {
-          email,
-          username,
-          emailVerified: true,
-          authProviders: {
-            create: { provider: dto.provider, providerUid: profile.providerUid },
-          },
-          profile: { create: { displayName: username } },
-        },
-      });
+      return this.issueSession(
+        user.id,
+        user.username,
+        user.email,
+        user.role,
+        user.mustChangePassword,
+      );
     }
+
+    const trustedEmail = this.trustedProviderEmail(provider, profile);
+    const email = trustedEmail || this.fallbackSocialEmail(provider, profile.providerUid);
+    if (RESERVED_USER_EMAILS.has(email.toLowerCase())) {
+      throw new UnauthorizedException('Invalid social profile');
+    }
+
+    if (trustedEmail) {
+      const emailOwner = await this.prisma.user.findUnique({ where: { email: trustedEmail } });
+      if (emailOwner) {
+        throw conflictAuth(
+          AuthErrorCode.ACCOUNT_EXISTS_WITH_DIFFERENT_PROVIDER,
+          'An account already exists with a different sign-in method',
+        );
+      }
+    }
+
+    const username = await this.ensureUniqueUsername(
+      profile.name || this.usernameBaseFromEmail(trustedEmail) || `user_${uid(6)}`,
+    );
+    const displayName = this.sanitizeDisplayName(profile.name) || username;
+
+    try {
+      user = await this.prisma.$transaction((tx) =>
+        tx.user.create({
+          data: {
+            email,
+            username,
+            emailVerified: !!trustedEmail,
+            authProviders: {
+              create: {
+                provider,
+                providerUid: profile.providerUid,
+                ...(provider === AuthProvider.APPLE && tokens?.refreshToken
+                  ? { refreshToken: this.apple.encryptProviderToken(tokens.refreshToken) }
+                  : {}),
+              },
+            },
+            profile: { create: { displayName } },
+          },
+        }),
+      );
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const racedProvider = await this.prisma.userAuthProvider.findUnique({
+          where: { provider_providerUid: { provider, providerUid: profile.providerUid } },
+          include: { user: true },
+        });
+        if (racedProvider?.user) {
+          user = racedProvider.user;
+        } else if (trustedEmail) {
+          throw conflictAuth(
+            AuthErrorCode.ACCOUNT_EXISTS_WITH_DIFFERENT_PROVIDER,
+            'An account already exists with a different sign-in method',
+          );
+        } else {
+          throw e;
+        }
+      } else {
+        throw e;
+      }
+    }
+
     return this.issueSession(
       user.id,
       user.username,
@@ -295,6 +368,9 @@ export class AuthService {
     });
     if (!user) throw new NotFoundException('User not found');
     if (isDeletedUserAccount(user)) throw new UnauthorizedException('Invalid credentials');
+    if (user.isSuspended) {
+      throw unauthorizedAuth(AuthErrorCode.ACCOUNT_DISABLED, 'Account disabled');
+    }
     const followersCount = await this.prisma.follow.count({ where: { targetId: userId } });
     const followingCount = await this.prisma.follow.count({ where: { followerId: userId } });
     const commentsCount = await this.prisma.comment.count({ where: { userId } });
@@ -346,6 +422,31 @@ export class AuthService {
     return `${candidate}_${uid(8)}`;
   }
 
+  private trustedProviderEmail(provider: AuthProvider, profile: SocialProfile): string | undefined {
+    if (!profile.email) return undefined;
+    if (provider === AuthProvider.FACEBOOK) return profile.email.toLowerCase();
+    return profile.emailVerified ? profile.email.toLowerCase() : undefined;
+  }
+
+  private fallbackSocialEmail(provider: AuthProvider, providerUid: string): string {
+    const safeUid = providerUid.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 96);
+    return `${provider.toLowerCase()}_${safeUid}@social.local`;
+  }
+
+  private usernameBaseFromEmail(email?: string): string | undefined {
+    const local = email?.split('@')[0];
+    return local ? local.replace(/[^a-zA-Z0-9_]/g, '_') : undefined;
+  }
+
+  private sanitizeDisplayName(name?: string): string | undefined {
+    const clean = (name || '')
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80);
+    return clean || undefined;
+  }
+
   // ---- OAuth verification ----
   private async verifyGoogle(idToken: string): Promise<SocialProfile> {
     const ticket = await this.googleClient.verifyIdToken({
@@ -354,7 +455,12 @@ export class AuthService {
     });
     const p = ticket.getPayload();
     if (!p?.sub) throw new UnauthorizedException('Invalid Google token');
-    return { providerUid: p.sub, email: p.email, name: p.name };
+    return {
+      providerUid: p.sub,
+      email: p.email,
+      emailVerified: p.email_verified === true,
+      name: p.name,
+    };
   }
 
   /** Exchange an authorization code for tokens, then verify. */
@@ -363,7 +469,7 @@ export class AuthService {
     code: string,
     redirectUri: string,
   ): Promise<SocialProfile> {
-    if (provider === 'GOOGLE') {
+    if (provider === AuthProvider.GOOGLE) {
       const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -380,7 +486,7 @@ export class AuthService {
       return this.verifyGoogle(tokens.id_token);
     }
 
-    if (provider === 'FACEBOOK') {
+    if (provider === AuthProvider.FACEBOOK) {
       const appId = this.config.get<string>('auth.facebook.appId')!;
       const appSecret = this.config.get<string>('auth.facebook.appSecret')!;
       const tokenUrl = `https://graph.facebook.com/v18.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${appSecret}&code=${code}`;
@@ -393,19 +499,6 @@ export class AuthService {
     throw new UnauthorizedException(`Code exchange not supported for ${provider}`);
   }
 
-  private async verifyApple(idToken: string): Promise<SocialProfile> {
-    try {
-      const { sub, email } = await appleSignin.verifyIdToken(idToken, {
-        audience: this.config.get<string>('auth.apple.clientId'),
-      });
-      if (!sub) throw new UnauthorizedException('Invalid Apple token');
-      return { providerUid: sub, email };
-    } catch (e) {
-      this.logger.warn(`Apple verify failed: ${(e as Error).message}`);
-      throw new UnauthorizedException('Invalid Apple token');
-    }
-  }
-
   private async verifyFacebook(accessToken: string): Promise<SocialProfile> {
     const url = new URL('https://graph.facebook.com/me');
     url.searchParams.set('fields', 'id,name,email');
@@ -413,6 +506,11 @@ export class AuthService {
     const res = await fetch(url.toString());
     if (!res.ok) throw new UnauthorizedException('Invalid Facebook token');
     const data = (await res.json()) as { id: string; email?: string; name?: string };
-    return { providerUid: data.id, email: data.email, name: data.name };
+    return {
+      providerUid: data.id,
+      email: data.email,
+      emailVerified: !!data.email,
+      name: data.name,
+    };
   }
 }

@@ -2,6 +2,7 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
+import { AppleAuthService } from '../auth/apple-auth.service';
 import {
   mapCurrentUser,
   mapPublicUser,
@@ -16,6 +17,7 @@ export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly apple: AppleAuthService,
   ) {}
 
   async getMe(userId: string) {
@@ -104,6 +106,7 @@ export class UsersService {
   }
 
   async deleteMe(userId: string) {
+    await this.revokeAppleProviders(userId);
     // Evict the JWT existence cache BEFORE the row delete so in-flight requests
     // re-check the DB instead of racing through on the stale positive entry.
     await this.redis.del(`auth:user:${userId}`);
@@ -111,6 +114,18 @@ export class UsersService {
     // survive); everything personal cascades. Idempotent — already gone = success.
     await anonymizeAndDeleteUser(this.prisma, userId);
     return { ok: true };
+  }
+
+  private async revokeAppleProviders(userId: string) {
+    const providers = await this.prisma.userAuthProvider.findMany({
+      where: { userId, provider: 'APPLE', refreshToken: { not: null } },
+      select: { id: true, refreshToken: true },
+    });
+    await Promise.all(
+      providers.map((provider) =>
+        this.apple.revokeEncryptedRefreshToken(provider.refreshToken, provider.id),
+      ),
+    );
   }
 
   async registerDevice(userId: string, dto: DeviceRegisterDto) {

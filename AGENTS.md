@@ -33,6 +33,22 @@
 - Dev: `pnpm dev:api`, `pnpm dev:mobile`, `pnpm --filter @tvwatch/admin dev`
 - Validate: `pnpm typecheck`, `pnpm lint`, plus the narrowest relevant test command.
 
+### TypeScript command safety
+
+- Never invoke `tsc` with source filenames, such as
+  `tsc path/to/file.ts` or `tsc path/to/file.tsx`.
+- Passing source files directly can bypass the workspace `tsconfig` behavior
+  and emit `.js` files beside `.ts`/`.tsx` source files.
+- Typecheck through the workspace script:
+  `pnpm --filter <workspace> typecheck`.
+- When invoking TypeScript directly, always use project mode:
+  `tsc -p path/to/tsconfig.json --noEmit`.
+- Never use bare `tsc`, `npx tsc <file>`, or `pnpm exec tsc <file>` for
+  validation.
+- After validation, inspect `git status --short`. Unexpected source-adjacent
+  `.js`, `.js.map`, or `.d.ts` files mean validation failed and must be
+  investigated.
+  
 ## Database change workflow
 - For schema changes, create and review the appropriate checked-in migration, then regenerate the Prisma client.
 - Do not apply migrations, run `db push`, seed a shared database, or otherwise write to a shared/staging/production database without explicit approval.

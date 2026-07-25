@@ -5,14 +5,17 @@ export const envValidation = {
   abortEarly: false,
   validationSchema: Joi.object({
     NODE_ENV: Joi.string().valid('development', 'test', 'production').default('development'),
-    LOG_LEVEL: Joi.string()
-      .valid('verbose', 'debug', 'log', 'warn', 'error')
-      .default('log'),
+    LOG_LEVEL: Joi.string().valid('verbose', 'debug', 'log', 'warn', 'error').default('log'),
     API_PORT: Joi.number().default(4000),
     DATABASE_URL: Joi.string().optional().allow(''),
     REDIS_URL: Joi.string().optional().allow(''),
     JWT_SECRET: Joi.string().min(16).required(),
     JWT_ACCESS_TTL: Joi.string().default('15m'),
     JWT_REFRESH_TTL: Joi.string().default('30d'),
+    APPLE_CLIENT_ID: Joi.string().optional().allow(''),
+    APPLE_TEAM_ID: Joi.string().optional().allow(''),
+    APPLE_KEY_ID: Joi.string().optional().allow(''),
+    APPLE_PRIVATE_KEY: Joi.string().optional().allow(''),
+    APPLE_PRIVATE_KEY_PATH: Joi.string().optional().allow(''),
   }),
 };

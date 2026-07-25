@@ -2,7 +2,16 @@ import { Body, Controller, Get, HttpCode, Post, Query, Redirect, UseGuards } fro
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
-import { ChangePasswordDto, EmailLoginDto, EmailRegisterDto, ForgotPasswordDto, RefreshDto, ResetPasswordDto, SocialLoginDto } from './dto/auth.dto';
+import {
+  AppleLoginDto,
+  ChangePasswordDto,
+  EmailLoginDto,
+  EmailRegisterDto,
+  ForgotPasswordDto,
+  RefreshDto,
+  ResetPasswordDto,
+  SocialLoginDto,
+} from './dto/auth.dto';
 import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -33,6 +42,22 @@ export class AuthController {
   @HttpCode(200)
   social(@Body() dto: SocialLoginDto) {
     return this.auth.socialLogin(dto);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post('apple/nonce')
+  @HttpCode(200)
+  appleNonce() {
+    return this.auth.createAppleNonce();
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('apple')
+  @HttpCode(200)
+  apple(@Body() dto: AppleLoginDto) {
+    return this.auth.appleLogin(dto);
   }
 
   @ApiBearerAuth()
@@ -80,7 +105,10 @@ export class AuthController {
       // Clean up state and redirect to web app URL
       params.set('state', state.replace(':web', ''));
       const cleanParams = params.toString();
-      return { url: `https://app.tvwatchtime.org/expo-auth-session?${cleanParams}`, statusCode: 302 };
+      return {
+        url: `https://app.tvwatchtime.org/expo-auth-session?${cleanParams}`,
+        statusCode: 302,
+      };
     }
     // Mobile: redirect to custom scheme
     return { url: `tvwatchtime://expo-auth-session?${params.toString()}`, statusCode: 302 };

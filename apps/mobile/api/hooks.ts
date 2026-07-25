@@ -472,7 +472,7 @@ export const useToggleExternalReviewLike = () => {
   return useMutation({
     mutationFn: (args: { reviewId: string; liked: boolean }) =>
       args.liked
-        ? api.delete(`/external-reviews/${args.reviewId}/like`)
+        ? api.del(`/external-reviews/${args.reviewId}/like`)
         : api.post(`/external-reviews/${args.reviewId}/like`, {}),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['externalReview', vars.reviewId] });

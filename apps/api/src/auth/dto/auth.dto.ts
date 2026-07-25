@@ -1,6 +1,15 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { AuthProvider } from '@prisma/client';
-import { IsBoolean, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsBoolean,
+  IsEnum,
+  IsObject,
+  IsOptional,
+  IsString,
+  MinLength,
+  ValidateNested,
+} from 'class-validator';
 
 export class EmailRegisterDto {
   @ApiProperty()
@@ -39,7 +48,7 @@ export class SocialLoginDto {
   @IsEnum(AuthProvider)
   provider!: AuthProvider;
 
-  @ApiProperty({ required: false, description: 'ID token (Google/Apple) or access token (Facebook)' })
+  @ApiProperty({ required: false, description: 'ID token (Google) or access token (Facebook)' })
   @IsOptional()
   @IsString()
   token?: string;
@@ -63,6 +72,68 @@ export class SocialLoginDto {
   @IsOptional()
   @IsString()
   username?: string;
+}
+
+export class AppleFullNameDto {
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  namePrefix?: string | null;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  givenName?: string | null;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  middleName?: string | null;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  familyName?: string | null;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  nameSuffix?: string | null;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  nickname?: string | null;
+}
+
+export class AppleLoginDto {
+  @ApiProperty({ description: 'Native Apple identity token returned by iOS' })
+  @IsString()
+  identityToken!: string;
+
+  @ApiProperty({ description: 'Native Apple authorization code returned by iOS' })
+  @IsString()
+  authorizationCode!: string;
+
+  @ApiProperty({ description: 'Server-issued nonce used for the Apple request' })
+  @IsString()
+  nonce!: string;
+
+  @ApiProperty({ description: 'Server-issued state value echoed by Apple' })
+  @IsString()
+  state!: string;
+
+  @ApiProperty({ required: false, type: AppleFullNameDto })
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => AppleFullNameDto)
+  fullName?: AppleFullNameDto | null;
+
+  @ApiProperty({ required: false, description: 'First-use email from the native credential; not trusted as identity proof' })
+  @IsOptional()
+  @IsString()
+  email?: string | null;
 }
 
 export class RefreshDto {

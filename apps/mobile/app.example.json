@@ -11,7 +11,10 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "app.tvwatchtime.mobile",
-      "usesAppleSignIn": true
+      "usesAppleSignIn": true,
+      "entitlements": {
+        "com.apple.developer.applesignin": ["Default"]
+      }
     },
     "android": {
       "package": "app.tvwatchtime.mobile",
@@ -24,7 +27,8 @@
       "expo-secure-store",
       "expo-document-picker",
       "expo-dev-client",
-      "expo-font"
+      "expo-font",
+      "expo-apple-authentication"
     ],
     "experiments": { "typedRoutes": true, "tsconfigPaths": true },
     "extra": {

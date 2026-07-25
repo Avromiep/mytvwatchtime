@@ -21,12 +21,19 @@ export default () => ({
     rememberTtl: process.env.JWT_REMEMBER_TTL || '30d',
   },
   auth: {
-    google: { clientId: process.env.GOOGLE_CLIENT_ID, clientSecret: process.env.GOOGLE_CLIENT_SECRET },
+    google: {
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    },
     apple: {
       clientId: process.env.APPLE_CLIENT_ID,
       teamId: process.env.APPLE_TEAM_ID,
       keyId: process.env.APPLE_KEY_ID,
+      privateKey: process.env.APPLE_PRIVATE_KEY,
       privateKeyPath: process.env.APPLE_PRIVATE_KEY_PATH,
+      jwksUrl: process.env.APPLE_JWKS_URL,
+      tokenUrl: process.env.APPLE_TOKEN_URL,
+      revokeUrl: process.env.APPLE_REVOKE_URL,
     },
     facebook: { appId: process.env.FACEBOOK_APP_ID, appSecret: process.env.FACEBOOK_APP_SECRET },
     bootstrapSuperAdminEmail: process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL,
@@ -67,12 +74,14 @@ export default () => ({
     openaiApiKey: process.env.OPENAI_API_KEY,
     openaiModerationModel: process.env.OPENAI_MODERATION_MODEL || 'omni-moderation-latest',
     s3Region: process.env.S3_REGION || process.env.AWS_REGION || 'us-east-1',
-    s3Bucket: process.env.S3_BUCKET_COMMENT_IMAGES || process.env.S3_BUCKET || 'tvwatch-comment-images',
+    s3Bucket:
+      process.env.S3_BUCKET_COMMENT_IMAGES || process.env.S3_BUCKET || 'tvwatch-comment-images',
     s3TempBucket: process.env.S3_BUCKET_TEMP_UPLOADS || 'tvwatch-temp-uploads',
     s3Endpoint: process.env.S3_ENDPOINT,
     s3AccessKeyId: process.env.S3_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
     s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,
-    encryptionMasterKey: process.env.ENCRYPTION_MASTER_KEY || 'dev-master-key-change-in-prod-32bytes!',
+    encryptionMasterKey:
+      process.env.ENCRYPTION_MASTER_KEY || 'dev-master-key-change-in-prod-32bytes!',
     maxUploadMb: Number(process.env.MAX_COMMENT_IMAGE_UPLOAD_MB || 5),
     maxHardLimitMb: Number(process.env.MAX_COMMENT_IMAGE_HARD_LIMIT_MB || 20),
     maxPixels: Number(process.env.MAX_COMMENT_IMAGE_PIXELS || 36000000),
@@ -93,7 +102,7 @@ export default () => ({
     enabled: process.env.PUSH_RELAY_ENABLED !== 'false',
   },
   email: {
-    enabled: !!(process.env.SMTP_HOST),
+    enabled: !!process.env.SMTP_HOST,
     host: process.env.SMTP_HOST || '',
     port: Number(process.env.SMTP_PORT || 587),
     secure: process.env.SMTP_SECURE === 'true',

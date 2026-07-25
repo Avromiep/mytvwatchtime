@@ -47,6 +47,11 @@ export class CapabilityService implements OnModuleInit {
     const facebookAppId = this.config.get<string>('auth.facebook.appId');
     const facebookAppSecret = this.config.get<string>('auth.facebook.appSecret');
     const appleClientId = this.config.get<string>('auth.apple.clientId');
+    const appleTeamId = this.config.get<string>('auth.apple.teamId');
+    const appleKeyId = this.config.get<string>('auth.apple.keyId');
+    const applePrivateKey =
+      this.config.get<string>('auth.apple.privateKey') ||
+      this.config.get<string>('auth.apple.privateKeyPath');
 
     const openaiKey = this.config.get<string>('commentImages.openaiApiKey');
     const expoToken = this.config.get<string>('push.expoAccessToken');
@@ -63,7 +68,7 @@ export class CapabilityService implements OnModuleInit {
       moderation: !!openaiKey,
       socialGoogle: !!(googleClientId && googleClientSecret),
       socialFacebook: !!(facebookAppId && facebookAppSecret),
-      socialApple: !!appleClientId,
+      socialApple: !!(appleClientId && appleTeamId && appleKeyId && applePrivateKey),
       push: pushMode !== 'none' && (!!expoToken || pushMode === 'relay'),
       tmdb: !!tmdbKey,
       tvdb: !!tvdbKey,

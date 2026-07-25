@@ -1,5 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import type { AuthSessionDto, CurrentUserDto, EmailLoginDto, EmailRegisterDto } from '@tvwatch/shared';
+import type {
+  AppleLoginDto,
+  AuthSessionDto,
+  CurrentUserDto,
+  EmailLoginDto,
+  EmailRegisterDto,
+} from '@tvwatch/shared';
 import { api, HttpError } from '../api/client';
 import { tokenStorage } from '../api/storage';
 import { setBaseUrl, resetBaseUrl } from '../api/client';
@@ -11,7 +17,12 @@ interface AuthContextValue {
   isSelfHosted: boolean;
   loginEmail: (dto: EmailLoginDto) => Promise<void>;
   registerEmail: (dto: EmailRegisterDto) => Promise<void>;
-  loginSocial: (provider: 'GOOGLE' | 'APPLE' | 'FACEBOOK', token: string) => Promise<void>;
+  loginSocial: (
+    provider: 'GOOGLE' | 'FACEBOOK',
+    token: string,
+    redirectUri?: string,
+  ) => Promise<void>;
+  loginApple: (dto: AppleLoginDto) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   setSelfHosted: (val: boolean, url?: string) => Promise<void>;
@@ -94,12 +105,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const loginSocial = useCallback(
-    async (provider: 'GOOGLE' | 'APPLE' | 'FACEBOOK', token: string, redirectUri?: string) => {
+    async (provider: 'GOOGLE' | 'FACEBOOK', token: string, redirectUri?: string) => {
       const s = await api.post<AuthSessionDto>('/auth/social', {
         provider,
         authorizationCode: token,
         redirectUri,
       } as any);
+      await setSession(s);
+    },
+    [setSession],
+  );
+
+  const loginApple = useCallback(
+    async (dto: AppleLoginDto) => {
+      const s = await api.post<AuthSessionDto>('/auth/apple', dto as any);
       await setSession(s);
     },
     [setSession],
@@ -129,8 +148,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, isSelfHosted, loginEmail, registerEmail, loginSocial, logout, refreshUser, setSelfHosted, getApiUrl, changePassword }),
-    [user, loading, isSelfHosted, loginEmail, registerEmail, loginSocial, logout, refreshUser, setSelfHosted, getApiUrl, changePassword],
+    () => ({
+      user,
+      loading,
+      isSelfHosted,
+      loginEmail,
+      registerEmail,
+      loginSocial,
+      loginApple,
+      logout,
+      refreshUser,
+      setSelfHosted,
+      getApiUrl,
+      changePassword,
+    }),
+    [
+      user,
+      loading,
+      isSelfHosted,
+      loginEmail,
+      registerEmail,
+      loginSocial,
+      loginApple,
+      logout,
+      refreshUser,
+      setSelfHosted,
+      getApiUrl,
+      changePassword,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
