@@ -6,7 +6,7 @@ import { MediaMetadataService } from '../media-metadata/media-metadata.service';
 import { MetadataBackfillService } from '../media-metadata/metadata-backfill.service';
 import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
 import { TvdbProvider } from '../media-metadata/providers/tvdb.provider';
-import { mapEpisode } from '../common/utils/mapper.util';
+import { mapEpisode, watchProvidersOf } from '../common/utils/mapper.util';
 import { localized } from '../common/utils/localization.util';
 import { MediaVotesService } from '../common/media-votes.service';
 
@@ -224,6 +224,7 @@ export class ShowsService {
       ? ({ ...episode, titles: freshEp.titles, overviews: freshEp.overviews, stillUrls: freshEp.stillUrls } as any)
       : (episode as any);
     const mediaLoc = (freshMedia ?? {}) as any;
+    const watchProviders = watchProvidersOf(media);
 
     // Aggregate favorite-character votes keyed by the stable MediaCast credit id.
     const voteMap = new Map<string, number>();
@@ -279,7 +280,8 @@ export class ShowsService {
         backdrop: localized(mediaLoc, 'backdropUrls', 'backdropUrl') ?? media.backdropUrl,
       },
       network: episode.season.show.network ?? null,
-      providers: media.providers.map((p: any) => ({ id: p.provider.id, name: p.provider.name, logoUrl: p.provider.logoUrl })),
+      providers: watchProviders?.stream ?? [],
+      watchProviders,
       cast,
       interactions: {
         device: deviceSection,

@@ -14,9 +14,11 @@ import type {
   SeasonSummaryDto,
   ThemePreference,
   WatchProviderDto,
+  WatchProvidersBlockDto,
 } from '@tvwatch/shared';
 import { MediaType } from '@tvwatch/shared';
 import { localized } from './localization.util';
+import { currentLanguage } from '../language.context';
 import { isDeletedUserAccount } from '../../users/lib/deleted-user';
 
 type AnyRecord = Record<string, any>;
@@ -59,6 +61,67 @@ function providersOf(media: AnyRecord): WatchProviderDto[] {
   }));
 }
 
+/** Default offer country per app language when the locale carries no region subtag. */
+const LANG_DEFAULT_COUNTRY: Record<string, string> = {
+  en: 'US',
+  fr: 'FR',
+  de: 'DE',
+  es: 'ES',
+  it: 'IT',
+  pt: 'BR',
+  ja: 'JP',
+  ko: 'KR',
+  zh: 'CN',
+  hi: 'IN',
+  ar: 'SA',
+  tr: 'TR',
+  id: 'ID',
+};
+
+/** ISO 3166-1 country for watch offers: locale region subtag → per-language default → US. */
+export function requestOfferCountry(lang: string = currentLanguage()): string {
+  const region = lang.split('-')[1]?.toUpperCase();
+  if (region && /^[A-Z]{2}$/.test(region)) return region;
+  return LANG_DEFAULT_COUNTRY[lang.split('-')[0]] ?? 'US';
+}
+
+function blobProviders(list: any): WatchProviderDto[] {
+  if (!Array.isArray(list)) return [];
+  // No internal id in the blob — the slugged name is a stable render key.
+  return list
+    .filter((p) => p && typeof p.name === 'string')
+    .map((p) => ({
+      id: String(p.name).toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      name: p.name,
+      logoUrl: p.logoUrl ?? null,
+    }));
+}
+
+/** Resolve the stored per-country watch-offer blob for the request locale.
+ *  Falls back to US offers, then to the legacy US-only relation rows. */
+export function watchProvidersOf(
+  media: AnyRecord,
+  country: string = requestOfferCountry(),
+): WatchProvidersBlockDto | null {
+  const blob = media.watchProviders;
+  if (blob && typeof blob === 'object') {
+    const entry = blob[country] ?? blob.US ?? null;
+    if (entry) {
+      return {
+        country: blob[country] ? country : 'US',
+        link: entry.link ?? null,
+        stream: blobProviders(entry.stream),
+        rent: blobProviders(entry.rent),
+        buy: blobProviders(entry.buy),
+      };
+    }
+  }
+  const legacy = providersOf(media);
+  return legacy.length > 0
+    ? { country: 'US', link: null, stream: legacy, rent: [], buy: [] }
+    : null;
+}
+
 function castOf(media: AnyRecord): CastMemberDto[] {
   return (media.cast ?? [])
     .slice()
@@ -86,6 +149,7 @@ export function mapShow(media: AnyRecord, userId?: string): ShowDto {
   const userStatus = userId ? (media.showStatuses ?? [])[0] : undefined;
   const watched = userStatus?.watchedCount ?? 0;
   const total = show.episodesCount ?? userStatus?.totalCount ?? 0;
+  const watchProviders = watchProvidersOf(media);
   return {
     id: media.id,
     type: MediaType.SHOW,
@@ -104,7 +168,8 @@ export function mapShow(media: AnyRecord, userId?: string): ShowDto {
     originCountries: show.originCountries ?? [],
     originalLanguage: show.originalLanguage ?? null,
     genres: genresOf(media),
-    providers: providersOf(media),
+    providers: watchProviders?.stream ?? [],
+    watchProviders,
     cast: castOf(media),
     externalIds: externalsOf(media),
     nextAirDate: show.nextAirDate ? new Date(show.nextAirDate).toISOString() : null,
@@ -122,6 +187,7 @@ export function mapMovie(media: AnyRecord, userId?: string): MovieDto {
   const movie = media.movie ?? {};
   // include is already filtered by userId, so the first row (if any) is this user's
   const userStatus = userId ? (media.movieStatuses ?? [])[0] : undefined;
+  const watchProviders = watchProvidersOf(media);
   return {
     id: media.id,
     type: MediaType.MOVIE,
@@ -135,7 +201,8 @@ export function mapMovie(media: AnyRecord, userId?: string): MovieDto {
     country: movie.country ?? null,
     language: movie.language ?? null,
     genres: genresOf(media),
-    providers: providersOf(media),
+    providers: watchProviders?.stream ?? [],
+    watchProviders,
     cast: castOf(media),
     externalIds: externalsOf(media),
     addedCount: media.addedCount ?? 0,

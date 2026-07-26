@@ -958,7 +958,7 @@ export class MediaMetadataService {
       const data = await this.tvdb.getMovie(tvdbId, lang);
       // No second call needed: data.translations already has ALL locales (including English).
       // persistMovie bulk-stores them all via mergeLocalized.
-      mediaId = await this.persistMovie(data, existing?.id, lang, undefined);
+      mediaId = await this.persistMovie(data, existing?.id, lang, undefined, ExternalProvider.THE_TVDB);
       // TVDB lacks this locale entirely → park it so fresh views skip the re-fetch.
       if (lang !== 'en' && this.translationsCoverLang(data.translations, lang) === false) {
         await this.stampLocaleUnavailable(mediaId, lang).catch(() => undefined);
@@ -1247,6 +1247,8 @@ export class MediaMetadataService {
           ...(data.recommendations
             ? { recommendations: data.recommendations as any, recommendationsSyncedAt: new Date() }
             : {}),
+          // TVDB supplies no watch offers — never clobber the TMDB per-country blob.
+          ...(data.providersByCountry ? { watchProviders: data.providersByCountry as any } : {}),
         };
 
         let mediaId = existingId;
@@ -1324,7 +1326,11 @@ export class MediaMetadataService {
         });
 
         await this.syncGenres(tx, mediaId!, genres);
-        await this.syncProviders(tx, mediaId!, providers);
+        // TVDB supplies no watch offers (empty array) — syncing from it would WIPE the
+        // TMDB-persisted provider links. Only TMDB hydration is authoritative for offers.
+        if (episodeExternalProvider === ExternalProvider.TMDB) {
+          await this.syncProviders(tx, mediaId!, providers);
+        }
         await this.syncCast(tx, mediaId!, castMembers, data.cast, lang, enData?.cast);
         await this.syncSeasons(
           tx,
@@ -1355,6 +1361,9 @@ export class MediaMetadataService {
     existingId?: string,
     lang: string = currentLanguage(),
     enData?: NormalizedMovie,
+    // Source of `data` — only TMDB hydration is authoritative for watch offers
+    // (TVDB supplies none; syncing from it would wipe TMDB-persisted links).
+    source: ExternalProvider = ExternalProvider.TMDB,
   ): Promise<string> {
     const mediaId = await this.prisma.$transaction(
       async (tx) => {
@@ -1440,6 +1449,8 @@ export class MediaMetadataService {
           ...(data.recommendations
             ? { recommendations: data.recommendations as any, recommendationsSyncedAt: new Date() }
             : {}),
+          // TVDB supplies no watch offers — never clobber the TMDB per-country blob.
+          ...(data.providersByCountry ? { watchProviders: data.providersByCountry as any } : {}),
         };
 
         let mediaId = existingId;
@@ -1498,7 +1509,10 @@ export class MediaMetadataService {
         });
 
         await this.syncGenres(tx, mediaId!, genres);
-        await this.syncProviders(tx, mediaId!, providers);
+        // Only TMDB hydration is authoritative for watch offers (see persistShow).
+        if (source === ExternalProvider.TMDB) {
+          await this.syncProviders(tx, mediaId!, providers);
+        }
         await this.syncCast(tx, mediaId!, castMembers, data.cast, lang, englishBase?.cast);
 
         return mediaId!;

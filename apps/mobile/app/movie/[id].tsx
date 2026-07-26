@@ -23,6 +23,7 @@ import { radius, spacing } from '../../theme/theme';
 import { showError } from '../../lib/dialog';
 import { countryFlag } from '../../lib/country';
 import { formatRuntime } from '../../lib/format';
+import { WhereToWatch } from '../../components/WhereToWatch';
 
 export default function MovieDetailScreen() {
   const { tokens } = useAppearance();
@@ -158,14 +159,11 @@ export default function MovieDetailScreen() {
 
           <Card>
             <SectionHeader title={t('movies:whereToWatch')} />
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
-              {movie.providers?.length ? movie.providers.map((p: any) => (
-                <View key={p.id} style={{ alignItems: 'center', width: 64 }}>
-                  <PosterImage uri={p.logoUrl} style={{ width: 44, height: 44, borderRadius: 8 }} />
-                  <T variant="micro" muted style={{ textAlign: 'center', marginTop: 2 }}>{p.name}</T>
-                </View>
-              )) : <T variant="caption" muted>{t('movies:noProviders')}</T>}
-            </View>
+            <WhereToWatch
+              watchProviders={movie.watchProviders}
+              legacyProviders={movie.providers}
+              emptyLabel={t('movies:noProviders')}
+            />
           </Card>
 
           {movie.cast?.length ? (

@@ -15,6 +15,7 @@ import {
   useWatchMenu,
 } from './primitives';
 import { EpisodeNavigationArrows } from './EpisodeNavigationArrows';
+import { WhereToWatch } from './WhereToWatch';
 import {
   VotingSection,
   DeviceTiles,
@@ -268,31 +269,12 @@ export function EpisodeDetailContent({
           {/* Where to watch */}
           <Card>
             <SectionHeader title={t('episode:whereToWatch')} />
-            <View
-              style={{
-                flexDirection: 'row',
-                flexWrap: 'wrap',
-                gap: spacing.md,
-                marginTop: spacing.sm,
-              }}
-            >
-              {ep.providers?.length ? (
-                ep.providers.map((p: any) => (
-                  <View key={p.id} style={{ alignItems: 'center', width: 64 }}>
-                    <PosterImage
-                      uri={p.logoUrl}
-                      style={{ width: 44, height: 44, borderRadius: 8 }}
-                    />
-                    <T variant="micro" muted style={{ textAlign: 'center', marginTop: 2 }}>
-                      {p.name}
-                    </T>
-                  </View>
-                ))
-              ) : (
-                <T variant="caption" muted>
-                  {t('episode:noProviders')}
-                </T>
-              )}
+            <View style={{ marginTop: spacing.sm }}>
+              <WhereToWatch
+                watchProviders={ep.watchProviders}
+                legacyProviders={ep.providers}
+                emptyLabel={t('episode:noProviders')}
+              />
             </View>
           </Card>
 

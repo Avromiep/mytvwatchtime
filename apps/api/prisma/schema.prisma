@@ -475,6 +475,10 @@ model MediaItem {
   // TMDB /recommendations snapshot (card-shaped: tmdbId, type, title, poster, year, rating).
   recommendations Json?
   recommendationsSyncedAt DateTime? @map("recommendations_synced_at")
+  // Normalized TMDB watch/providers offers keyed by ISO 3166-1 country:
+  // { "US": { link, stream: [{name,logoUrl}], rent: [...], buy: [...] } }.
+  // Written only when the hydrating provider supplies offers — TVDB never clobbers it.
+  watchProviders Json? @map("watch_providers_data")
   // Content classification (independent of structural type) + evidence model.
   contentClassification ContentClassification @default(GENERAL) @map("content_classification")
   classificationConfidence Float              @default(0) @map("classification_confidence")

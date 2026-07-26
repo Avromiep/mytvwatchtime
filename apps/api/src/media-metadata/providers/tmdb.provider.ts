@@ -24,6 +24,16 @@ export interface NormalizedProvider {
   name: string;
   logoUrl?: string | null;
 }
+/** Watch offers for one ISO 3166-1 country (JustWatch-sourced via TMDB watch/providers).
+ *  `stream` merges flatrate/free/ads; `rent`/`buy` are purchase offers. */
+export interface NormalizedCountryProviders {
+  link?: string | null;
+  stream: NormalizedProvider[];
+  rent: NormalizedProvider[];
+  buy: NormalizedProvider[];
+}
+/** watch/providers `results` map, normalized per country (empty countries omitted). */
+export type NormalizedProvidersByCountry = Record<string, NormalizedCountryProviders>;
 export interface NormalizedSeason {
   tmdbId: number;
   number: number;
@@ -68,6 +78,9 @@ export interface NormalizedShow {
   externals: NormalizedExternal[];
   cast: NormalizedCast[];
   providers: NormalizedProvider[];
+  /** All-country watch offers (stream/rent/buy per ISO country). Undefined when the
+   *  provider supplies no offer data (TVDB) — persist must never clobber stored data. */
+  providersByCountry?: NormalizedProvidersByCountry;
   seasons: NormalizedSeason[];
   nextAirDate?: string | null;
   /** ISO 639-1 original language (TMDB shows only) — anime classification evidence. */
@@ -104,6 +117,8 @@ export interface NormalizedMovie {
   externals: NormalizedExternal[];
   cast: NormalizedCast[];
   providers: NormalizedProvider[];
+  /** All-country watch offers (see NormalizedShow.providersByCountry). */
+  providersByCountry?: NormalizedProvidersByCountry;
   /** TMDB keyword names (e.g. ["anime"]) — anime classification signal. */
   keywords?: string[];
   /** All locale translations from the provider (bulk-cached). Key = app locale code. */
@@ -370,6 +385,45 @@ export class TmdbProvider {
       }));
   }
 
+  /** Full per-country watch offers (stream = flatrate+free+ads, plus rent/buy),
+   *  deduped by provider id, sorted by TMDB display priority, capped per list.
+   *  Countries with no offers are omitted; undefined when the payload is absent. */
+  private providersByCountryOf(watch?: {
+    results?: Record<string, any>;
+  }): NormalizedProvidersByCountry | undefined {
+    const results = watch?.results;
+    if (!results || typeof results !== 'object') return undefined;
+    const CAP = 8;
+    const mapList = (list: any[] | undefined): NormalizedProvider[] => {
+      const seen = new Set<number>();
+      return ((list ?? []) as {
+        provider_id: number;
+        provider_name: string;
+        logo_path?: string;
+        display_priority?: number;
+      }[])
+        .filter((p) => p.provider_name && !seen.has(p.provider_id) && seen.add(p.provider_id))
+        .sort((a, b) => (a.display_priority ?? 999) - (b.display_priority ?? 999))
+        .slice(0, CAP)
+        .map((p) => ({ name: p.provider_name, logoUrl: this.tmdb.img(p.logo_path, 'w92') }));
+    };
+    const out: NormalizedProvidersByCountry = {};
+    for (const [country, offers] of Object.entries(results)) {
+      if (!/^[A-Z]{2}$/.test(country) || !offers || typeof offers !== 'object') continue;
+      // Stream = flatrate + free + ads combined (all "watch as part of access").
+      const stream = mapList([
+        ...(offers.flatrate ?? []),
+        ...(offers.free ?? []),
+        ...(offers.ads ?? []),
+      ]);
+      const rent = mapList(offers.rent);
+      const buy = mapList(offers.buy);
+      if (stream.length === 0 && rent.length === 0 && buy.length === 0) continue;
+      out[country] = { link: offers.link ?? null, stream, rent, buy };
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }
+
   async searchShows(
     query: string,
     page = 1,
@@ -606,6 +660,7 @@ export class TmdbProvider {
       ],
       cast: this.castOf(s.credits),
       providers: this.providersOf(s['watch/providers']),
+      providersByCountry: this.providersByCountryOf(s['watch/providers']),
       seasons,
       nextAirDate: s.next_episode_to_air?.air_date ?? null,
       originalLanguage: s.original_language ?? null,
@@ -651,6 +706,7 @@ export class TmdbProvider {
       ],
       cast: this.castOf(m.credits),
       providers: this.providersOf(m['watch/providers']),
+      providersByCountry: this.providersByCountryOf(m['watch/providers']),
       // Movie keywords use a different payload shape than TV keywords (`keywords` vs `results`).
       keywords: (m.keywords?.keywords ?? []).map((k) => k.name).filter((n): n is string => !!n),
       translations: this.translationsOf(m.translations),

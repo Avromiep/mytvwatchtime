@@ -12,6 +12,19 @@ export interface WatchProviderDto extends IdName {
   logoUrl?: string | null;
 }
 
+/** Per-country watch offers (JustWatch-sourced via TMDB watch/providers).
+ *  `stream` merges flatrate/free/ads; `rent`/`buy` are purchase offers.
+ *  The legacy flat `providers` array on media DTOs mirrors `stream`. */
+export interface WatchProvidersBlockDto {
+  /** ISO 3166-1 country the offers were resolved for (request locale region, US fallback). */
+  country: string;
+  /** TMDB watch-page link for that country (carries JustWatch attribution). */
+  link?: string | null;
+  stream: WatchProviderDto[];
+  rent: WatchProviderDto[];
+  buy: WatchProviderDto[];
+}
+
 export interface CastMemberDto {
   id: string;
   name: string;
@@ -139,6 +152,9 @@ export interface ShowDto {
   originalLanguage?: string | null;
   genres: GenreDto[];
   providers: WatchProviderDto[];
+  /** Per-country stream/rent/buy offers. Null until the media rehydrates with the
+   *  watchProviders blob; `providers` then mirrors `watchProviders.stream`. */
+  watchProviders?: WatchProvidersBlockDto | null;
   cast: CastMemberDto[];
   externalIds: ExternalIdDto[];
   nextAirDate?: string | null;
@@ -171,6 +187,8 @@ export interface MovieDto {
   language?: string | null;
   genres: GenreDto[];
   providers: WatchProviderDto[];
+  /** Per-country stream/rent/buy offers (see ShowDto.watchProviders). */
+  watchProviders?: WatchProvidersBlockDto | null;
   cast: CastMemberDto[];
   externalIds: ExternalIdDto[];
   addedCount: number;
@@ -209,6 +227,8 @@ export interface EpisodeDetailDto extends EpisodeDto {
   /** Show network(s) — may hold up to MAX_NETWORKS_PER_SHOW joined by NETWORK_SEPARATOR. */
   network?: string | null;
   providers: WatchProviderDto[];
+  /** Per-country stream/rent/buy offers (see ShowDto.watchProviders). */
+  watchProviders?: WatchProvidersBlockDto | null;
   cast?: EpisodeCastMemberDto[];
   interactions: EpisodeInteractionsDto;
   commentsCount: number;

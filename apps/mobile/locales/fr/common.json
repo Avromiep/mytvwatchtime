@@ -29,5 +29,9 @@
   "watch": "Regarder",
   "rewatch": "Regarder de nouveau",
   "unwatch": "Marquer comme non vu",
+  "providersStream": "Streaming",
+  "providersRent": "Louer",
+  "providersBuy": "Acheter",
+  "providersAttribution": "Données des plateformes par JustWatch",
   "deletedUser": "Utilisateur supprimé"
 }
