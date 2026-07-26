@@ -12,10 +12,8 @@ import { isProviderError } from './providers/shared/provider-errors';
 import { ProviderThrottled } from './providers/shared/provider-http';
 import { StructureRemapService } from './structure-remap.service';
 import { slugify } from './util/slugify';
+import { EN_CONTENT_VERIFIER_VERSION } from './util/en-content-verifier';
 
-// Bump when English-content verification logic changes. v3 verifies overviews and
-// episode text in addition to media titles.
-const EN_CONTENT_VERIFIER_VERSION = 3;
 const EN_CONTENT_DEEP_CURSOR_KEY = 'EN_CONTENT_DEEP_CURSOR';
 const REPAIR_STALL_MS = 30 * 60 * 1000;
 

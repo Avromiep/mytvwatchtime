@@ -1,6 +1,7 @@
 import { ExternalProvider, MediaType } from '@tvwatch/shared';
 import { MediaMetadataService } from './media-metadata.service';
 import { runInLanguage } from '../common/language.context';
+import { EN_CONTENT_VERIFIER_VERSION } from './util/en-content-verifier';
 
 /**
  * Focused spec for cross-type protections:
@@ -497,6 +498,28 @@ describe('MediaMetadataService — TMDB sparse light upserts verify English titl
     expect(created[0].data.title).toBe('Akta X');
     expect(created[0].data.titleLocale).toBe('und');
     expect(created[0].data.titles.en).toBeUndefined();
+  });
+
+  it('new rows born with a provider English base are birth-stamped enContentVerified', async () => {
+    const { svc, created } = make(undefined);
+
+    await runInLanguage('en', () => svc.lightUpsertShow(sparseShow));
+
+    expect(created).toHaveLength(1);
+    const provenance = created[0].data.metadataProvenance;
+    expect(provenance.enContentVerifiedTitle).toBe('The X-Files');
+    expect(provenance.enContentVerifiedOverview).toBe('English overview');
+    expect(provenance.enContentVerifiedVersion).toBe(EN_CONTENT_VERIFIER_VERSION);
+    expect(provenance.enContentVerifiedAt).toBeDefined();
+  });
+
+  it('new rows born WITHOUT a provider English base get no birth stamp', async () => {
+    const { svc, created } = make(undefined, null);
+
+    await runInLanguage('en', () => svc.lightUpsertShow(sparseShow));
+
+    expect(created).toHaveLength(1);
+    expect(created[0].data.metadataProvenance).toBeUndefined();
   });
 
   it('provider-sourced English list items stay cheap and do not re-fetch the English base', async () => {

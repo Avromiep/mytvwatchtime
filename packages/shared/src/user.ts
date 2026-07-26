@@ -13,6 +13,9 @@ export interface WatchNextItemDto {
    *  items and when `episode` is the last unwatched episode. Used by the client to optimistically
    *  swap the Watch-Next card to the following episode on mark-watched. */
   nextEpisode?: EpisodeDto | null;
+  /** watch_history row id — HISTORY items only. Powers the scroll-up history cursor
+   *  (tiebreaker next to watchedAt, which collides on bulk imports). */
+  historyId?: string;
   remainingUnwatched: number;
   label?: EpisodeLabel;
   lastWatchedAt?: string | null;
@@ -22,6 +25,21 @@ export interface WatchNextItemDto {
 
 export interface WatchNextResponseDto {
   items: WatchNextItemDto[];
+  /** True when the user's watch history holds more episodes than the initial slice —
+   *  gates the first scroll-up fetch (older pages chain off the returned cursor). */
+  historyHasMore?: boolean;
+}
+
+/** Cursor into the scroll-up watch history of the watch list. */
+export interface WatchNextHistoryCursor {
+  before: string; // ISO watchedAt of the oldest loaded history item
+  beforeId: string; // watch_history row id tiebreaker
+}
+
+export interface WatchNextHistoryPageDto {
+  items: WatchNextItemDto[];
+  hasMore: boolean;
+  cursor: WatchNextHistoryCursor | null;
 }
 
 export interface UpcomingItemDto {

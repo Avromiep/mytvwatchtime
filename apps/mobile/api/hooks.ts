@@ -38,11 +38,14 @@ import type {
   UpcomingGroupDto,
   UpcomingPastCursor,
   UpcomingPastPageDto,
+  WatchNextHistoryCursor,
+  WatchNextHistoryPageDto,
   UserBadgeDto,
   VoteSectionDto,
   ReactionVoteSectionDto,
   CharacterVoteSectionDto,
   WatchNextItemDto,
+  WatchNextResponseDto,
   ExternalReviewDto,
   FeedPageDto,
 } from '@tvwatch/shared';
@@ -93,7 +96,7 @@ export const useMe = () =>
 export const useWatchNext = () =>
   useQuery({
     queryKey: qk.watchNext,
-    queryFn: () => api.get<{ items: WatchNextItemDto[] }>('/me/watch-next'),
+    queryFn: () => api.get<WatchNextResponseDto>('/me/watch-next'),
   });
 export const useUpcoming = () =>
   useQuery({
@@ -136,6 +139,31 @@ export const useHistory = (p: { mediaType?: MediaType; page?: number }) =>
   useQuery({
     queryKey: qk.history(p),
     queryFn: () => api.get<Paginated<HistoryItemDto>>('/me/history', { ...p, pageSize: 500 }),
+  });
+/**
+ * Older watch-list history pages for the scroll-up rail. Same contract as
+ * useUpcomingPast: `enabled: false` — nothing loads until the user scrolls to the
+ * top and fetchNextPage fires; callers gate the first fetch on the main endpoint's
+ * historyHasMore + initial cursor, later pages on the last page's cursor.
+ */
+export const useWatchNextHistory = (initialCursor: WatchNextHistoryCursor | null) =>
+  useInfiniteQuery({
+    queryKey: [...qk.watchNext, 'history'],
+    queryFn: ({ pageParam }) => {
+      if (!pageParam) throw new Error('No history cursor');
+      return api.get<WatchNextHistoryPageDto>('/me/watch-next/history', {
+        before: pageParam.before,
+        beforeId: pageParam.beforeId,
+      });
+    },
+    initialPageParam: initialCursor,
+    getNextPageParam: (last) => (last.hasMore ? last.cursor : undefined),
+    enabled: false,
+    gcTime: 5 * 60 * 1000,
+    staleTime: 30 * 1000,
+    retry: (failureCount, error) =>
+      failureCount < 1 &&
+      !(error instanceof HttpError && error.status >= 400 && error.status < 500),
   });
 /**
  * Paginated mixed movies+shows watch history (20/page, newest first) for

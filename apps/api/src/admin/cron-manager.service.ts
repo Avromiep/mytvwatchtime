@@ -32,7 +32,12 @@ const DEFAULTS: { name: string; label: string; schedule: string }[] = [
   {
     name: 'english_content_verify',
     label: 'English Content Verify',
-    schedule: '0 8 * * *',
+    schedule: '0 */6 * * *',
+  },
+  {
+    name: 'english_base_repair',
+    label: 'English Base Repair',
+    schedule: '0 13 * * *',
   },
   {
     name: 'rating_backfill',
@@ -117,8 +122,13 @@ export class CronManagerService implements OnModuleInit {
     });
     this.handlers.set('english_content_verify', {
       label: 'English Content Verify',
-      defaultSchedule: '0 8 * * *',
-      fn: () => this.metadataBackfill.repairNonEnglishContent(2000),
+      defaultSchedule: '0 */6 * * *',
+      fn: () => this.metadataBackfill.repairNonEnglishContent(1000),
+    });
+    this.handlers.set('english_base_repair', {
+      label: 'English Base Repair',
+      defaultSchedule: '0 13 * * *',
+      fn: () => this.metadataBackfill.repairNonEnglishBase(1000),
     });
     this.handlers.set('rating_backfill', {
       label: 'Rating Backfill',

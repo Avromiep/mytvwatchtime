@@ -32,7 +32,7 @@ class HistoryQueryDto {
   pageSize?: number = 20;
 }
 
-class UpcomingPastQueryDto {
+class PastCursorQueryDto {
   @IsString()
   @IsNotEmpty()
   before!: string;
@@ -60,6 +60,13 @@ export class LibraryController {
     return this.library.watchNext(userId);
   }
 
+  // Burst-by-design (infinite scroll-up pagination) — double the global 60/min.
+  @Throttle({ default: { limit: 120, ttl: 60_000 } })
+  @Get('watch-next/history')
+  watchNextHistory(@CurrentUser('id') userId: string, @Query() q: PastCursorQueryDto) {
+    return this.library.watchNextHistory(userId, q);
+  }
+
   @Get('upcoming')
   upcoming(@CurrentUser('id') userId: string) {
     return this.library.upcoming(userId);
@@ -68,7 +75,7 @@ export class LibraryController {
   // Burst-by-design (infinite scroll-up pagination) — double the global 60/min.
   @Throttle({ default: { limit: 120, ttl: 60_000 } })
   @Get('upcoming/past')
-  upcomingPast(@CurrentUser('id') userId: string, @Query() q: UpcomingPastQueryDto) {
+  upcomingPast(@CurrentUser('id') userId: string, @Query() q: PastCursorQueryDto) {
     return this.library.upcomingPast(userId, q);
   }
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
+import { FlatList, Platform, RefreshControl, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Header, IconButton } from '../../components/Header';
 import { EpisodeCard, UpcomingCard } from '../../components/cards';
@@ -11,6 +11,7 @@ import {
   useUpcoming,
   useUpcomingPast,
   useWatchNext,
+  useWatchNextHistory,
   useActiveAnnouncement,
   useUnreadNotificationCount,
 } from '../../api/hooks';
@@ -61,7 +62,6 @@ type WatchRow =
 
 type UpcomingRow =
   | { type: 'spacer'; key: string; h: number }
-  | { type: 'loader'; key: string; h: number }
   | { type: 'header'; key: string; groupKey: string; group: UpcomingGroupDto; h: number }
   | { type: 'card'; key: string; item: any; h: number };
 
@@ -138,6 +138,7 @@ export default function ShowsScreen() {
 function WatchList() {
   const { tokens } = useAppearance();
   const { data, isLoading, refetch, isRefetching } = useWatchNext();
+  const queryClient = useQueryClient();
   const { t } = useTranslation(['shows', 'common']);
   const BUCKET_LABELS: Record<string, string> = {
     [WatchNextBucket.WATCH_NEXT]: t('shows:watchNext'),
@@ -148,11 +149,25 @@ function WatchList() {
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    // Reset fetched older-history pages — their cursors chain from the pre-refresh slice.
+    queryClient.removeQueries({ queryKey: ['watchNext', 'history'] });
     await refetch();
     setRefreshing(false);
-  }, [refetch]);
+  }, [refetch, queryClient]);
   const mark = useMarkEpisodeWatched();
   const rewatch = useRewatchEpisode();
+
+  // Cursor for the scroll-up history pages: the OLDEST item of the initial slice
+  // (data order is newest-first). historyId is the watch_history row id tiebreaker —
+  // bulk imports stamp identical watchedAt values.
+  const historyCursor = useMemo(() => {
+    const hist = (data?.items ?? []).filter((i) => i.bucket === WatchNextBucket.HISTORY);
+    const oldest = hist[hist.length - 1];
+    const before = oldest?.lastWatchedAt ?? oldest?.episode?.watchedAt;
+    if (!oldest?.historyId || !before) return null;
+    return { before, beforeId: oldest.historyId };
+  }, [data?.items]);
+  const pastQuery = useWatchNextHistory(historyCursor);
 
   // Flat rows (header / card) so the list virtualizes — a plain ScrollView rendered
   // EVERY card (300+ for heavy users) with no windowing, and fully re-rendered on
@@ -167,6 +182,16 @@ function WatchList() {
       seenEpisode.add(k);
       return true;
     });
+    // Older scroll-up pages: fetched newest→oldest (within and across pages), so the
+    // flattened list is globally descending; main items win dedupe (they are newer).
+    const older = (pastQuery.data?.pages ?? [])
+      .flatMap((p) => p.items)
+      .filter((it) => {
+        const k = it.episode.id;
+        if (seenEpisode.has(k)) return false;
+        seenEpisode.add(k);
+        return true;
+      });
     // History is always visible (scroll up to see it), auto-scroll lands on Watch Next
     const buckets = [
       WatchNextBucket.HISTORY,
@@ -178,9 +203,14 @@ function WatchList() {
     let isFirstSection = true;
     for (const bucket of buckets) {
       const group = items.filter((i) => i.bucket === bucket);
-      if (group.length === 0) continue;
-      // History: oldest on top, latest at the bottom (right above Watch Next).
-      const ordered = bucket === WatchNextBucket.HISTORY ? [...group].reverse() : group;
+      if (group.length === 0 && !(bucket === WatchNextBucket.HISTORY && older.length > 0)) continue;
+      // History: oldest on top, latest at the bottom (right above Watch Next). Older
+      // pages are all older than the initial slice, so ascending order is older-pages
+      // reversed, then the initial group reversed.
+      const ordered =
+        bucket === WatchNextBucket.HISTORY
+          ? [...older].reverse().concat([...group].reverse())
+          : group;
       out.push({
         type: 'header',
         key: `h_${bucket}`,
@@ -202,7 +232,7 @@ function WatchList() {
       }
     }
     return out;
-  }, [data?.items]);
+  }, [data?.items, pastQuery.data?.pages]);
 
   const watchNextIndex = useMemo(
     () => rows.findIndex((r) => r.type === 'header' && r.bucket === WatchNextBucket.WATCH_NEXT),
@@ -235,6 +265,51 @@ function WatchList() {
     );
     return () => clearTimeout(timer);
   }, [watchNextIndex]);
+
+  // Infinite top scroll (older watch history). Mirrors the Upcoming tab's scroll-up:
+  // level-triggered top detection (edge triggers are flaky on web) + cooldown +
+  // manual anchor restore from exact row heights on web (react-native-web has no
+  // maintainVisibleContentPosition; native anchors via that prop instead).
+  const canFetchPast =
+    (pastQuery.data?.pages.length ?? 0) > 0
+      ? !!pastQuery.hasNextPage
+      : (data?.historyHasMore ?? false) && !!historyCursor;
+  const offsetRef = useRef(0);
+  const rowsRef = useRef<WatchRow[]>([]);
+  const pendingPrepend = useRef<{ height: number; offset: number } | null>(null);
+  const pastFetchGate = useRef(0);
+  const maybeFetchPast = useCallback(() => {
+    if (!canFetchPast || pastQuery.isFetchingNextPage) return;
+    const now = Date.now();
+    if (now - pastFetchGate.current < 1200) return;
+    pastFetchGate.current = now;
+    pendingPrepend.current = {
+      height: rowsRef.current.reduce((sum, r) => sum + r.h, 0),
+      offset: offsetRef.current,
+    };
+    pastQuery.fetchNextPage();
+  }, [canFetchPast, pastQuery]);
+  const onScroll = useCallback((e: any) => {
+    offsetRef.current = e.nativeEvent.contentOffset.y;
+  }, []);
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (offsetRef.current < 250) maybeFetchPast();
+    }, 500);
+    return () => clearInterval(id);
+  }, [maybeFetchPast]);
+  rowsRef.current = rows;
+
+  useEffect(() => {
+    const pending = pendingPrepend.current;
+    if (!pending || pastQuery.isFetchingNextPage) return;
+    pendingPrepend.current = null;
+    if (Platform.OS !== 'web') return; // native anchors via maintainVisibleContentPosition
+    const delta = rows.reduce((sum, r) => sum + r.h, 0) - pending.height;
+    const next = pending.offset + Math.max(0, delta);
+    offsetRef.current = next;
+    if (next > 0) listRef.current?.scrollToOffset({ offset: next, animated: false });
+  }, [rows, pastQuery.isFetchingNextPage]);
 
   const renderRow = useCallback(
     ({ item: row }: { item: WatchRow }) => {
@@ -276,29 +351,38 @@ function WatchList() {
     );
 
   return (
-    <FlatList
-      ref={listRef}
-      data={rows}
-      keyExtractor={(r) => r.key}
-      renderItem={renderRow}
-      contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.lg }}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          colors={[tokens.primary]}
-          tintColor={tokens.primary}
-        />
-      }
-      initialNumToRender={15}
-      maxToRenderPerBatch={12}
-      windowSize={9}
-      getItemLayout={getItemLayout}
-      // Keep the viewport anchored when optimistic updates insert/remove History
-      // rows above the visible area.
-      maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-    />
+    <View style={{ flex: 1 }}>
+      {pastQuery.isFetchingNextPage ? (
+        <View style={styles.topLoader} pointerEvents="none">
+          <Spinner />
+        </View>
+      ) : null}
+      <FlatList
+        ref={listRef}
+        data={rows}
+        keyExtractor={(r) => r.key}
+        renderItem={renderRow}
+        contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.lg }}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[tokens.primary]}
+            tintColor={tokens.primary}
+          />
+        }
+        initialNumToRender={15}
+        maxToRenderPerBatch={12}
+        windowSize={9}
+        getItemLayout={getItemLayout}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        // Keep the viewport anchored when optimistic updates insert/remove History
+        // rows above the visible area.
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+      />
+    </View>
   );
 }
 
@@ -387,7 +471,6 @@ function Upcoming() {
     pushGroups(mainGroups);
     return merged.filter((g) => g.items.length > 0);
   }, [data?.groups, pastQuery.data?.pages]);
-
   // Infinite top scroll: with no pages fetched yet, the main endpoint's
   // hasMore+cursor gates the first fetch; afterwards the last page's cursor gates.
   const canFetchPast =
@@ -431,7 +514,6 @@ function Upcoming() {
   // Flat rows (header / card) so the list virtualizes (up to 200 cards server-side).
   const rows = useMemo<UpcomingRow[]>(() => {
     const out: UpcomingRow[] = [{ type: 'spacer', key: 'top', h: spacing.lg }];
-    if (pastQuery.isFetchingNextPage) out.push({ type: 'loader', key: 'past_loader', h: 48 });
     let isFirstSection = true;
     for (const g of groups) {
       if (!g.items?.length) continue;
@@ -447,15 +529,18 @@ function Upcoming() {
         out.push({ type: 'card', key: `c_${it.id}`, item: it, h: UPCOMING_H });
     }
     return out;
-  }, [groups, pastQuery.isFetchingNextPage]);
+  }, [groups]);
   rowsRef.current = rows;
 
   // Restore the visual anchor once a prepended page has rendered: the delta comes
-  // from our exact row heights, so it works identically on web and native.
+  // from our exact row heights. Web only — react-native-web has no
+  // maintainVisibleContentPosition; native anchors via that prop instead (applying
+  // both would double-shift).
   useEffect(() => {
     const pending = pendingPrepend.current;
     if (!pending || pastQuery.isFetchingNextPage) return;
     pendingPrepend.current = null;
+    if (Platform.OS !== 'web') return;
     const delta = rows.reduce((sum, r) => sum + r.h, 0) - pending.height;
     const next = pending.offset + Math.max(0, delta);
     offsetRef.current = next;
@@ -495,13 +580,6 @@ function Upcoming() {
   const renderRow = useCallback(
     ({ item: row }: { item: UpcomingRow }) => {
       if (row.type === 'spacer') return <View style={{ height: row.h }} />;
-      if (row.type === 'loader') {
-        return (
-          <View style={{ height: row.h, justifyContent: 'center' }}>
-            <Spinner />
-          </View>
-        );
-      }
       if (row.type === 'header') {
         return (
           <View style={{ height: row.h, justifyContent: 'flex-end' }}>
@@ -532,31 +610,50 @@ function Upcoming() {
     );
 
   return (
-    <FlatList
-      ref={listRef}
-      data={rows}
-      keyExtractor={(r) => r.key}
-      renderItem={renderRow}
-      contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.lg }}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          colors={[tokens.primary]}
-          tintColor={tokens.primary}
-        />
-      }
-      initialNumToRender={15}
-      maxToRenderPerBatch={12}
-      windowSize={9}
-      getItemLayout={getItemLayout}
-      onScroll={onScroll}
-      scrollEventThrottle={16}
-    />
+    <View style={{ flex: 1 }}>
+      {pastQuery.isFetchingNextPage ? (
+        <View style={styles.topLoader} pointerEvents="none">
+          <Spinner />
+        </View>
+      ) : null}
+      <FlatList
+        ref={listRef}
+        data={rows}
+        keyExtractor={(r) => r.key}
+        renderItem={renderRow}
+        contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.lg }}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[tokens.primary]}
+            tintColor={tokens.primary}
+          />
+        }
+        initialNumToRender={15}
+        maxToRenderPerBatch={12}
+        windowSize={9}
+        getItemLayout={getItemLayout}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   tabs: { flexDirection: 'row', paddingHorizontal: spacing.lg, paddingBottom: spacing.sm },
+  // Scroll-up page spinner: absolute overlay so it never shifts row layout (a layout
+  // row at the top pushed the whole list down mid-fetch → visible flicker).
+  topLoader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    paddingVertical: spacing.xs,
+    zIndex: 1,
+  },
 });

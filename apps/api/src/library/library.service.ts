@@ -19,6 +19,9 @@ import { pastBucket } from './lib/past-buckets';
 /** Max items returned in the "Haven't watched for a while" (NOT_RECENTLY) rail. */
 const NOT_RECENTLY_LIMIT = 10;
 
+/** Initial HISTORY slice on the watch list — older items page via /me/watch-next/history. */
+const WATCH_NEXT_HISTORY_LIMIT = 10;
+
 /** Past-episodes page size for the upcoming screen's infinite scroll-up. */
 const UPCOMING_PAST_PAGE_SIZE = 10;
 const UPCOMING_PAST_MAX_PAGE_SIZE = 50;
@@ -314,7 +317,9 @@ export class LibraryService {
       }
     }
 
-    const history = await this.recentlyWatchedEpisodes(userId, 10);
+    const history = await this.recentlyWatchedEpisodes(userId, WATCH_NEXT_HISTORY_LIMIT + 1);
+    const historyHasMore = history.length > WATCH_NEXT_HISTORY_LIMIT;
+    if (historyHasMore) history.length = WATCH_NEXT_HISTORY_LIMIT;
 
     watchNext.sort((a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0));
     // Sort NOT_RECENTLY by engagement: most watched first, then most recent
@@ -326,7 +331,7 @@ export class LibraryService {
     // tracked shows don't load/render the full set on the Watch list tab.
     const cappedNotRecently = notRecently.slice(0, NOT_RECENTLY_LIMIT);
 
-    const result = { items: [...history, ...watchNext, ...cappedNotRecently] };
+    const result = { items: [...history, ...watchNext, ...cappedNotRecently], historyHasMore };
     result.items = await this.localizeItems(result.items, (i) => i.showId);
     await this.localizeEpisodeTitles(result.items);
     await this.redis.set(cacheKey, result, 30);
@@ -336,10 +341,53 @@ export class LibraryService {
   private async recentlyWatchedEpisodes(userId: string, limit: number) {
     const rows = await this.prisma.watchHistory.findMany({
       where: { userId, mediaType: MediaType.SHOW, episodeId: { not: null } },
-      orderBy: { watchedAt: 'desc' },
+      // id tiebreak: bulk imports stamp identical watchedAt values, and the scroll-up
+      // history cursor (watchedAt, id) needs a deterministic total order.
+      orderBy: [{ watchedAt: 'desc' }, { id: 'desc' }],
       take: limit,
       include: { episode: { include: { season: { include: { show: { include: { media: { include: { show: true } } } } } } } } },
     });
+    return this.mapWatchHistoryRows(userId, rows);
+  }
+
+  /**
+   * Older watch-history pages for the watch list's scroll-up. Cursor-based
+   * ((watchedAt, id) strictly older than the oldest loaded row) so prepended pages
+   * never shift under new watch events. Returns HISTORY-bucket cards in the same
+   * shape as watchNext, newest first, plus the cursor for the next page.
+   */
+  async watchNextHistory(
+    userId: string,
+    q: { before: string; beforeId: string; limit?: number },
+  ): Promise<{ items: any[]; hasMore: boolean; cursor: { before: string; beforeId: string } | null }> {
+    const before = new Date(q.before);
+    if (Number.isNaN(before.getTime())) throw new BadRequestException('Invalid before cursor');
+    const take = Math.max(1, Math.min(q.limit ?? 20, 50));
+    const rows = await this.prisma.watchHistory.findMany({
+      where: {
+        userId,
+        mediaType: MediaType.SHOW,
+        episodeId: { not: null },
+        OR: [{ watchedAt: { lt: before } }, { watchedAt: before, id: { lt: q.beforeId } }],
+      },
+      orderBy: [{ watchedAt: 'desc' }, { id: 'desc' }],
+      take: take + 1,
+      include: { episode: { include: { season: { include: { show: { include: { media: { include: { show: true } } } } } } } } },
+    });
+    const hasMore = rows.length > take;
+    const pageRows = hasMore ? rows.slice(0, take) : rows;
+    let items = await this.mapWatchHistoryRows(userId, pageRows);
+    items = await this.localizeItems(items, (i) => i.showId);
+    await this.localizeEpisodeTitles(items);
+    const last = pageRows[pageRows.length - 1];
+    return {
+      items,
+      hasMore,
+      cursor: hasMore && last ? { before: last.watchedAt.toISOString(), beforeId: last.id } : null,
+    };
+  }
+
+  private async mapWatchHistoryRows(userId: string, rows: any[]) {
     // Real per-episode watch counts for the ×N rewatch badge — watch_history rows
     // alone don't carry them (without this every history card showed a plain checkmark).
     const epIds = [...new Set(rows.map((r) => r.episodeId).filter((x): x is string => !!x))];
@@ -368,6 +416,7 @@ export class LibraryService {
           remainingUnwatched: 0,
           label: EpisodeLabel.AIRED,
           lastWatchedAt: r.watchedAt,
+          historyId: r.id,
           progress: 1,
           bucket: WatchNextBucket.HISTORY,
         };

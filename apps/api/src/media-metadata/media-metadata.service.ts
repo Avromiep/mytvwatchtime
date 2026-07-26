@@ -18,6 +18,7 @@ import { TvmazeProvider } from './providers/tvmaze.provider';
 import { HydrationQueue } from './hydration/hydration.queue';
 import { ExternalReviewsService } from './external-reviews.service';
 import { slugify } from './util/slugify';
+import { EN_CONTENT_VERIFIER_VERSION } from './util/en-content-verifier';
 
 /** Metadata is considered stale (eligible for a full refresh) after 24h. */
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -131,24 +132,45 @@ export class MediaMetadataService {
     const posterBase = mergeLocalized(null, 'en', enBase?.posterUrl, undefined);
     const backdropBase = mergeLocalized(null, 'en', enBase?.backdropUrl, undefined);
     const shouldStoreRequestLocale = trustRequestLocale && (lang !== 'en' || !enBase);
+    const title = enBase?.title ?? item.title;
+    const overview = enBase?.overview ?? item.overview;
+    const titles = shouldStoreRequestLocale
+      ? mergeLocalized(titleBase, lang, item.title, undefined)
+      : titleBase;
+    const overviews = shouldStoreRequestLocale
+      ? mergeLocalized(overviewBase, lang, item.overview, undefined)
+      : overviewBase;
     return {
-      title: enBase?.title ?? item.title,
-      overview: enBase?.overview ?? item.overview,
+      title,
+      overview,
       posterUrl: enBase?.posterUrl ?? item.posterUrl,
       backdropUrl: enBase?.backdropUrl ?? item.backdropUrl,
       titleLocale: enBase ? 'en' : trustRequestLocale ? lang : 'und',
-      titles: shouldStoreRequestLocale
-        ? mergeLocalized(titleBase, lang, item.title, undefined)
-        : titleBase,
-      overviews: shouldStoreRequestLocale
-        ? mergeLocalized(overviewBase, lang, item.overview, undefined)
-        : overviewBase,
+      titles,
+      overviews,
       posterUrls: shouldStoreRequestLocale
         ? mergeLocalized(posterBase, lang, item.posterUrl, undefined)
         : posterBase,
       backdropUrls: shouldStoreRequestLocale
         ? mergeLocalized(backdropBase, lang, item.backdropUrl, undefined)
         : backdropBase,
+      // Birth-stamp for the english-content verifier: the base was JUST read from the
+      // provider's English slot, so the verifier would reach the exact same conclusion
+      // (provider title == visible title → park) — without this stamp every non-ASCII
+      // foreign title (TMDB falls back to the original title when no en translation
+      // exists) entered the suspect pool at birth and needed one provider call per row
+      // from the nightly cron to leave it, and live search traffic outgrew the drain.
+      // The stamp records the values AS STORED so the IS DISTINCT FROM checks match.
+      ...(enBase?.title
+        ? {
+            metadataProvenance: {
+              enContentVerifiedTitle: titles.en ?? title,
+              enContentVerifiedOverview: overviews.en ?? overview ?? '',
+              enContentVerifiedAt: new Date().toISOString(),
+              enContentVerifiedVersion: EN_CONTENT_VERIFIER_VERSION,
+            },
+          }
+        : {}),
     };
   }
 
