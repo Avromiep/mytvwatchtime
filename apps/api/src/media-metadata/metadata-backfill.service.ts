@@ -261,6 +261,7 @@ export class MetadataBackfillService {
       missingRating,
       animeTvdbUnresolvable,
       recommendationsMissing,
+      moviesMissingCountry,
     ] = await Promise.all([
       this.prisma.mediaItem.count(),
       this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
@@ -412,6 +413,15 @@ export class MetadataBackfillService {
         SELECT count(*)::bigint AS c FROM media_items m
         WHERE m.recommendations_synced_at IS NULL
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB')`,
+      // TMDB-linked MOVIE rows with no production country (powers the explore country
+      // filter). Filled by the movie-countries backfill; 90-day recheck like ratings.
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c FROM media_items m
+        JOIN movies mv ON mv.media_id = m.id
+        WHERE m.type = 'MOVIE'
+          AND mv.country IS NULL
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB' AND e.provider_entity_kind = 'MOVIE')
+          AND COALESCE(m.metadata_provenance->>'countryCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'`,
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     const enContent = englishContentHealth?.[0];
@@ -451,6 +461,7 @@ export class MetadataBackfillService {
       missingRating: toNum(missingRating as any),
       animeTvdbUnresolvable: toNum(animeTvdbUnresolvable as any),
       recommendationsMissing: toNum(recommendationsMissing as any),
+      moviesMissingCountry: toNum(moviesMissingCountry as any),
     };
   }
 
@@ -3312,6 +3323,105 @@ export class MetadataBackfillService {
       return { processed: succeeded + failed, succeeded, failed, sample };
     } finally {
       this.recommendationsFixRunning = false;
+    }
+  }
+
+  // ---- Movie production-country backfill (movies.country is NULL on light/TVDB rows) ----
+  private movieCountriesFixRunning = false;
+
+  async repairMovieCountries(limit?: number): Promise<{
+    processed: number;
+    succeeded: number;
+    failed: number;
+    sample: string[];
+  }> {
+    const empty = { processed: 0, succeeded: 0, failed: 0, sample: [] as string[] };
+    if (!this.tmdbProvider.enabled) {
+      this.logger.warn('TMDB not configured — skipping movie country backfill');
+      return empty;
+    }
+    if (this.movieCountriesFixRunning) {
+      this.logger.log('Movie country backfill already running — skipping');
+      return empty;
+    }
+    this.movieCountriesFixRunning = true;
+    this.trackRepair('movie-countries', {
+      running: true,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      finishedAt: null,
+    });
+    try {
+      const take = Math.max(1, Math.min(limit ?? 500, 100000));
+      const candidates = await this.prisma.$queryRaw<{ id: string; title: string; tmdb: string }[]>`
+        SELECT m.id, m.title,
+               (SELECT e.value FROM external_ids e
+                  WHERE e.media_id = m.id AND e.provider = 'TMDB' AND e.provider_entity_kind = 'MOVIE'
+                  LIMIT 1) AS tmdb
+        FROM media_items m
+        JOIN movies mv ON mv.media_id = m.id
+        WHERE m.type = 'MOVIE'
+          AND mv.country IS NULL
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB' AND e.provider_entity_kind = 'MOVIE')
+          AND COALESCE(m.metadata_provenance->>'countryCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'
+        ORDER BY m.popularity DESC, m.id
+        LIMIT ${take}`;
+      this.trackRepair('movie-countries', { total: candidates.length });
+
+      let succeeded = 0;
+      let failed = 0;
+      const sample: string[] = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const m = candidates[i];
+        this.trackRepair('movie-countries', {
+          processed: i + 1,
+          succeeded,
+          failed,
+          current: m.title,
+        });
+        try {
+          const country = await this.tmdbProvider.getMovieCountry(Number(m.tmdb));
+          if (country) {
+            await this.prisma.movie.update({ where: { mediaId: m.id }, data: { country } });
+            succeeded++;
+            if (sample.length < 5) sample.push(`${m.title} → ${country}`);
+          }
+          // Stamp every processed row (found or not — TMDB has no country for it) so the
+          // stat drains and rows are re-checked only after 90 days, like the rating backfill.
+          await this.prisma.$executeRaw`
+            UPDATE media_items
+            SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
+                  || jsonb_build_object('countryCheckedAt', ${new Date().toISOString()}::text)
+            WHERE id = ${m.id}`;
+        } catch (e) {
+          if (this.isRateLimitError(e)) {
+            this.logger.warn(
+              `Movie country backfill: TMDB rate limit at ${i + 1}/${candidates.length} — stopping early`,
+            );
+            break;
+          }
+          failed++;
+          if (failed <= 10)
+            this.logger.warn(
+              `Movie country backfill failed for "${m.title}" (${m.id}): ${(e as Error).message}`,
+            );
+        }
+      }
+      this.trackRepair('movie-countries', {
+        running: false,
+        processed: succeeded + failed,
+        succeeded,
+        failed,
+        finishedAt: new Date(),
+      });
+      this.logger.log(
+        `Movie country backfill: ${succeeded}/${candidates.length} resolved from TMDB, ${failed} failed`,
+      );
+      return { processed: succeeded + failed, succeeded, failed, sample };
+    } finally {
+      this.movieCountriesFixRunning = false;
     }
   }
 

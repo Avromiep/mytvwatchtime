@@ -247,6 +247,24 @@ export class AdminController {
     };
   }
 
+  @Post('repair-movie-countries/run')
+  @RequireRoles('ADMIN')
+  async runRepairMovieCountries(
+    @CurrentUser('id') adminId: string,
+    @Query('count') count?: string,
+  ) {
+    const n = count ? Number(count) : undefined;
+    this.metadataBackfill.repairMovieCountries(n).catch((e) => {
+      console.error('[Movie countries backfill] FAILED:', (e as Error)?.message ?? e);
+    });
+    await this.admin.audit(adminId, 'repair_movie_countries', 'media', undefined, {
+      count: n ?? 500,
+    });
+    return {
+      message: `Movie country backfill started (${n ?? 500} rows max). Check API logs for progress + results.`,
+    };
+  }
+
   @Post('backfill-ratings/run')
   @RequireRoles('ADMIN')
   runBackfillRatings(@Query('count') count?: string) {

@@ -140,6 +140,7 @@ describe('DiscoveryService explore filters (DB paths)', () => {
   const make = () => {
     const prisma = {
       userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
+      movie: { findMany: jest.fn().mockResolvedValue([]) },
       mediaItem: {
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
@@ -181,19 +182,33 @@ describe('DiscoveryService explore filters (DB paths)', () => {
     });
   });
 
-  it('searchViaDb maps country to originCountries for shows', async () => {
+  it('searchViaDb maps country to originCountries for shows (unknown origin kept)', async () => {
     const { svc, prisma } = make();
     await (svc as any).searchViaDb('term', { q: 'term', type: MediaType.SHOW, country: 'jp' });
     const where = prisma.mediaItem.findMany.mock.calls[0][0].where;
-    expect(where.show).toEqual({ is: { originCountries: { has: 'JP' } } });
+    expect(where.show).toEqual({
+      is: { OR: [{ originCountries: { has: 'JP' } }, { originCountries: { isEmpty: true } }] },
+    });
     expect(where).not.toHaveProperty('movie');
   });
 
-  it('searchViaDb maps country to the production country for movies', async () => {
+  it('searchViaDb maps country to the production country for movies (STRICT)', async () => {
     const { svc, prisma } = make();
     await (svc as any).searchViaDb('term', { q: 'term', type: MediaType.MOVIE, country: 'us' });
     const where = prisma.mediaItem.findMany.mock.calls[0][0].where;
-    expect(where.movie).toEqual({ is: { country: { equals: 'US', mode: 'insensitive' } } });
+    expect(where.movie).toEqual({
+      is: {
+        OR: [
+          { country: { equals: 'US', mode: 'insensitive' } },
+          {
+            country: {
+              in: ['United States of America', 'United States'],
+              mode: 'insensitive',
+            },
+          },
+        ],
+      },
+    });
     expect(where).not.toHaveProperty('show');
   });
 
@@ -234,7 +249,19 @@ describe('DiscoveryService explore filters (DB paths)', () => {
     expect(call.where.genres.none).toEqual({
       genre: { slug: { in: ['horror'], mode: 'insensitive' } },
     });
-    expect(call.where.movie).toEqual({ is: { country: { equals: 'US', mode: 'insensitive' } } });
+    expect(call.where.movie).toEqual({
+      is: {
+        OR: [
+          { country: { equals: 'US', mode: 'insensitive' } },
+          {
+            country: {
+              in: ['United States of America', 'United States'],
+              mode: 'insensitive',
+            },
+          },
+        ],
+      },
+    });
     expect(call.orderBy).toEqual({ movie: { releaseDate: 'desc' } });
   });
 
@@ -242,7 +269,9 @@ describe('DiscoveryService explore filters (DB paths)', () => {
     const { svc, prisma } = make();
     await (svc as any).topDb(MediaType.SHOW, 20, 'u1', { country: 'KR', sort: 'releaseDate' });
     const call = prisma.mediaItem.findMany.mock.calls[0][0];
-    expect(call.where.show).toEqual({ is: { originCountries: { has: 'KR' } } });
+    expect(call.where.show).toEqual({
+      is: { OR: [{ originCountries: { has: 'KR' } }, { originCountries: { isEmpty: true } }] },
+    });
     expect(call.orderBy).toEqual({ show: { yearStart: 'desc' } });
   });
 
@@ -270,7 +299,34 @@ describe('DiscoveryService explore filters (DB paths)', () => {
     expect(where.genres.none).toEqual({
       genre: { slug: { in: ['anime', 'horror'], mode: 'insensitive' } },
     });
-    expect(where.show).toEqual({ is: { originCountries: { has: 'KR' } } });
+    expect(where.show).toEqual({
+      is: { OR: [{ originCountries: { has: 'KR' } }, { originCountries: { isEmpty: true } }] },
+    });
+  });
+
+  it('filterEntriesExcluding keeps entries with UNKNOWN origin for shows', async () => {
+    const { svc } = make();
+    const entries = [
+      { id: 'a', g: [], oc: [] }, // unknown origin → keep (shows)
+      { id: 'b', g: [], oc: ['JP'] }, // provably not US → drop
+      { id: 'c', g: [], oc: ['US'] }, // provably US → keep
+    ] as any;
+    const out = await (svc as any).filterEntriesExcluding(entries, [], 'US', 'show');
+    expect(out.map((e: any) => e.id)).toEqual(['a', 'c']);
+  });
+
+  it('filterEntriesExcluding is STRICT for movies (DB production country)', async () => {
+    const { svc, prisma } = make();
+    prisma.movie.findMany.mockResolvedValue([{ mediaId: 'b' }]);
+    const entries = [
+      { id: 'a', g: [], oc: [] }, // not US in DB → drop
+      { id: 'b', g: [], oc: [] }, // US in DB → keep
+    ] as any;
+    const out = await (svc as any).filterEntriesExcluding(entries, [], 'US', 'movie');
+    expect(prisma.movie.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ mediaId: { in: ['a', 'b'] } }) }),
+    );
+    expect(out.map((e: any) => e.id)).toEqual(['b']);
   });
 
   it('forYou adds the filter fingerprint to the cache key', async () => {

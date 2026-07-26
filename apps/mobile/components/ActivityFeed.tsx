@@ -88,18 +88,16 @@ function FeedItemRow({
       (item.media.type === 'SHOW' ? `/show/${item.media.id}` : `/movie/${item.media.id}`) as any,
     );
   return (
-    <Pressable
-      onPress={openMedia}
-      style={({ pressed }) => [styles.row, pressed && { backgroundColor: tokens.surfaceAlt }]}
-      accessibilityRole="button"
-      accessibilityLabel={activityLine(item, t)}
-    >
+    // Sibling pressables (avatar → profile, content → media) — a Pressable inside a
+    // Pressable renders invalid nested <button>s on react-native-web.
+    <View style={styles.row}>
       <Pressable
-        onPress={(e) => {
-          e.stopPropagation();
-          router.push(`/user/${item.user.username}` as any);
-        }}
+        onPress={() => router.push(`/user/${item.user.username}` as any)}
         hitSlop={6}
+        style={({ pressed }) => [
+          { paddingLeft: spacing.sm, paddingVertical: spacing.sm, borderRadius: radius.md },
+          pressed && { backgroundColor: tokens.surfaceAlt },
+        ]}
         accessibilityRole="button"
         accessibilityLabel={item.user.displayName ?? item.user.username}
       >
@@ -110,34 +108,44 @@ function FeedItemRow({
           style={{ width: AVATAR, height: AVATAR, borderRadius: AVATAR / 2 }}
         />
       </Pressable>
-      <View style={styles.rowBody}>
-        <T variant="body" numberOfLines={2}>
-          {activityLine(item, t)}
-        </T>
-        {/* Spoiler comments: the excerpt is masked server-side — show the same
-            spoiler treatment as the comments feed instead. */}
-        {item.spoiler ? (
-          <View style={styles.spoilerRow}>
-            <Ionicons name="eye-off-outline" size={13} color={tokens.orange} />
-            <T variant="micro" style={{ color: tokens.orange, marginLeft: 4, fontWeight: '700' }}>
-              {t('comments:spoilerWarning')}
-            </T>
-          </View>
-        ) : item.detail?.excerpt ? (
-          <T variant="caption" muted numberOfLines={2} style={{ marginTop: 2 }}>
-            {item.detail.excerpt}
+      <Pressable
+        onPress={openMedia}
+        style={({ pressed }) => [
+          styles.rowContent,
+          pressed && { backgroundColor: tokens.surfaceAlt },
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel={activityLine(item, t)}
+      >
+        <View style={styles.rowBody}>
+          <T variant="body" numberOfLines={2}>
+            {activityLine(item, t)}
           </T>
-        ) : null}
-        <T variant="micro" muted style={{ marginTop: 2 }}>
-          {formatRelativeShort(item.createdAt, t, resolvedLocale)}
-        </T>
-      </View>
-      <PosterImage
-        uri={item.media.posterUrl}
-        transition={0}
-        style={{ width: POSTER_W, height: POSTER_H, borderRadius: radius.sm }}
-      />
-    </Pressable>
+          {/* Spoiler comments: the excerpt is masked server-side — show the same
+              spoiler treatment as the comments feed instead. */}
+          {item.spoiler ? (
+            <View style={styles.spoilerRow}>
+              <Ionicons name="eye-off-outline" size={13} color={tokens.orange} />
+              <T variant="micro" style={{ color: tokens.orange, marginLeft: 4, fontWeight: '700' }}>
+                {t('comments:spoilerWarning')}
+              </T>
+            </View>
+          ) : item.detail?.excerpt ? (
+            <T variant="caption" muted numberOfLines={2} style={{ marginTop: 2 }}>
+              {item.detail.excerpt}
+            </T>
+          ) : null}
+          <T variant="micro" muted style={{ marginTop: 2 }}>
+            {formatRelativeShort(item.createdAt, t, resolvedLocale)}
+          </T>
+        </View>
+        <PosterImage
+          uri={item.media.posterUrl}
+          transition={0}
+          style={{ width: POSTER_W, height: POSTER_H, borderRadius: radius.sm }}
+        />
+      </Pressable>
+    </View>
   );
 }
 
@@ -211,8 +219,13 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  rowContent: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.sm,
+    paddingRight: spacing.sm,
     borderRadius: radius.md,
   },
   rowBody: { flex: 1, marginHorizontal: spacing.sm },

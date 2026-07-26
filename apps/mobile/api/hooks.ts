@@ -51,7 +51,7 @@ import { api, HttpError } from './client';
 import { applyWatchStateToItems } from './watch-next-optimistic';
 import { refreshWidgets } from '../widgets/sync';
 
-const qk = {
+export const qk = {
   me: ['me'] as const,
   watchNext: ['watchNext'] as const,
   upcoming: ['upcoming'] as const,
@@ -1628,6 +1628,25 @@ export const useFollows = (username: string, type: 'followers' | 'following') =>
   useQuery({
     queryKey: ['follows', username, type],
     queryFn: () => api.get<any[]>(`/users/${username}/follows?type=${type}`),
+    enabled: !!username,
+  });
+
+export const useUserLists = (username: string) =>
+  useQuery({
+    queryKey: ['userLists', username],
+    queryFn: () =>
+      api.get<
+        {
+          id: string;
+          title: string;
+          description?: string | null;
+          coverUrl?: string | null;
+          showCount: number;
+          movieCount: number;
+          likeCount: number;
+          subscriberCount: number;
+        }[]
+      >(`/users/${username}/lists`),
     enabled: !!username,
   });
 

@@ -50,14 +50,18 @@ export class AuthService {
   }
 
   async register(dto: EmailRegisterDto): Promise<AuthSessionDto> {
+    // Normalize at the door: a stored "name " (trailing space) can never be looked up
+    // again — profile links, @mentions, and findUnique all use the trimmed form.
+    const username = dto.username.trim();
+    const email = dto.email.trim();
     if (
-      RESERVED_USERNAMES.has(dto.username.toLowerCase()) ||
-      RESERVED_USER_EMAILS.has(dto.email.toLowerCase())
+      RESERVED_USERNAMES.has(username.toLowerCase()) ||
+      RESERVED_USER_EMAILS.has(email.toLowerCase())
     ) {
       throw new ConflictException('This account identity is reserved');
     }
     const exists = await this.prisma.user.findFirst({
-      where: { OR: [{ email: dto.email }, { username: dto.username }] },
+      where: { OR: [{ email }, { username }] },
     });
     if (exists) throw new ConflictException('Email or username already in use');
 
@@ -78,14 +82,14 @@ export class AuthService {
 
     const user = await this.prisma.user.create({
       data: {
-        email: dto.email,
-        username: dto.username,
+        email,
+        username,
         passwordHash,
         role,
         mustChangePassword,
         emailVerified: false,
-        authProviders: { create: { provider: 'EMAIL', providerUid: dto.email } },
-        profile: { create: { displayName: dto.username } },
+        authProviders: { create: { provider: 'EMAIL', providerUid: email } },
+        profile: { create: { displayName: username } },
       },
     });
     return this.issueSession(

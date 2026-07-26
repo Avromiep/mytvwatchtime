@@ -18,6 +18,7 @@
     "type": "Type",
     "country": "Pays",
     "hideAnime": "Masquer les animés",
+    "resetAll": "Réinitialiser",
     "orderPopularity": "Popularité",
     "orderReleaseDate": "Date de sortie",
     "typeBoth": "Les deux",

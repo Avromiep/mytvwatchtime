@@ -18,6 +18,7 @@
     "type": "タイプ",
     "country": "国",
     "hideAnime": "アニメを非表示",
+    "resetAll": "すべてリセット",
     "orderPopularity": "人気順",
     "orderReleaseDate": "公開日順",
     "typeBoth": "両方",

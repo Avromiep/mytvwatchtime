@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ImageBackground, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,6 +7,7 @@ import { Carousel } from '../../components/cards';
 import { Button, Card, PosterImage, ProgressBar, Screen, SectionHeader, Spinner, T, useWatchMenu } from '../../components/primitives';
 import { ReactionGrid, StarRatingControl, VotingSection } from '../../components/voting';
 import {
+  qk,
   useMarkMovieWatched,
   useMovie,
   useMovieVotes,
@@ -14,17 +15,29 @@ import {
   useToggleFavorite,
   useToggleMovieWatchlist,
 } from '../../api/hooks';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAddToList } from '../../hooks/useAddToList';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../theme/theme';
 import { showError } from '../../lib/dialog';
+import { countryFlag } from '../../lib/country';
 
 export default function MovieDetailScreen() {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['movies', 'common', 'episode']);
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: movie, isLoading, refetch } = useMovie(id);
+  const qc = useQueryClient();
+  // Canonicalize numeric-TMDB-id URLs (Similar rail): seed the detail cache under the
+  // INTERNAL id and replace the route, so every hook/mutation (votes, favorite,
+  // watchlist, watched, comments) keys on one consistent id — no alias drift.
+  useEffect(() => {
+    if (movie && id && movie.id !== id) {
+      qc.setQueryData(qk.movie(movie.id), movie);
+      router.replace(`/movie/${movie.id}`);
+    }
+  }, [movie?.id]);
   const votes = useMovieVotes(id);
   const watched = useMarkMovieWatched();
   const rewatch = useRewatchMovie();
@@ -36,7 +49,7 @@ export default function MovieDetailScreen() {
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
   const onVoteError = () => showError({ description: t('episode:voteFailed') });
 
-  if (isLoading || !movie) return <Screen><Header showBack /><Spinner /></Screen>;
+  if (isLoading || !movie || movie.id !== id) return <Screen><Header showBack /><Spinner /></Screen>;
 
   return (
     <Screen>
@@ -55,11 +68,22 @@ export default function MovieDetailScreen() {
               <PosterImage uri={movie.images.poster} style={{ width: 100, height: 150, borderRadius: radius.md }} />
               <View style={{ flex: 1, marginLeft: spacing.md }}>
                 <T variant="title" style={{ fontSize: 22 }}>{movie.title}</T>
-                <View style={{ flexDirection: 'row', marginTop: 6, gap: spacing.md }}>
-                  {movie.releaseYear ? <T variant="caption" muted>{movie.releaseYear}</T> : null}
-                  {movie.runtimeMinutes ? <T variant="caption" muted>· {movie.runtimeMinutes}m</T> : null}
-                  {movie.country ? <T variant="caption" muted>· {movie.country}</T> : null}
-                  {movie.rating ? <T variant="caption" style={{ color: tokens.primary }}>★ {movie.rating.toFixed(1)}</T> : null}
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginTop: 6, gap: spacing.xs }}>
+                  <T variant="caption" muted>
+                    {[
+                      movie.releaseYear ? String(movie.releaseYear) : null,
+                      movie.runtimeMinutes ? `${movie.runtimeMinutes}m` : null,
+                      movie.country ? countryFlag(movie.country) : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </T>
+                  {movie.rating ? (
+                    <>
+                      <Ionicons name="star" size={11} color={tokens.warning} />
+                      <T variant="caption" muted>{movie.rating.toFixed(1)}</T>
+                    </>
+                  ) : null}
                 </View>
                 <T variant="caption" muted style={{ marginTop: spacing.sm }}>{movie.genres?.map((g: any) => g.name).join(' · ')}</T>
               </View>

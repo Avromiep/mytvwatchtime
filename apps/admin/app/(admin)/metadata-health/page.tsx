@@ -35,6 +35,7 @@ interface MetadataHealth {
   missingRating: number;
   animeTvdbUnresolvable: number;
   recommendationsMissing: number;
+  moviesMissingCountry: number;
 }
 
 /** Live progress of one background repair job (from /admin/metadata-health/repair-progress). */
@@ -61,6 +62,7 @@ const REPAIR_LABELS: Record<string, string> = {
   'banner-posters': 'Banner poster repair',
   ratings: 'Rating backfill',
   recommendations: 'Recommendations backfill',
+  'movie-countries': 'Movie countries backfill',
 };
 
 /** One-line guidance per stat: what it means and what to do about it. */
@@ -94,6 +96,8 @@ const STAT_HINTS: Record<string, string> = {
     'Rows with no community rating — mostly TVDB-hydrated shows (anime/animation): TVDB exposes no public 0–10 rating (its score is a popularity rank), so those rows are born unrated. Backfill resolves TMDB\u2019s vote_average per row: stored TMDB id, else the tvdb_id \u2192 TMDB /find chain, else the IMDB id from TVDB \u2192 /find. One light call per hop, most-popular first, stopping early on rate limits. Rows with no rating at the source are remembered and skipped for 90 days, so the nightly Scheduled Job keeps this drained. No user data touched.',
   recommendationsMissing:
     'TMDB-linked rows whose "similar shows/movies" recommendations were never synced (rows hydrated before recommendations existed, or TVDB-hydrated rows — TVDB supplies none). Backfill fetches TMDB /recommendations per row with ONE light call (no rehydration), most-popular first, stopping early on TMDB rate limits. Rows whose provider has no recommendations are stamped as checked and leave the count. No user data touched.',
+  moviesMissingCountry:
+    'TMDB-linked movie rows with no production country — the explore country filter can only match movies whose country is known. Backfill resolves TMDB production_countries per row with ONE light call, most-popular first, stopping early on rate limits. Rows TMDB has no country for are stamped as checked and skipped for 90 days. No user data touched.',
 };
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -139,6 +143,9 @@ export default function MetadataHealthPage() {
   const [repairingRecs, setRepairingRecs] = useState(false);
   const [recsResult, setRecsResult] = useState<string | null>(null);
   const [recsCount, setRecsCount] = useState('500');
+  const [repairingCountries, setRepairingCountries] = useState(false);
+  const [countriesResult, setCountriesResult] = useState<string | null>(null);
+  const [countriesCount, setCountriesCount] = useState('500');
   const [castCount, setCastCount] = useState('500');
   const [repairs, setRepairs] = useState<Record<string, RepairProgress>>({});
   const [batchCount, setBatchCount] = useState('200');
@@ -356,6 +363,22 @@ export default function MetadataHealthPage() {
       .finally(() => setRepairingRecs(false));
   };
 
+  const runCountriesBackfill = () => {
+    setRepairingCountries(true);
+    setCountriesResult(null);
+    const n = Math.max(1, Number(countriesCount) || 500);
+    api
+      .post(`/admin/repair-movie-countries/run?count=${n}`)
+      .then(() => {
+        setCountriesResult(
+          `Movie country backfill started (${n} rows). Watch the progress panel above; stats refresh in 60s.`,
+        );
+        setTimeout(() => load(), 60000);
+      })
+      .catch(() => setCountriesResult('Movie country backfill failed to start.'))
+      .finally(() => setRepairingCountries(false));
+  };
+
   if (!canView) return <p className="p-6 text-sm text-zinc-500">Admins only.</p>;
 
   const pct = (n: number) => (stats && stats.total > 0 ? Math.round((n / stats.total) * 100) : 0);
@@ -471,6 +494,11 @@ export default function MetadataHealthPage() {
       {recsResult && (
         <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-800 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-200">
           {recsResult}
+        </div>
+      )}
+      {countriesResult && (
+        <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-800 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-200">
+          {countriesResult}
         </div>
       )}
 
@@ -829,6 +857,32 @@ export default function MetadataHealthPage() {
                     className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
                   >
                     {repairingRecs ? 'Starting…' : 'Backfill Recommendations'}
+                  </button>
+                </div>
+              }
+            />
+            <MetricCard
+              label="Movies Missing Country"
+              value={stats.moviesMissingCountry}
+              sub="TMDB-linked movie rows the country filter cannot match"
+              hint={STAT_HINTS.moviesMissingCountry}
+              highlight={stats.moviesMissingCountry > 0}
+              action={
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={countriesCount}
+                    onChange={(e) => setCountriesCount(e.target.value)}
+                    className="w-20 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+                    title="Rows per run"
+                  />
+                  <button
+                    onClick={runCountriesBackfill}
+                    disabled={repairingCountries}
+                    className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    {repairingCountries ? 'Starting…' : 'Backfill Countries'}
                   </button>
                 </div>
               }

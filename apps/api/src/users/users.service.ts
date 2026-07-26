@@ -59,18 +59,19 @@ export class UsersService {
   }
 
   async updateMe(userId: string, dto: UpdateProfileDto) {
-    if (dto.username) {
-      if (RESERVED_USERNAMES.has(dto.username.toLowerCase())) {
+    const username = dto.username?.trim();
+    if (username) {
+      if (RESERVED_USERNAMES.has(username.toLowerCase())) {
         throw new ConflictException('This username is reserved');
       }
       const taken = await this.prisma.user.findFirst({
-        where: { username: dto.username, NOT: { id: userId } },
+        where: { username, NOT: { id: userId } },
       });
       if (taken) throw new ConflictException('Username already taken');
     }
     await this.prisma.user.update({
       where: { id: userId },
-      data: dto.username ? { username: dto.username } : {},
+      data: username ? { username } : {},
     });
     await this.prisma.userProfile.upsert({
       where: { userId },
@@ -208,8 +209,8 @@ export class UsersService {
   }
 
   async getPublicProfile(username: string, viewerId?: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { username },
+    const user = await this.prisma.user.findFirst({
+      where: { username: username.trim() },
       include: { profile: true },
     });
     if (!user) throw new NotFoundException('User not found');
@@ -237,6 +238,68 @@ export class UsersService {
       isFollowing: !!isFollowing,
       isMe: viewerId === user.id,
     };
+  }
+
+  /**
+   * A user's PUBLIC lists for the profile page. Private profiles expose them only to
+   * the owner and their followers (same rule as profile visibility).
+   */
+  async getUserPublicLists(username: string, viewerId?: string) {
+    const user = await this.prisma.user.findFirst({
+      where: { username: username.trim() },
+      include: { profile: { select: { isPrivate: true } } },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.profile?.isPrivate && viewerId !== user.id) {
+      const following = viewerId
+        ? await this.prisma.follow.findUnique({
+            where: { followerId_targetId: { followerId: viewerId, targetId: user.id } },
+          })
+        : null;
+      if (!following) return [];
+    }
+    const lists = await this.prisma.customList.findMany({
+      where: { userId: user.id, visibility: 'PUBLIC' },
+      orderBy: { updatedAt: 'desc' },
+      include: { _count: { select: { items: true, likes: true, subscriptions: true } } },
+    });
+    if (!lists.length) return [];
+    // Show/movie item counts per list + first-item cover fallback — two batched queries.
+    const [counts, covers] = await Promise.all([
+      this.prisma.$queryRaw<{ listId: string; type: string; c: number }[]>`
+        SELECT cli.list_id AS "listId", m.type, COUNT(*)::int AS c
+        FROM custom_list_items cli
+        JOIN media_items m ON m.id = cli.media_id
+        WHERE cli.list_id IN (${Prisma.join(lists.map((l) => l.id))})
+        GROUP BY cli.list_id, m.type`,
+      this.prisma.$queryRaw<{ listId: string; backdrop: string | null; poster: string | null }[]>`
+        SELECT DISTINCT ON (cli.list_id)
+               cli.list_id AS "listId",
+               m.backdrop_url AS backdrop,
+               m.poster_url AS poster
+        FROM custom_list_items cli
+        JOIN media_items m ON m.id = cli.media_id
+        WHERE cli.list_id IN (${Prisma.join(lists.map((l) => l.id))})
+        ORDER BY cli.list_id, cli.created_at`,
+    ]);
+    const countByList = new Map<string, { shows: number; movies: number }>();
+    for (const r of counts) {
+      const e = countByList.get(r.listId) ?? { shows: 0, movies: 0 };
+      if (r.type === 'SHOW') e.shows = r.c;
+      else e.movies = r.c;
+      countByList.set(r.listId, e);
+    }
+    const coverByList = new Map(covers.map((c) => [c.listId, c.backdrop ?? c.poster]));
+    return lists.map((l) => ({
+      id: l.id,
+      title: l.title,
+      description: l.description,
+      coverUrl: l.coverUrl ?? coverByList.get(l.id) ?? null,
+      showCount: countByList.get(l.id)?.shows ?? 0,
+      movieCount: countByList.get(l.id)?.movies ?? 0,
+      likeCount: l._count.likes,
+      subscriberCount: l._count.subscriptions,
+    }));
   }
 
   async getFollows(userId: string, type: 'followers' | 'following', viewerId?: string) {
@@ -279,7 +342,10 @@ export class UsersService {
   }
 
   async getFollowsByUsername(username: string, type: 'followers' | 'following', viewerId?: string) {
-    const user = await this.prisma.user.findUnique({ where: { username }, select: { id: true } });
+    const user = await this.prisma.user.findFirst({
+      where: { username: username.trim() },
+      select: { id: true },
+    });
     if (!user) throw new NotFoundException('User not found');
     return this.getFollows(user.id, type, viewerId);
   }

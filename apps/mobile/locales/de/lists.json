@@ -46,5 +46,6 @@
   "deleteList": "Liste löschen",
   "removeItemQuestion": "Element entfernen?",
   "shareMsg": "Sieh dir „{{title}}“ auf TVWatchTime an",
-  "emptyLabel": "Leer"
+  "emptyLabel": "Leer",
+  "publicLists": "Öffentliche Listen"
 }

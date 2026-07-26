@@ -18,6 +18,7 @@
     "type": "Tipo",
     "country": "País",
     "hideAnime": "Ocultar anime",
+    "resetAll": "Redefinir tudo",
     "orderPopularity": "Popularidade",
     "orderReleaseDate": "Data de lançamento",
     "typeBoth": "Ambos",

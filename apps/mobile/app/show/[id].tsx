@@ -27,6 +27,7 @@ import {
   useWatchMenu,
 } from '../../components/primitives';
 import {
+  qk,
   useEpisode,
   useMarkEpisodeWatched,
   useMarkSeasonWatched,
@@ -37,18 +38,30 @@ import {
   useToggleFavorite,
   useToggleWatchlist,
 } from '../../api/hooks';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAddToList } from '../../hooks/useAddToList';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useConfetti } from '../../components/Confetti';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../theme/theme';
 import { showError } from '../../lib/dialog';
+import { countryFlag } from '../../lib/country';
 
 export default function ShowDetailScreen() {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['showDetail', 'common', 'episode']);
   const { id } = useLocalSearchParams<{ id: string }>();
+  const qc = useQueryClient();
   const { data: show, isLoading, refetch } = useShow(id);
+  // Canonicalize numeric-TMDB-id URLs (Similar rail): seed the detail cache under the
+  // INTERNAL id and replace the route, so every hook/mutation (votes, favorite,
+  // watchlist, episodes, comments) keys on one consistent id — no alias drift.
+  useEffect(() => {
+    if (show && id && show.id !== id) {
+      qc.setQueryData(qk.show(show.id), show);
+      router.replace(`/show/${show.id}`);
+    }
+  }, [show?.id]);
   const votes = useShowVotes(id);
   const [tab, setTab] = useState<'about' | 'episodes'>('episodes');
   const watchlist = useToggleWatchlist();
@@ -71,7 +84,7 @@ export default function ShowDetailScreen() {
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
   const onVoteError = () => showError({ description: t('episode:voteFailed') });
 
-  if (isLoading || !show) return <Screen><Header showBack /><Spinner /></Screen>;
+  if (isLoading || !show || show.id !== id) return <Screen><Header showBack /><Spinner /></Screen>;
 
   return (
     <Screen>
@@ -92,12 +105,23 @@ export default function ShowDetailScreen() {
               <T variant="title" style={{ fontSize: 26, color: tokens.mediaText }}>{show.title}</T>
             </View>
             <View style={{ padding: spacing.lg, marginTop: 'auto' }}>
-              <View style={{ flexDirection: 'row', gap: spacing.md }}>
-                {show.yearStart ? <T variant="caption" style={{ color: tokens.mediaText }}>{show.yearStart}</T> : null}
-                <T variant="caption" style={{ color: tokens.mediaText }}>{t('showDetail:seasonsCount', { count: show.seasonsCount })}</T>
-                {show.network ? <T variant="caption" style={{ color: tokens.mediaText }}>· {show.network}</T> : null}
-                {show.originCountries?.length ? <T variant="caption" style={{ color: tokens.mediaText }}>· {show.originCountries.join(' · ')}</T> : null}
-                {show.rating ? <T variant="caption" style={{ color: tokens.primary }}>★ {show.rating.toFixed(1)}</T> : null}
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs }}>
+                <T variant="caption" style={{ color: tokens.mediaText }}>
+                  {[
+                    show.yearStart ? String(show.yearStart) : null,
+                    t('showDetail:seasonsCount', { count: show.seasonsCount }),
+                    show.network || null,
+                    ...(show.originCountries ?? []).map(countryFlag),
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </T>
+                {show.rating ? (
+                  <>
+                    <Ionicons name="star" size={11} color={tokens.warning} />
+                    <T variant="caption" style={{ color: tokens.mediaText }}>{show.rating.toFixed(1)}</T>
+                  </>
+                ) : null}
               </View>
               <View style={{ marginTop: spacing.sm }}>
                 <ProgressBar value={show.userProgress ?? 0} color={(show.userProgress ?? 0) >= 1 ? tokens.watched : tokens.primary} />
@@ -288,7 +312,7 @@ function AboutTab({ show, id }: { show: any; id: string }) {
         <SectionHeader title={t('showDetail:showInfo')} />
         {show.originalTitle ? <InfoRow label={t('showDetail:originalTitle')} value={show.originalTitle} /> : null}
         <InfoRow label={t('showDetail:years')} value={`${show.yearStart ?? '—'}${show.yearEnd ? `–${show.yearEnd}` : ''}`} />
-        <InfoRow label={t('showDetail:originCountry')} value={show.originCountries?.length ? show.originCountries.join(' · ') : null} />
+        <InfoRow label={t('showDetail:originCountry')} value={show.originCountries?.length ? show.originCountries.map(countryFlag).join(' ') : null} />
         <InfoRow label={t('showDetail:status')} value={show.status} />
         <InfoRow label={t('showDetail:genres')} value={show.genres?.map((g: any) => g.name).join(', ')} />
         <InfoRow label={t('showDetail:runtime')} value={show.runtimeMinutes ? `${show.runtimeMinutes}m` : '—'} />

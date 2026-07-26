@@ -99,6 +99,12 @@ export class ShowsService {
   }
 
   async getSeasons(id: string, userId?: string) {
+    // Numeric TMDB ids (e.g. tapped from the Similar rail): hydrate + resolve to the
+    // internal id first — the detail endpoint does the same in getShow.
+    const media = await this.prisma.mediaItem.findUnique({ where: { id }, select: { id: true } });
+    if (!media && this.tmdb.enabled && /^\d+$/.test(id)) {
+      id = await this.meta.ensureShowFull(Number(id));
+    }
     // Repair TMDB-structured anime BEFORE reading the structure. The show-detail request
     // fires the same repair in parallel; per-show coalescing makes both requests share one
     // fix, so this endpoint never answers with the pre-fix TMDB structure while the detail

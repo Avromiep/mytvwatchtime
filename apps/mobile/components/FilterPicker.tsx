@@ -88,6 +88,9 @@ interface FilterPickerProps {
   /** Multi-select: toggles + Done; single-select: tap applies and dismisses. */
   multi?: boolean;
   onChange: (values: string[]) => void;
+  /** Ghost "clear" button inside the dialog (first button) — resets the selection. */
+  onClear?: () => void;
+  clearLabel?: string;
 }
 
 /**
@@ -103,6 +106,8 @@ export function FilterPicker({
   selected,
   multi,
   onChange,
+  onClear,
+  clearLabel,
 }: FilterPickerProps) {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['common']);
@@ -122,6 +127,18 @@ export function FilterPicker({
           />
         ),
         buttons: [
+          ...(onClear
+            ? [
+                {
+                  label: clearLabel ?? t('common:clear'),
+                  variant: 'ghost' as const,
+                  onPress: () => {
+                    pending = [];
+                    onClear();
+                  },
+                },
+              ]
+            : []),
           { label: t('common:done'), variant: 'primary', onPress: () => onChange(pending) },
           { label: t('common:cancel'), variant: 'ghost' },
         ],
@@ -145,7 +162,12 @@ export function FilterPicker({
           ))}
         </View>
       ),
-      buttons: [{ label: t('common:cancel'), variant: 'ghost' }],
+      buttons: [
+        ...(onClear
+          ? [{ label: clearLabel ?? t('common:clear'), variant: 'ghost' as const, onPress: onClear }]
+          : []),
+        { label: t('common:cancel'), variant: 'ghost' },
+      ],
     });
   };
 
@@ -161,7 +183,10 @@ export function FilterPicker({
     >
       <T
         variant="caption"
-        style={{ color: active ? tokens.primaryForeground : tokens.textMuted }}
+        style={[
+          styles.pickerLabel,
+          { color: active ? tokens.primaryForeground : tokens.textMuted },
+        ]}
         numberOfLines={1}
       >
         {label}: {valueLabel}
@@ -198,7 +223,10 @@ export function FilterToggle({ label, value, onChange }: FilterToggleProps) {
     >
       <T
         variant="caption"
-        style={{ color: value ? tokens.primaryForeground : tokens.textMuted }}
+        style={[
+          styles.pickerLabel,
+          { color: value ? tokens.primaryForeground : tokens.textMuted },
+        ]}
         numberOfLines={1}
       >
         {label}
@@ -213,6 +241,36 @@ export function FilterToggle({ label, value, onChange }: FilterToggleProps) {
   );
 }
 
+interface FilterResetProps {
+  label: string;
+  onPress: () => void;
+}
+
+/** Pill-style "reset everything" action rendered after the filter toggles. */
+export function FilterReset({ label, onPress }: FilterResetProps) {
+  const { tokens } = useAppearance();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.picker,
+        { backgroundColor: tokens.chip, opacity: pressed ? 0.85 : 1 },
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+    >
+      <Ionicons name="refresh-outline" size={14} color={tokens.textMuted} style={styles.resetIcon} />
+      <T
+        variant="caption"
+        style={[styles.pickerLabel, { color: tokens.textMuted }]}
+        numberOfLines={1}
+      >
+        {label}
+      </T>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   picker: {
     flexDirection: 'row',
@@ -222,7 +280,9 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     marginRight: spacing.sm,
   },
-  chevron: { marginLeft: spacing.xs },
+  chevron: { marginLeft: spacing.xs, alignSelf: 'center' },
+  resetIcon: { marginRight: spacing.xs, alignSelf: 'center' },
+  pickerLabel: { flexShrink: 1, lineHeight: 16 },
   rows: { gap: spacing.sm },
   row: {
     flexDirection: 'row',

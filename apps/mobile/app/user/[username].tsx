@@ -4,17 +4,19 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Header } from '../../components/Header';
-import { Button, Card, PosterImage, Screen, Spinner, T, APP_ICON } from '../../components/primitives';
-import { usePublicProfile, useFollowUser, useUnfollowUser } from '../../api/hooks';
+import { Button, Card, PosterImage, Screen, SectionHeader, Spinner, T, APP_ICON } from '../../components/primitives';
+import { ListCard } from '../../components/ListCard';
+import { usePublicProfile, useFollowUser, useUnfollowUser, useUserLists } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
 import { useTranslation } from 'react-i18next';
 
 export default function UserProfileScreen() {
   const { tokens } = useAppearance();
-  const { t } = useTranslation(['social', 'common']);
+  const { t } = useTranslation(['social', 'common', 'lists']);
   const { username } = useLocalSearchParams<{ username: string }>();
   const { data: profile, isLoading } = usePublicProfile(username);
+  const { data: lists } = useUserLists(username);
   const followMut = useFollowUser();
   const unfollowMut = useUnfollowUser();
 
@@ -68,6 +70,21 @@ export default function UserProfileScreen() {
               icon={profile.isFollowing ? 'checkmark-circle-outline' : 'person-add-outline'}
               variant={profile.isFollowing ? 'ghost' : 'primary'}
             />
+          ) : null}
+
+          {lists?.length ? (
+            <View style={{ marginTop: spacing.sm }}>
+              <SectionHeader title={t('lists:publicLists')} />
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ paddingRight: spacing.lg }}
+              >
+                {lists.map((l) => (
+                  <ListCard key={l.id} item={l} onPress={() => router.push(`/list/${l.id}`)} />
+                ))}
+              </ScrollView>
+            </View>
           ) : null}
         </View>
       </ScrollView>

@@ -18,6 +18,7 @@
     "type": "유형",
     "country": "국가",
     "hideAnime": "애니메이션 숨기기",
+    "resetAll": "모두 재설정",
     "orderPopularity": "인기순",
     "orderReleaseDate": "출시일순",
     "typeBoth": "모두",

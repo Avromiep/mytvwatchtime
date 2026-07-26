@@ -46,5 +46,6 @@
   "deleteList": "リストを削除",
   "removeItemQuestion": "項目を削除しますか？",
   "shareMsg": "TVWatchTimeで「{{title}}」をチェック",
-  "emptyLabel": "空"
+  "emptyLabel": "空",
+  "publicLists": "公開リスト"
 }

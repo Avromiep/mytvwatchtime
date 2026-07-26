@@ -6,6 +6,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  useWindowDimensions,
   View,
   ViewStyle,
 } from 'react-native';
@@ -46,6 +47,20 @@ export function AppDialog({ entry }: { entry: DialogEntry }) {
   const insets = useSafeAreaInsets();
   const { tokens } = useAppearance();
   const { title, description, content, dismissible, showCloseButton, buttons, id } = entry;
+  // Concrete pixel cap — a percentage maxHeight does not resolve on the unbounded
+  // dialog card (Android), letting long content push the card off screen. The cap
+  // accounts for the real chrome: safe-area margins, card padding, title, and the
+  // button row (which STACKS once there are more than two buttons, tripling its height).
+  const { height: windowHeight } = useWindowDimensions();
+  const buttonsHeight = (buttons.length > 2 ? buttons.length * 54 : 64) + spacing.lg;
+  const contentMaxHeight = Math.max(
+    160,
+    windowHeight -
+      (insets.top + insets.bottom + spacing.lg * 2) - // card margins
+      spacing.xl * 2 - // card padding
+      48 - // title
+      buttonsHeight,
+  );
 
   const handleButton = (index: number) => {
     pressDialogButton(dialog, entry, index);
@@ -83,7 +98,7 @@ export function AppDialog({ entry }: { entry: DialogEntry }) {
 
           <ScrollView
             bounces={false}
-            style={{ maxHeight: '70%' }}
+            style={{ maxHeight: contentMaxHeight }}
             contentContainerStyle={styles.scrollBody}
           >
             {title ? (

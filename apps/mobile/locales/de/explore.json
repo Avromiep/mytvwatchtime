@@ -18,6 +18,7 @@
     "type": "Typ",
     "country": "Land",
     "hideAnime": "Anime ausblenden",
+    "resetAll": "Zurücksetzen",
     "orderPopularity": "Beliebtheit",
     "orderReleaseDate": "Erscheinungsdatum",
     "typeBoth": "Beide",

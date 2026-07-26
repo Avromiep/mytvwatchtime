@@ -83,6 +83,11 @@ export class UsersController {
     return this.users.getFollowsByUsername(username, type === 'following' ? 'following' : 'followers', viewerId);
   }
 
+  @Get('users/:username/lists')
+  userLists(@Param('username') username: string, @CurrentUser('id') viewerId?: string) {
+    return this.users.getUserPublicLists(username, viewerId);
+  }
+
   @Get('me/follows')
   myFollows(@CurrentUser('id') userId: string, @Query('type') type: string) {
     return this.users.getFollows(userId, type === 'following' ? 'following' : 'followers', userId);

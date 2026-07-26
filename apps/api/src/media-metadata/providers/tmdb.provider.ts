@@ -426,6 +426,12 @@ export class TmdbProvider {
     };
   }
 
+  /** Light production-country lookup (ONE call, no appends) — movies.country backfill. */
+  async getMovieCountry(tmdbId: number): Promise<string | null> {
+    const m = await this.tmdb.get<TmdbMovie>(`/movie/${tmdbId}`);
+    return m.production_countries?.[0]?.iso_3166_1 ?? null;
+  }
+
   /** Lightweight keywords fetch (old rows predate keywords persistence). TV shape: `results`. */
   async getShowKeywords(tmdbId: number): Promise<string[] | null> {
     try {

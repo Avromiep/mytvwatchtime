@@ -46,5 +46,6 @@
   "deleteList": "Supprimer la liste",
   "removeItemQuestion": "Retirer l’élément ?",
   "shareMsg": "Découvrez « {{title}} » sur TVWatchTime",
-  "emptyLabel": "Vide"
+  "emptyLabel": "Vide",
+  "publicLists": "Listes publiques"
 }

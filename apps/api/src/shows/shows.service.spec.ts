@@ -250,7 +250,7 @@ describe('ShowsService.getShow (anime repair)', () => {
     );
     await service.getShow('m1');
     expect(backfill.fixAnimeShowFromTvdb).not.toHaveBeenCalled();
-    expect(meta.ensureShowFull).toHaveBeenCalledWith(11);
+    expect(meta.ensureShowFull).toHaveBeenCalledWith(11, undefined, { skipAiredSeasons: true });
   });
 
   it('repairs anime structure on the episodes path too (no pre-fix seasons)', async () => {

@@ -46,5 +46,6 @@
   "deleteList": "Listeyi sil",
   "removeItemQuestion": "Öğe kaldırılsın mı?",
   "shareMsg": "TVWatchTime’da “{{title}}” listesine göz at",
-  "emptyLabel": "Boş"
+  "emptyLabel": "Boş",
+  "publicLists": "Herkese açık listeler"
 }

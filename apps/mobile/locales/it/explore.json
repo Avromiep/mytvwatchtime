@@ -18,6 +18,7 @@
     "type": "Tipo",
     "country": "Paese",
     "hideAnime": "Nascondi anime",
+    "resetAll": "Reimposta",
     "orderPopularity": "Popolarità",
     "orderReleaseDate": "Data di uscita",
     "typeBoth": "Entrambi",

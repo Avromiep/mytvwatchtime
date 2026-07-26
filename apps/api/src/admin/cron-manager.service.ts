@@ -50,6 +50,11 @@ const DEFAULTS: { name: string; label: string; schedule: string }[] = [
     schedule: '0 11 * * *',
   },
   {
+    name: 'movie_countries_backfill',
+    label: 'Movie Countries Backfill',
+    schedule: '0 12 * * *',
+  },
+  {
     name: 'scheduled_hydrations',
     label: 'Scheduled Hydrations Sync',
     schedule: CronExpression.EVERY_HOUR,
@@ -129,6 +134,11 @@ export class CronManagerService implements OnModuleInit {
       label: 'Recommendations Backfill',
       defaultSchedule: '0 11 * * *',
       fn: () => this.metadataBackfill.repairRecommendations(500),
+    });
+    this.handlers.set('movie_countries_backfill', {
+      label: 'Movie Countries Backfill',
+      defaultSchedule: '0 12 * * *',
+      fn: () => this.metadataBackfill.repairMovieCountries(500),
     });
     this.handlers.set('scheduled_hydrations', {
       label: 'Scheduled Hydrations Sync',

@@ -46,5 +46,6 @@
   "deleteList": "सूची हटाएँ",
   "removeItemQuestion": "आइटम हटाएँ?",
   "shareMsg": "TVWatchTime पर “{{title}}” देखें",
-  "emptyLabel": "खाली"
+  "emptyLabel": "खाली",
+  "publicLists": "सार्वजनिक सूचियाँ"
 }

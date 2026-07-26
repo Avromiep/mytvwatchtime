@@ -46,5 +46,6 @@
   "deleteList": "حذف القائمة",
   "removeItemQuestion": "إزالة العنصر؟",
   "shareMsg": "اطّلع على «{{title}}» على TVWatchTime",
-  "emptyLabel": "فارغة"
+  "emptyLabel": "فارغة",
+  "publicLists": "قوائم عامة"
 }

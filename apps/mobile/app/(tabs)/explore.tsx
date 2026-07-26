@@ -16,7 +16,7 @@ import { Header } from '../../components/Header';
 import { ActivityFeed } from '../../components/ActivityFeed';
 import { cardYear, Carousel, PosterCard } from '../../components/cards';
 import { Chip, Screen, Spinner, T } from '../../components/primitives';
-import { FilterPicker, FilterToggle } from '../../components/FilterPicker';
+import { FilterPicker, FilterReset, FilterToggle } from '../../components/FilterPicker';
 import { ExploreFilters, useDiscoverSections, useGenres, useSearch } from '../../api/hooks';
 import { useAuth } from '../../context/AuthContext';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
@@ -53,6 +53,21 @@ export default function ExploreScreen() {
   const [mediaType, setMediaType] = useState<ExploreType>('both');
   const [country, setCountry] = useState<string | null>(null);
   const [hideAnime, setHideAnime] = useState(false);
+  const resetFilters = useCallback(() => {
+    setGenre(null);
+    setExcludeGenres([]);
+    setOrder('popularity');
+    setMediaType('both');
+    setCountry(null);
+    setHideAnime(false);
+  }, []);
+  const hasActiveFilters =
+    !!genre ||
+    excludeGenres.length > 0 ||
+    order !== 'popularity' ||
+    mediaType !== 'both' ||
+    !!country ||
+    hideAnime;
   const filters = useMemo<ExploreFilters>(
     () => ({ excludeGenres, sort: order, country, hideAnime }),
     [excludeGenres, order, country, hideAnime],
@@ -193,6 +208,7 @@ export default function ExploreScreen() {
             options={[{ value: '', label: t('common:all') }, ...genreOptions]}
             selected={[genre ?? '']}
             onChange={(v) => setGenre(v[0] || null)}
+            onClear={() => setGenre(null)}
           />
           <FilterPicker
             label={t('explore:filters.exclude')}
@@ -203,6 +219,7 @@ export default function ExploreScreen() {
             selected={excludeGenres}
             multi
             onChange={setExcludeGenres}
+            onClear={() => setExcludeGenres([])}
           />
           <FilterPicker
             label={t('explore:filters.order')}
@@ -250,6 +267,7 @@ export default function ExploreScreen() {
             ]}
             selected={[country ?? '']}
             onChange={(v) => setCountry(v[0] || null)}
+            onClear={() => setCountry(null)}
           />
           {/* Additive with the profile setting — the server ORs both. */}
           <FilterToggle
@@ -257,6 +275,9 @@ export default function ExploreScreen() {
             value={hideAnime}
             onChange={setHideAnime}
           />
+          {hasActiveFilters ? (
+            <FilterReset label={t('explore:filters.resetAll')} onPress={resetFilters} />
+          ) : null}
         </ScrollView>
         ) : null}
       </View>

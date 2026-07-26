@@ -297,19 +297,8 @@ export class DiscoveryService {
             },
           }
         : {}),
-      // Country: shows match originCountries, movies the production country.
-      ...(country
-        ? q.type === MediaType.MOVIE
-          ? { movie: { is: { country: { equals: country, mode: 'insensitive' as const } } } }
-          : q.type === MediaType.SHOW
-            ? { show: { is: { originCountries: { has: country } } } }
-            : {
-                OR: [
-                  { show: { is: { originCountries: { has: country } } } },
-                  { movie: { is: { country: { equals: country, mode: 'insensitive' as const } } } },
-                ],
-              }
-        : {}),
+      // Country: known-mismatch semantics via countryWhere (unknown origin is kept).
+      ...(country ? this.countryWhere(country, q.type) : {}),
     };
     // releaseDate sort is year-granular for shows (yearStart — shows store no full
     // release date); a mixed-type search keeps popularity (two relation order-bys
@@ -494,7 +483,7 @@ export class DiscoveryService {
         break;
       }
       const visible = hideAnime ? await this.filterAnimeEntries(entries) : entries;
-      const kept = await this.filterEntriesExcluding(visible, exclude, country);
+      const kept = await this.filterEntriesExcluding(visible, exclude, country, kind);
       win.ids.push(...(await this.applyGenreToEntries(kept, genre)));
       if (entries.length < 20) win.exhausted = true;
     }
@@ -628,19 +617,81 @@ export class DiscoveryService {
   }
 
   /**
+   * Country where-fragment. SHOWS use known-mismatch semantics (originCountries coverage
+   * is ~100%, unknowns kept); MOVIES use STRICT matching (known country must equal) —
+   * keeping the 60k+ NULL-country rows would make the filter a no-op; coverage grows via
+   * the repairMovieCountries backfill. Legacy full-name values normalize to ISO.
+   */
+  private static readonly COUNTRY_NAME_VARIANTS: Record<string, string[]> = {
+    US: ['United States of America', 'United States'],
+    GB: ['Great Britain', 'United Kingdom'],
+    JP: ['Japan'],
+    FR: ['France'],
+    IT: ['Italy'],
+    IN: ['India'],
+    ES: ['Spain'],
+    DE: ['Germany'],
+    CA: ['Canada'],
+    BR: ['Brazil'],
+    TR: ['Turkey'],
+    AR: ['Argentina'],
+    CN: ['China'],
+    KR: ['South Korea'],
+    AU: ['Australia'],
+  };
+
+  /** Strict movie-country match (equals or full-name variant) for a media id window. */
+  private async strictMovieCountryIds(ids: string[], country: string): Promise<Set<string>> {
+    if (ids.length === 0) return new Set();
+    const variants = DiscoveryService.COUNTRY_NAME_VARIANTS[country] ?? [];
+    const rows = await this.prisma.movie.findMany({
+      where: {
+        mediaId: { in: ids },
+        OR: [
+          { country: { equals: country, mode: 'insensitive' } },
+          ...(variants.length ? [{ country: { in: variants, mode: 'insensitive' as const } }] : []),
+        ],
+      },
+      select: { mediaId: true },
+    });
+    return new Set(rows.map((r) => r.mediaId));
+  }
+
+  private countryWhere(country: string, type?: string): Prisma.MediaItemWhereInput {
+    const variants = DiscoveryService.COUNTRY_NAME_VARIANTS[country] ?? [];
+    const movieMatch: Prisma.MediaItemWhereInput = {
+      movie: {
+        is: {
+          OR: [
+            { country: { equals: country, mode: 'insensitive' } },
+            ...(variants.length ? [{ country: { in: variants, mode: 'insensitive' as const } }] : []),
+          ],
+        },
+      },
+    };
+    const showMatch: Prisma.MediaItemWhereInput = {
+      show: {
+        is: {
+          OR: [{ originCountries: { has: country } }, { originCountries: { isEmpty: true } }],
+        },
+      },
+    };
+    if (type === 'MOVIE') return movieMatch;
+    if (type === 'SHOW') return showMatch;
+    return { OR: [movieMatch, showMatch] };
+  }
+
+  /**
    * Country filter over an id window (provider search path): shows match on
-   * originCountries, movies on the production country. Light rows carry no origin
-   * data yet, so they join the filtered window only once hydrated.
+   * originCountries, movies on the production country — both with known-mismatch
+   * semantics (unknown origin stays in the window).
    */
   private async filterIdsByCountry(ids: string[], country: string): Promise<string[]> {
     if (ids.length === 0) return ids;
     const rows = await this.prisma.mediaItem.findMany({
       where: {
         id: { in: ids },
-        OR: [
-          { show: { is: { originCountries: { has: country } } } },
-          { movie: { is: { country: { equals: country, mode: 'insensitive' } } } },
-        ],
+        AND: [this.countryWhere(country)],
       },
       select: { id: true },
     });
@@ -656,13 +707,30 @@ export class DiscoveryService {
     entries: TrendingEntry[],
     excludeSlugs: string[],
     country?: string,
+    kind?: 'show' | 'movie',
   ): Promise<TrendingEntry[]> {
     let out = entries;
     if (excludeSlugs.length) {
       const tmdbIds = await this.tmdbIdsForSlugs(excludeSlugs);
       out = out.filter((e) => !e.g.some((g) => tmdbIds.includes(g)));
     }
-    if (country) out = out.filter((e) => (e.oc ?? []).includes(country));
+    if (country) {
+      if (kind === 'movie') {
+        // STRICT for movies: trending payloads almost never carry origin data, so the
+        // production country comes from the DB (coverage grows via repairMovieCountries).
+        const keep = await this.strictMovieCountryIds(
+          out.map((e) => e.id),
+          country,
+        );
+        out = out.filter((e) => keep.has(e.id));
+      } else {
+        // Shows: payload origin_country has near-full coverage — known-mismatch is fine.
+        out = out.filter((e) => {
+          const oc = e.oc ?? [];
+          return oc.length === 0 || oc.includes(country);
+        });
+      }
+    }
     return out;
   }
 
@@ -820,8 +888,8 @@ export class DiscoveryService {
             ? { none: { genre: { slug: { in: exclude, mode: 'insensitive' as const } } } }
             : {}),
         },
-        // Country filter: shows match on originCountries (pool is shows-only).
-        ...(country ? { show: { is: { originCountries: { has: country } } } } : {}),
+        // Country filter with known-mismatch semantics (pool is shows-only).
+        ...(country ? this.countryWhere(country, MediaType.SHOW) : {}),
         id: { notIn: excludedIds },
       },
       include: {
@@ -888,12 +956,8 @@ export class DiscoveryService {
           }
         : {}),
       ...(q?.minRating ? { rating: { gte: q.minRating } } : {}),
-      // Country: shows match originCountries, movies the production country.
-      ...(country
-        ? type === MediaType.MOVIE
-          ? { movie: { is: { country: { equals: country, mode: 'insensitive' as const } } } }
-          : { show: { is: { originCountries: { has: country } } } }
-        : {}),
+      // Country: known-mismatch semantics via countryWhere (unknown origin is kept).
+      ...(country ? this.countryWhere(country, type) : {}),
     };
     // releaseDate sort is year-granular for shows (yearStart — shows store no full
     // release date); default popularity is unchanged.

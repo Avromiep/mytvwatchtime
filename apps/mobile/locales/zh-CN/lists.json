@@ -46,5 +46,6 @@
   "deleteList": "删除片单",
   "removeItemQuestion": "移除项目？",
   "shareMsg": "在 TVWatchTime 上看看“{{title}}”",
-  "emptyLabel": "空"
+  "emptyLabel": "空",
+  "publicLists": "公开列表"
 }
