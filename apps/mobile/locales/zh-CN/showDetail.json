@@ -13,6 +13,7 @@
   "communityRatings": "社区评分",
   "showInfo": "剧集信息",
   "years": "年份",
+  "originCountry": "原产国",
   "status": "状态",
   "genres": "类型",
   "runtime": "时长",
@@ -22,5 +23,6 @@
   "comments": "评论",
   "showMoreEpisodes": "再显示 {{count}} 集",
   "originalTitle": "原标题",
-  "rateShow": "为这部剧评分"
+  "rateShow": "为这部剧评分",
+  "similar": "类似剧集"
 }

@@ -6,6 +6,8 @@
   "bio": "简介",
   "private": "私密个人资料",
   "privateHint": "向其他用户隐藏你的个人资料和动态",
+  "hideAnime": "在探索中隐藏动漫",
+  "hideAnimeHint": "从探索、热门和推荐中排除动漫",
   "avatar": "头像",
   "changeAvatar": "更换头像",
   "cover": "封面",

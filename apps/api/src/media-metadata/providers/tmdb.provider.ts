@@ -82,6 +82,8 @@ export interface NormalizedShow {
   translations?: Record<string, { title?: string; overview?: string }>;
   /** TMDB user reviews (page 1) from the appended reviews payload. */
   reviews?: NormalizedReview[];
+  /** TMDB /recommendations snapshot from the appended payload (cap 20). TMDB-only. */
+  recommendations?: RecommendationItem[];
 }
 export interface NormalizedMovie {
   type: MediaType.MOVIE;
@@ -108,6 +110,8 @@ export interface NormalizedMovie {
   translations?: Record<string, { title?: string; overview?: string }>;
   /** TMDB user reviews (page 1) from the appended reviews payload. */
   reviews?: NormalizedReview[];
+  /** TMDB /recommendations snapshot from the appended payload (cap 20). TMDB-only. */
+  recommendations?: RecommendationItem[];
 }
 
 interface TmdbReview {
@@ -138,6 +142,16 @@ export interface NormalizedReview {
   updatedAt: string | null;
 }
 
+/** Card-shaped TMDB /recommendations item (tmdbId, not our internal media id). */
+export interface RecommendationItem {
+  tmdbId: number;
+  type: MediaType;
+  title: string;
+  posterUrl?: string | null;
+  year?: number | null;
+  rating?: number | null;
+}
+
 export interface NormalizedSearchItem {
   tmdbId: number;
   tvdbId?: number;
@@ -153,6 +167,9 @@ export interface NormalizedSearchItem {
   popularity?: number | null;
   /** TMDB genre ids from list payloads (search/trending/discover) — genre filtering. */
   genreIds?: number[];
+  /** Origin countries from list payloads when available (trending TV has origin_country;
+   *  movies use original_language === 'ja' as the JP proxy) — anime signal. */
+  originCountries?: string[];
 }
 
 interface TmdbShow {
@@ -186,6 +203,7 @@ interface TmdbShow {
   genre_ids?: number[];
   keywords?: { results?: { name?: string }[] };
   translations?: { translations?: TmdbTranslation[] };
+  recommendations?: { results?: TmdbRecommendationResult[] };
 }
 interface TmdbTranslation {
   iso_639_1?: string;
@@ -214,6 +232,18 @@ interface TmdbMovie {
   genre_ids?: number[];
   keywords?: { keywords?: { name?: string }[] };
   translations?: { translations?: TmdbTranslation[] };
+  recommendations?: { results?: TmdbRecommendationResult[] };
+}
+/** TMDB recommendations list item — shaped like a search/trending item. */
+interface TmdbRecommendationResult {
+  id?: number;
+  media_type?: string;
+  name?: string;
+  title?: string;
+  poster_path?: string | null;
+  first_air_date?: string;
+  release_date?: string;
+  vote_average?: number;
 }
 interface TmdbCast {
   id: number;
@@ -363,6 +393,7 @@ export class TmdbProvider {
         rating: s.vote_average ?? null,
         popularity: s.popularity ?? null,
         genreIds: s.genre_ids ?? [],
+        originCountries: s.origin_country ?? [],
       })),
     };
   }
@@ -389,6 +420,8 @@ export class TmdbProvider {
         rating: m.vote_average ?? null,
         popularity: m.popularity ?? null,
         genreIds: m.genre_ids ?? [],
+        // Movie list payloads have no origin_country — original_language 'ja' is the JP proxy.
+        originCountries: m.original_language === 'ja' ? ['JP'] : [],
       })),
     };
   }
@@ -500,17 +533,17 @@ export class TmdbProvider {
     opts?: { skipSeasonDetail?: (seasonNumber: number, episodeCount: number) => boolean },
   ): Promise<NormalizedShow> {
     // ONE call: base + externals + credits + providers + videos + keywords + translations
-    // + reviews + up to 13 seasons appended (TMDB append_to_response caps at 20
-    // sub-requests). Seasons beyond the window (or an unappendable season) fall back to
-    // the individual season endpoint below — same behavior as before, just fewer calls.
-    // Callers re-hydrating an already-hydrated show can pass skipSeasonDetail to skip
-    // that per-season call for seasons they already store complete (left episode-less
-    // here; the caller filters them out before persisting).
-    const seasonAppends = Array.from({ length: 13 }, (_, i) => `season/${i}`).join(',');
+    // + reviews + recommendations + up to 12 seasons appended (TMDB append_to_response
+    // caps at 20 sub-requests). Seasons beyond the window (or an unappendable season)
+    // fall back to the individual season endpoint below — same behavior as before, just
+    // fewer calls. Callers re-hydrating an already-hydrated show can pass
+    // skipSeasonDetail to skip that per-season call for seasons they already store
+    // complete (left episode-less here; the caller filters them out before persisting).
+    const seasonAppends = Array.from({ length: 12 }, (_, i) => `season/${i}`).join(',');
     const s = await this.tmdb.get<TmdbShow & Record<string, any>>(
       `/tv/${id}`,
       {
-        append_to_response: `external_ids,credits,watch/providers,videos,keywords,translations,reviews,${seasonAppends}`,
+        append_to_response: `external_ids,credits,watch/providers,videos,keywords,translations,reviews,recommendations,${seasonAppends}`,
       },
       language,
     );
@@ -575,6 +608,7 @@ export class TmdbProvider {
       keywords: (s.keywords?.results ?? []).map((k) => k.name).filter((n): n is string => !!n),
       translations: this.translationsOf(s.translations),
       reviews: this.reviewsOf(s.reviews),
+      recommendations: this.recommendationsOf(s.recommendations, MediaType.SHOW),
     };
   }
 
@@ -583,7 +617,7 @@ export class TmdbProvider {
       `/movie/${id}`,
       {
         append_to_response:
-          'external_ids,credits,watch/providers,videos,keywords,translations,reviews',
+          'external_ids,credits,watch/providers,videos,keywords,translations,reviews,recommendations',
       },
       language,
     );
@@ -615,7 +649,30 @@ export class TmdbProvider {
       keywords: (m.keywords?.keywords ?? []).map((k) => k.name).filter((n): n is string => !!n),
       translations: this.translationsOf(m.translations),
       reviews: this.reviewsOf(m.reviews),
+      recommendations: this.recommendationsOf(m.recommendations, MediaType.MOVIE),
     };
+  }
+
+  /** Appended recommendations payload → card-shaped items (cap 20). TV and movies share
+   *  the `{ results: [...] }` shape; items look like search/trending items. */
+  private recommendationsOf(
+    r?: { results?: TmdbRecommendationResult[] },
+    fallbackType: MediaType = MediaType.SHOW,
+  ): RecommendationItem[] {
+    return (r?.results ?? [])
+      .filter((it) => it.id)
+      .slice(0, 20)
+      .map((it) => {
+        const date = it.first_air_date || it.release_date;
+        return {
+          tmdbId: it.id!,
+          type: it.media_type === 'movie' ? MediaType.MOVIE : fallbackType,
+          title: it.name || it.title || 'Untitled',
+          posterUrl: this.tmdb.img(it.poster_path, 'w342'),
+          year: date ? Number(date.slice(0, 4)) : null,
+          rating: it.vote_average ?? null,
+        };
+      });
   }
 
   /** Appended reviews payload (page 1) → normalized provider reviews. */
@@ -653,6 +710,21 @@ export class TmdbProvider {
   async getMovieReviews(id: number): Promise<NormalizedReview[]> {
     const res = await this.tmdb.get<{ results?: TmdbReview[] }>(`/movie/${id}/reviews`);
     return this.reviewsOf(res);
+  }
+
+  /** Standalone light recommendations fetch (no appends) — metadata-health repair path. */
+  async getShowRecommendations(id: number): Promise<RecommendationItem[]> {
+    const res = await this.tmdb.get<{ results?: TmdbRecommendationResult[] }>(
+      `/tv/${id}/recommendations`,
+    );
+    return this.recommendationsOf(res, MediaType.SHOW);
+  }
+
+  async getMovieRecommendations(id: number): Promise<RecommendationItem[]> {
+    const res = await this.tmdb.get<{ results?: TmdbRecommendationResult[] }>(
+      `/movie/${id}/recommendations`,
+    );
+    return this.recommendationsOf(res, MediaType.MOVIE);
   }
 
   /** Episode reviews live on a per-episode endpoint (not appendable via the show call). */
@@ -695,6 +767,7 @@ export class TmdbProvider {
       rating: s.vote_average ?? null,
       popularity: s.popularity ?? null,
       genreIds: s.genre_ids ?? [],
+      originCountries: s.origin_country ?? [],
     }));
   }
 
@@ -713,7 +786,20 @@ export class TmdbProvider {
       rating: m.vote_average ?? null,
       popularity: m.popularity ?? null,
       genreIds: m.genre_ids ?? [],
+      // Movie list payloads have no origin_country — original_language 'ja' is the JP proxy.
+      originCountries: m.original_language === 'ja' ? ['JP'] : [],
     }));
+  }
+
+  /**
+   * App-level sort shortcuts → TMDB sort_by: 'popularity' → popularity.desc,
+   * 'releaseDate' → the type's date field desc; anything else passes through
+   * unchanged (raw TMDB sort strings like 'vote_average.desc' keep working).
+   */
+  private sortBy(sort: string | undefined, releaseDateSort: string): string {
+    if (!sort || sort === 'popularity') return 'popularity.desc';
+    if (sort === 'releaseDate') return releaseDateSort;
+    return sort;
   }
 
   async discoverShows(params: {
@@ -722,6 +808,8 @@ export class TmdbProvider {
     network?: number;
     sort?: string;
     page?: number;
+    excludeGenres?: number[];
+    country?: string;
   }): Promise<{ items: NormalizedSearchItem[]; total: number }> {
     const res = await this.tmdb.get<{ results: TmdbShow[]; total_results: number }>(
       '/discover/tv',
@@ -729,9 +817,11 @@ export class TmdbProvider {
         with_genres: params.genre,
         first_air_date_year: params.year,
         with_networks: params.network,
-        sort_by: params.sort || 'popularity.desc',
+        sort_by: this.sortBy(params.sort, 'first_air_date.desc'),
         page: params.page || 1,
         'vote_count.gte': 50,
+        without_genres: params.excludeGenres?.length ? params.excludeGenres.join(',') : undefined,
+        with_origin_country: params.country,
       },
     );
     return {
@@ -758,17 +848,21 @@ export class TmdbProvider {
     voteCountGte?: number;
     withWatchProviders?: number;
     watchRegion?: string;
+    excludeGenres?: number[];
+    country?: string;
   }): Promise<{ items: NormalizedSearchItem[]; total: number }> {
     const res = await this.tmdb.get<{ results: TmdbMovie[]; total_results: number }>(
       '/discover/movie',
       {
         with_genres: params.genre,
         primary_release_year: params.year,
-        sort_by: params.sort || 'popularity.desc',
+        sort_by: this.sortBy(params.sort, 'primary_release_date.desc'),
         page: params.page || 1,
         'vote_count.gte': params.voteCountGte ?? 50,
         with_watch_providers: params.withWatchProviders,
         watch_region: params.watchRegion,
+        without_genres: params.excludeGenres?.length ? params.excludeGenres.join(',') : undefined,
+        with_origin_country: params.country,
       },
     );
     return {

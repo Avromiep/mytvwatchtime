@@ -1,0 +1,11 @@
+{
+  "watched": "{{name}} ha guardato {{title}}",
+  "watchlisted": "{{name}} ha aggiunto {{title}} alla watchlist",
+  "favorited": "{{name}} ha aggiunto {{title}} ai preferiti",
+  "rated": "{{name}} ha valutato {{title}} {{value}}/5",
+  "reacted": "{{name}} ha reagito {{reaction}} a {{title}}",
+  "commented": "{{name}} ha commentato {{title}}",
+  "seeMoreFrom": "Vedi altre attività di {{name}}",
+  "emptyTitle": "Nessuna attività per ora",
+  "emptySubtitle": "Segui altre persone per vedere cosa stanno guardando."
+}

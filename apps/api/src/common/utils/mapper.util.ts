@@ -101,6 +101,8 @@ export function mapShow(media: AnyRecord, userId?: string): ShowDto {
     runtimeMinutes: show.runtimeMinutes ?? null,
     rating: media.rating ?? null,
     network: show.network ?? null,
+    originCountries: show.originCountries ?? [],
+    originalLanguage: show.originalLanguage ?? null,
     genres: genresOf(media),
     providers: providersOf(media),
     cast: castOf(media),
@@ -128,6 +130,8 @@ export function mapMovie(media: AnyRecord, userId?: string): MovieDto {
     releaseYear: movie.releaseYear ?? null,
     runtimeMinutes: movie.runtimeMinutes ?? null,
     rating: media.rating ?? null,
+    country: movie.country ?? null,
+    language: movie.language ?? null,
     genres: genresOf(media),
     providers: providersOf(media),
     cast: castOf(media),
@@ -159,6 +163,10 @@ export function mapMediaCardLite(media: AnyRecord, userId?: string): MediaCardLi
     title: localized(media, 'titles', 'title') ?? media.title,
     images: imagesOf(media),
     rating: media.rating ?? null,
+    year:
+      media.type === MediaType.SHOW
+        ? (media.show?.yearStart ?? null)
+        : (media.movie?.releaseYear ?? null),
     inWatchlist: !!(media.watchlist?.length || media._inWatchlist),
     favorite: !!(media.favorites?.length || media._favorite),
     ...(media.type === MediaType.SHOW
@@ -226,6 +234,7 @@ export function mapCurrentUser(user: AnyRecord): CurrentUserDto {
     email: user.email,
     authProviders: (user.authProviders ?? []).map((a: AnyRecord) => a.provider),
     isPrivate: user.profile?.isPrivate ?? false,
+    hideAnimeInExplore: user.profile?.hideAnimeInExplore ?? false,
     role: user.role,
     mustChangePassword: user.mustChangePassword ?? false,
     themePreference: dbThemeToDto(user.profile?.themePreference),

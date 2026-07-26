@@ -93,8 +93,10 @@ export default function ShowDetailScreen() {
             </View>
             <View style={{ padding: spacing.lg, marginTop: 'auto' }}>
               <View style={{ flexDirection: 'row', gap: spacing.md }}>
+                {show.yearStart ? <T variant="caption" style={{ color: tokens.mediaText }}>{show.yearStart}</T> : null}
                 <T variant="caption" style={{ color: tokens.mediaText }}>{t('showDetail:seasonsCount', { count: show.seasonsCount })}</T>
                 {show.network ? <T variant="caption" style={{ color: tokens.mediaText }}>· {show.network}</T> : null}
+                {show.originCountries?.length ? <T variant="caption" style={{ color: tokens.mediaText }}>· {show.originCountries.join(' · ')}</T> : null}
                 {show.rating ? <T variant="caption" style={{ color: tokens.primary }}>★ {show.rating.toFixed(1)}</T> : null}
               </View>
               <View style={{ marginTop: spacing.sm }}>
@@ -286,6 +288,7 @@ function AboutTab({ show, id }: { show: any; id: string }) {
         <SectionHeader title={t('showDetail:showInfo')} />
         {show.originalTitle ? <InfoRow label={t('showDetail:originalTitle')} value={show.originalTitle} /> : null}
         <InfoRow label={t('showDetail:years')} value={`${show.yearStart ?? '—'}${show.yearEnd ? `–${show.yearEnd}` : ''}`} />
+        <InfoRow label={t('showDetail:originCountry')} value={show.originCountries?.length ? show.originCountries.join(' · ') : null} />
         <InfoRow label={t('showDetail:status')} value={show.status} />
         <InfoRow label={t('showDetail:genres')} value={show.genres?.map((g: any) => g.name).join(', ')} />
         <InfoRow label={t('showDetail:runtime')} value={show.runtimeMinutes ? `${show.runtimeMinutes}m` : '—'} />
@@ -308,6 +311,26 @@ function AboutTab({ show, id }: { show: any; id: string }) {
               </View>
             ))}
           </ScrollView>
+        </View>
+      ) : null}
+
+      {show.recommendations?.length ? (
+        <View style={{ marginHorizontal: -spacing.lg }}>
+          <Carousel
+            title={t('showDetail:similar')}
+            kind="shows"
+            // Recommendation items carry the TMDB id (not our internal id) — show/[id]
+            // resolves numeric TMDB ids via the same route shape.
+            data={show.recommendations
+              .filter((r: any) => r.type !== 'MOVIE')
+              .map((r: any) => ({
+                id: String(r.tmdbId),
+                title: r.title,
+                posterUrl: r.posterUrl,
+                year: r.year,
+                rating: r.rating,
+              }))}
+          />
         </View>
       ) : null}
 

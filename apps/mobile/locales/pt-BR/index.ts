@@ -16,8 +16,9 @@ import lists from './lists.json';
 import social from './social.json';
 import contact from './contact.json';
 import groups from './groups.json';
+import feed from './feed.json';
 export default {
   common, auth, navigation, settings, shows, movies, explore,
   profile, notifications, import: importNs, stats, showDetail, episode,
-  comments, lists, social, contact, groups,
+  comments, lists, social, contact, groups, feed,
 };

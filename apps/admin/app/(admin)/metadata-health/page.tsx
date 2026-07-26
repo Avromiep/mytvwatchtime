@@ -34,6 +34,7 @@ interface MetadataHealth {
   bannerAsPoster: number;
   missingRating: number;
   animeTvdbUnresolvable: number;
+  recommendationsMissing: number;
 }
 
 /** Live progress of one background repair job (from /admin/metadata-health/repair-progress). */
@@ -59,6 +60,7 @@ const REPAIR_LABELS: Record<string, string> = {
   'english-content': 'English content verify',
   'banner-posters': 'Banner poster repair',
   ratings: 'Rating backfill',
+  recommendations: 'Recommendations backfill',
 };
 
 /** One-line guidance per stat: what it means and what to do about it. */
@@ -90,6 +92,8 @@ const STAT_HINTS: Record<string, string> = {
     'Rows whose poster is actually a TVDB BANNER (wide artwork in a poster slot), or whose TVDB artwork URL has a duplicated host prefix. Repair normalizes malformed TVDB URLs first, then re-hydrates true banner-as-poster rows from TVDB so the corrected mapper re-picks poster type 2/backdrop type 3. Most-visible first, stops early on TVDB rate limits. No user data touched.',
   missingRating:
     'Rows with no community rating — mostly TVDB-hydrated shows (anime/animation): TVDB exposes no public 0–10 rating (its score is a popularity rank), so those rows are born unrated. Backfill resolves TMDB\u2019s vote_average per row: stored TMDB id, else the tvdb_id \u2192 TMDB /find chain, else the IMDB id from TVDB \u2192 /find. One light call per hop, most-popular first, stopping early on rate limits. Rows with no rating at the source are remembered and skipped for 90 days, so the nightly Scheduled Job keeps this drained. No user data touched.',
+  recommendationsMissing:
+    'TMDB-linked rows whose "similar shows/movies" recommendations were never synced (rows hydrated before recommendations existed, or TVDB-hydrated rows — TVDB supplies none). Backfill fetches TMDB /recommendations per row with ONE light call (no rehydration), most-popular first, stopping early on TMDB rate limits. Rows whose provider has no recommendations are stamped as checked and leave the count. No user data touched.',
 };
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -132,6 +136,9 @@ export default function MetadataHealthPage() {
   const [repairingRatings, setRepairingRatings] = useState(false);
   const [ratingResult, setRatingResult] = useState<string | null>(null);
   const [ratingCount, setRatingCount] = useState('500');
+  const [repairingRecs, setRepairingRecs] = useState(false);
+  const [recsResult, setRecsResult] = useState<string | null>(null);
+  const [recsCount, setRecsCount] = useState('500');
   const [castCount, setCastCount] = useState('500');
   const [repairs, setRepairs] = useState<Record<string, RepairProgress>>({});
   const [batchCount, setBatchCount] = useState('200');
@@ -333,6 +340,22 @@ export default function MetadataHealthPage() {
       .finally(() => setRepairingRatings(false));
   };
 
+  const runRecsBackfill = () => {
+    setRepairingRecs(true);
+    setRecsResult(null);
+    const n = Math.max(1, Number(recsCount) || 500);
+    api
+      .post(`/admin/repair-recommendations/run?count=${n}`)
+      .then(() => {
+        setRecsResult(
+          `Recommendations backfill started (${n} rows). Watch the progress panel above; stats refresh in 60s.`,
+        );
+        setTimeout(() => load(), 60000);
+      })
+      .catch(() => setRecsResult('Recommendations backfill failed to start.'))
+      .finally(() => setRepairingRecs(false));
+  };
+
   if (!canView) return <p className="p-6 text-sm text-zinc-500">Admins only.</p>;
 
   const pct = (n: number) => (stats && stats.total > 0 ? Math.round((n / stats.total) * 100) : 0);
@@ -443,6 +466,11 @@ export default function MetadataHealthPage() {
       {ratingResult && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
           {ratingResult}
+        </div>
+      )}
+      {recsResult && (
+        <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-800 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-200">
+          {recsResult}
         </div>
       )}
 
@@ -775,6 +803,32 @@ export default function MetadataHealthPage() {
                     className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
                   >
                     {repairingRatings ? 'Starting…' : 'Backfill Ratings'}
+                  </button>
+                </div>
+              }
+            />
+            <MetricCard
+              label="Missing Recommendations"
+              value={stats.recommendationsMissing}
+              sub="TMDB-linked rows with no recommendations snapshot"
+              hint={STAT_HINTS.recommendationsMissing}
+              highlight={stats.recommendationsMissing > 0}
+              action={
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={recsCount}
+                    onChange={(e) => setRecsCount(e.target.value)}
+                    className="w-20 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+                    title="Rows per run"
+                  />
+                  <button
+                    onClick={runRecsBackfill}
+                    disabled={repairingRecs}
+                    className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    {repairingRecs ? 'Starting…' : 'Backfill Recommendations'}
                   </button>
                 </div>
               }

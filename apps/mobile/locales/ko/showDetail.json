@@ -13,6 +13,7 @@
   "communityRatings": "커뮤니티 평점",
   "showInfo": "프로그램 정보",
   "years": "연도",
+  "originCountry": "제작 국가",
   "status": "상태",
   "genres": "장르",
   "runtime": "재생 시간",
@@ -22,5 +23,6 @@
   "comments": "댓글",
   "showMoreEpisodes": "{{count}}개 더 보기",
   "originalTitle": "원제",
-  "rateShow": "이 프로그램 평가하기"
+  "rateShow": "이 프로그램 평가하기",
+  "similar": "비슷한 프로그램"
 }

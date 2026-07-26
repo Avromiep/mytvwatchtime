@@ -10,5 +10,35 @@
   "trendingMovies": "話題の映画",
   "seeAll": "すべて表示",
   "mediaTypeShow": "テレビ番組",
-  "mediaTypeMovie": "映画"
+  "mediaTypeMovie": "映画",
+  "filters": {
+    "genre": "ジャンル",
+    "exclude": "除外",
+    "order": "並び順",
+    "type": "タイプ",
+    "country": "国",
+    "hideAnime": "アニメを非表示",
+    "orderPopularity": "人気順",
+    "orderReleaseDate": "公開日順",
+    "typeBoth": "両方",
+    "typeMovies": "映画",
+    "typeShows": "番組",
+    "countries": {
+      "US": "アメリカ合衆国",
+      "GB": "イギリス",
+      "FR": "フランス",
+      "DE": "ドイツ",
+      "ES": "スペイン",
+      "IT": "イタリア",
+      "JP": "日本",
+      "KR": "韓国",
+      "CN": "中国",
+      "IN": "インド",
+      "TR": "トルコ",
+      "BR": "ブラジル",
+      "MX": "メキシコ",
+      "CA": "カナダ",
+      "AU": "オーストラリア"
+    }
+  }
 }

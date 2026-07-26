@@ -3,6 +3,7 @@ import { ImageBackground, Linking, Pressable, RefreshControl, ScrollView, StyleS
 import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../../components/Header';
+import { Carousel } from '../../components/cards';
 import { Button, Card, PosterImage, ProgressBar, Screen, SectionHeader, Spinner, T, useWatchMenu } from '../../components/primitives';
 import { ReactionGrid, StarRatingControl, VotingSection } from '../../components/voting';
 import {
@@ -57,6 +58,7 @@ export default function MovieDetailScreen() {
                 <View style={{ flexDirection: 'row', marginTop: 6, gap: spacing.md }}>
                   {movie.releaseYear ? <T variant="caption" muted>{movie.releaseYear}</T> : null}
                   {movie.runtimeMinutes ? <T variant="caption" muted>· {movie.runtimeMinutes}m</T> : null}
+                  {movie.country ? <T variant="caption" muted>· {movie.country}</T> : null}
                   {movie.rating ? <T variant="caption" style={{ color: tokens.primary }}>★ {movie.rating.toFixed(1)}</T> : null}
                 </View>
                 <T variant="caption" muted style={{ marginTop: spacing.sm }}>{movie.genres?.map((g: any) => g.name).join(' · ')}</T>
@@ -152,6 +154,26 @@ export default function MovieDetailScreen() {
                   </View>
                 ))}
               </ScrollView>
+            </View>
+          ) : null}
+
+          {movie.recommendations?.length ? (
+            <View style={{ marginHorizontal: -spacing.lg }}>
+              <Carousel
+                title={t('movies:similar')}
+                kind="movies"
+                // Recommendation items carry the TMDB id (not our internal id) —
+                // movie/[id] resolves numeric TMDB ids via the same route shape.
+                data={movie.recommendations
+                  .filter((r: any) => r.type !== 'SHOW')
+                  .map((r: any) => ({
+                    id: String(r.tmdbId),
+                    title: r.title,
+                    posterUrl: r.posterUrl,
+                    year: r.year,
+                    rating: r.rating,
+                  }))}
+              />
             </View>
           ) : null}
 

@@ -33,6 +33,11 @@ export class UpdateProfileDto {
   @IsBoolean()
   isPrivate?: boolean;
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  hideAnimeInExplore?: boolean;
+
   @ApiPropertyOptional({ enum: ['system', 'light', 'dark'] })
   @IsOptional()
   @IsString()

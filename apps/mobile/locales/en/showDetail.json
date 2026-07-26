@@ -13,6 +13,7 @@
   "communityRatings": "Community ratings",
   "showInfo": "Show info",
   "years": "Years",
+  "originCountry": "Origin country",
   "status": "Status",
   "genres": "Genres",
   "runtime": "Runtime",
@@ -26,5 +27,6 @@
   "chartCaption": "Swipe ‹ › for other seasons · y: user rating (0–5, unrated = 0)",
   "showMoreEpisodes": "Show {{count}} more",
   "originalTitle": "Original title",
-  "rateShow": "Rate this show"
+  "rateShow": "Rate this show",
+  "similar": "Similar shows"
 }

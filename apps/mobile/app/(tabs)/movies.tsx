@@ -3,7 +3,7 @@ import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-nat
 import { Ionicons } from '@expo/vector-icons';
 import { MediaType } from '@tvwatch/shared';
 import { Header } from '../../components/Header';
-import { PosterCard } from '../../components/cards';
+import { PosterCard, cardYear } from '../../components/cards';
 import { EmptyState, Screen, Spinner, T } from '../../components/primitives';
 import { useAllFavorites, useAllHistory, useAllWatchlist } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
@@ -117,7 +117,7 @@ export default function MoviesScreen() {
       <View style={styles.cardRow}>
         {cards.map((it) => (
           <View key={it.id} style={{ width: cellW, marginRight: gap, marginBottom: gap }}>
-            <PosterCard id={it.id} kind="movies" title={it.title} poster={it.posterUrl} progress={it.progress} rating={it.rating} width={cellW} style={{ marginRight: 0 }} />
+            <PosterCard id={it.id} kind="movies" title={it.title} poster={it.posterUrl} progress={it.progress} rating={it.rating} year={cardYear(it)} width={cellW} style={{ marginRight: 0 }} />
           </View>
         ))}
         {Array.from({ length: fillCount }).map((_, i) => (

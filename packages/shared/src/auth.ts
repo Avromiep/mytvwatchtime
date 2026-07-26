@@ -102,6 +102,7 @@ export interface CurrentUserDto extends PublicUserDto {
   email: string;
   authProviders: AuthProvider[];
   isPrivate: boolean;
+  hideAnimeInExplore: boolean;
   mustChangePassword?: boolean;
   role?: string;
   themePreference?: ThemePreference;
@@ -115,6 +116,7 @@ export interface UpdateProfileDto {
   avatarUrl?: string | null;
   coverUrl?: string | null;
   isPrivate?: boolean;
+  hideAnimeInExplore?: boolean;
   themePreference?: ThemePreference;
   languagePreference?: LanguagePreference;
 }

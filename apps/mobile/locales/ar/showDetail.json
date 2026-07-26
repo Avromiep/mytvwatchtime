@@ -13,6 +13,7 @@
   "communityRatings": "تقييمات المجتمع",
   "showInfo": "معلومات المسلسل",
   "years": "السنوات",
+  "originCountry": "بلد المنشأ",
   "status": "الحالة",
   "genres": "الأنواع",
   "runtime": "المدة",
@@ -22,5 +23,6 @@
   "comments": "التعليقات",
   "showMoreEpisodes": "عرض {{count}} إضافية",
   "originalTitle": "العنوان الأصلي",
-  "rateShow": "قيّم هذا المسلسل"
+  "rateShow": "قيّم هذا المسلسل",
+  "similar": "مسلسلات مشابهة"
 }

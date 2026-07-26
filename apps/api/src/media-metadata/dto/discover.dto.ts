@@ -1,8 +1,39 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { MediaType } from '@prisma/client';
-import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsBoolean, IsEnum, IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
 import { PaginationDto } from '../../common/dto/pagination.dto';
+
+/** Explore sort options shared by search/trending/sections/for-you (default popularity). */
+export const EXPLORE_SORTS = ['popularity', 'releaseDate'] as const;
+export type ExploreSort = (typeof EXPLORE_SORTS)[number];
+
+/** Explore filter fields shared by the search, trending, sections and for-you endpoints. */
+export class ExploreFiltersDto {
+  /** Comma-separated genre slugs to EXCLUDE (multi-select exclusion). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  excludeGenres?: string;
+
+  @ApiPropertyOptional({ enum: EXPLORE_SORTS })
+  @IsOptional()
+  @IsIn(EXPLORE_SORTS)
+  sort?: ExploreSort;
+
+  /** ISO 3166-1 country filter (shows: originCountries, movies: production country). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  country?: string;
+
+  /** Explicit UI toggle — OR-ed with the profile hideAnimeInExplore flag (either hides). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true' || value === '1')
+  @IsBoolean()
+  hideAnime?: boolean;
+}
 
 export class SearchQueryDto extends PaginationDto {
   @ApiPropertyOptional()
@@ -19,6 +50,46 @@ export class SearchQueryDto extends PaginationDto {
   @IsOptional()
   @IsString()
   genre?: string;
+
+  /** Comma-separated genre slugs to EXCLUDE (multi-select exclusion). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  excludeGenres?: string;
+
+  @ApiPropertyOptional({ enum: EXPLORE_SORTS })
+  @IsOptional()
+  @IsIn(EXPLORE_SORTS)
+  sort?: ExploreSort;
+
+  /** ISO 3166-1 country filter (shows: originCountries, movies: production country). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  country?: string;
+
+  /** Explicit UI toggle — OR-ed with the profile hideAnimeInExplore flag (either hides). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true' || value === '1')
+  @IsBoolean()
+  hideAnime?: boolean;
+}
+
+/** Trending / sections / for-you endpoints: one genre chip + the shared explore filters. */
+export class TrendingQueryDto extends ExploreFiltersDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  /** Genre slug filter (same semantics as SearchQueryDto.genre). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  genre?: string;
 }
 
 export class DiscoverQueryDto extends PaginationDto {
@@ -31,6 +102,12 @@ export class DiscoverQueryDto extends PaginationDto {
   @IsOptional()
   @IsString()
   genre?: string;
+
+  /** Comma-separated genre slugs to EXCLUDE (wired to TMDB without_genres / DB none). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  excludeGenres?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

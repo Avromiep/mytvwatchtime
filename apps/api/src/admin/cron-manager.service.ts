@@ -45,6 +45,11 @@ const DEFAULTS: { name: string; label: string; schedule: string }[] = [
     schedule: '0 10 * * *',
   },
   {
+    name: 'recommendations_backfill',
+    label: 'Recommendations Backfill',
+    schedule: '0 11 * * *',
+  },
+  {
     name: 'scheduled_hydrations',
     label: 'Scheduled Hydrations Sync',
     schedule: CronExpression.EVERY_HOUR,
@@ -119,6 +124,11 @@ export class CronManagerService implements OnModuleInit {
       label: 'Character IDs Backfill',
       defaultSchedule: '0 10 * * *',
       fn: () => this.metadataBackfill.backfillCharacterIds(200),
+    });
+    this.handlers.set('recommendations_backfill', {
+      label: 'Recommendations Backfill',
+      defaultSchedule: '0 11 * * *',
+      fn: () => this.metadataBackfill.repairRecommendations(500),
     });
     this.handlers.set('scheduled_hydrations', {
       label: 'Scheduled Hydrations Sync',

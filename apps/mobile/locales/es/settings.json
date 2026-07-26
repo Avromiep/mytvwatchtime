@@ -6,6 +6,8 @@
   "bio": "Biografía",
   "private": "Perfil privado",
   "privateHint": "Oculta tu perfil y actividad a otros usuarios",
+  "hideAnime": "Ocultar anime en Explorar",
+  "hideAnimeHint": "Excluir anime de Explorar, tendencias y recomendaciones",
   "avatar": "Avatar",
   "changeAvatar": "Cambiar avatar",
   "cover": "Portada",

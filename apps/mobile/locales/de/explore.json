@@ -10,5 +10,35 @@
   "trendingMovies": "Angesagte Filme",
   "seeAll": "Alle anzeigen",
   "mediaTypeShow": "Serie",
-  "mediaTypeMovie": "Film"
+  "mediaTypeMovie": "Film",
+  "filters": {
+    "genre": "Genre",
+    "exclude": "Ausschließen",
+    "order": "Sortierung",
+    "type": "Typ",
+    "country": "Land",
+    "hideAnime": "Anime ausblenden",
+    "orderPopularity": "Beliebtheit",
+    "orderReleaseDate": "Erscheinungsdatum",
+    "typeBoth": "Beide",
+    "typeMovies": "Filme",
+    "typeShows": "Serien",
+    "countries": {
+      "US": "Vereinigte Staaten",
+      "GB": "Vereinigtes Königreich",
+      "FR": "Frankreich",
+      "DE": "Deutschland",
+      "ES": "Spanien",
+      "IT": "Italien",
+      "JP": "Japan",
+      "KR": "Südkorea",
+      "CN": "China",
+      "IN": "Indien",
+      "TR": "Türkei",
+      "BR": "Brasilien",
+      "MX": "Mexiko",
+      "CA": "Kanada",
+      "AU": "Australien"
+    }
+  }
 }

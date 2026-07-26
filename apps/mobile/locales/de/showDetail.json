@@ -13,6 +13,7 @@
   "communityRatings": "Community-Bewertungen",
   "showInfo": "Serieninfos",
   "years": "Jahre",
+  "originCountry": "Herkunftsland",
   "status": "Status",
   "genres": "Genres",
   "runtime": "Laufzeit",
@@ -22,5 +23,6 @@
   "comments": "Kommentare",
   "showMoreEpisodes": "{{count}} weitere anzeigen",
   "originalTitle": "Originaltitel",
-  "rateShow": "Diese Serie bewerten"
+  "rateShow": "Diese Serie bewerten",
+  "similar": "Ähnliche Serien"
 }

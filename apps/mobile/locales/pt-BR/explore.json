@@ -10,5 +10,35 @@
   "trendingMovies": "Filmes em alta",
   "seeAll": "Ver tudo",
   "mediaTypeShow": "Série",
-  "mediaTypeMovie": "Filme"
+  "mediaTypeMovie": "Filme",
+  "filters": {
+    "genre": "Gênero",
+    "exclude": "Excluir",
+    "order": "Ordem",
+    "type": "Tipo",
+    "country": "País",
+    "hideAnime": "Ocultar anime",
+    "orderPopularity": "Popularidade",
+    "orderReleaseDate": "Data de lançamento",
+    "typeBoth": "Ambos",
+    "typeMovies": "Filmes",
+    "typeShows": "Séries",
+    "countries": {
+      "US": "Estados Unidos",
+      "GB": "Reino Unido",
+      "FR": "França",
+      "DE": "Alemanha",
+      "ES": "Espanha",
+      "IT": "Itália",
+      "JP": "Japão",
+      "KR": "Coreia do Sul",
+      "CN": "China",
+      "IN": "Índia",
+      "TR": "Turquia",
+      "BR": "Brasil",
+      "MX": "México",
+      "CA": "Canadá",
+      "AU": "Austrália"
+    }
+  }
 }

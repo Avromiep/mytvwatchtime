@@ -1,0 +1,11 @@
+{
+  "watched": "{{name}}님이 {{title}}을(를) 시청했습니다",
+  "watchlisted": "{{name}}님이 {{title}}을(를) 찜 목록에 추가했습니다",
+  "favorited": "{{name}}님이 {{title}}을(를) 즐겨찾기에 추가했습니다",
+  "rated": "{{name}}님이 {{title}}을(를) {{value}}/5점으로 평가했습니다",
+  "reacted": "{{name}}님이 {{title}}에 {{reaction}} 반응을 남겼습니다",
+  "commented": "{{name}}님이 {{title}}에 댓글을 남겼습니다",
+  "seeMoreFrom": "{{name}}님의 활동 더 보기",
+  "emptyTitle": "아직 활동이 없습니다",
+  "emptySubtitle": "사람들을 팔로우하고 무엇을 보고 있는지 확인해 보세요."
+}

@@ -10,5 +10,35 @@
   "trendingMovies": "热门电影",
   "seeAll": "查看全部",
   "mediaTypeShow": "剧集",
-  "mediaTypeMovie": "电影"
+  "mediaTypeMovie": "电影",
+  "filters": {
+    "genre": "题材",
+    "exclude": "排除",
+    "order": "排序",
+    "type": "类型",
+    "country": "国家/地区",
+    "hideAnime": "隐藏动漫",
+    "orderPopularity": "人气",
+    "orderReleaseDate": "上映日期",
+    "typeBoth": "全部",
+    "typeMovies": "电影",
+    "typeShows": "剧集",
+    "countries": {
+      "US": "美国",
+      "GB": "英国",
+      "FR": "法国",
+      "DE": "德国",
+      "ES": "西班牙",
+      "IT": "意大利",
+      "JP": "日本",
+      "KR": "韩国",
+      "CN": "中国",
+      "IN": "印度",
+      "TR": "土耳其",
+      "BR": "巴西",
+      "MX": "墨西哥",
+      "CA": "加拿大",
+      "AU": "澳大利亚"
+    }
+  }
 }

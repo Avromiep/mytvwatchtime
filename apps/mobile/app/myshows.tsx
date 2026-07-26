@@ -3,7 +3,7 @@ import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-nat
 import { useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../components/Header';
-import { PosterCard } from '../components/cards';
+import { PosterCard, cardYear } from '../components/cards';
 import { EmptyState, Screen, Spinner, T } from '../components/primitives';
 import { api } from '../api/client';
 import { useQuery } from '@tanstack/react-query';
@@ -101,7 +101,7 @@ export default function MyShowsScreen() {
       <View style={styles.cardRow}>
         {cards.map((it) => (
           <View key={it.id} style={{ width: cellW, marginRight: gap, marginBottom: gap }}>
-            <PosterCard id={it.id} kind="shows" title={it.title} poster={it.posterUrl} progress={it.progress} rating={it.rating} width={cellW} style={{ marginRight: 0 }} />
+            <PosterCard id={it.id} kind="shows" title={it.title} poster={it.posterUrl} progress={it.progress} rating={it.rating} year={cardYear(it)} width={cellW} style={{ marginRight: 0 }} />
           </View>
         ))}
         {Array.from({ length: fillCount }).map((_, i) => (

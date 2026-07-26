@@ -143,6 +143,32 @@ describe('TmdbProvider.getShow', () => {
     expect(client.get).toHaveBeenCalledWith('/tv/65942/season/1', {}, 'en-US');
     expect(show.seasons[1].episodes).toHaveLength(85);
   });
+
+  it('appends recommendations within the 20-append cap (12 seasons + recommendations)', async () => {
+    const client = makeClient({
+      '/tv/65942': showPayload({
+        'season/0': seasonPayload(2),
+        'season/1': seasonPayload(85),
+        recommendations: {
+          results: [
+            { id: 1, media_type: 'tv', name: 'Steins;Gate', first_air_date: '2011-04-06', vote_average: 8.8 },
+            { id: 2, media_type: 'tv', name: 'No Game No Life', vote_average: 8.1 },
+          ],
+        },
+      }),
+    });
+    const provider = new TmdbProvider(client);
+    const show = await provider.getShow(65942, 'en-US');
+
+    const appends = String(client.get.mock.calls[0][1].append_to_response).split(',');
+    expect(appends.length).toBeLessThanOrEqual(20);
+    expect(appends).toContain('recommendations');
+    expect(appends.filter((a: string) => a.startsWith('season/'))).toHaveLength(12);
+    expect(show.recommendations).toEqual([
+      { tmdbId: 1, type: 'SHOW', title: 'Steins;Gate', posterUrl: null, year: 2011, rating: 8.8 },
+      { tmdbId: 2, type: 'SHOW', title: 'No Game No Life', posterUrl: null, year: null, rating: 8.1 },
+    ]);
+  });
 });
 
 describe('TmdbProvider.getMovie', () => {
@@ -162,5 +188,76 @@ describe('TmdbProvider.getMovie', () => {
     expect(client.get).toHaveBeenCalledTimes(1);
     expect(movie.keywords).toEqual(['anime']);
     expect(movie.translations?.fr).toEqual({ title: 'Monstres Academy', overview: undefined });
+  });
+
+  it('appends recommendations and normalizes them (cap 20)', async () => {
+    const client = makeClient({
+      '/movie/62211': {
+        id: 62211,
+        title: 'Monsters University',
+        recommendations: {
+          results: [
+            {
+              id: 550,
+              media_type: 'movie',
+              title: 'Fight Club',
+              poster_path: '/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg',
+              release_date: '1999-10-15',
+              vote_average: 8.4,
+            },
+            { id: 551, media_type: 'movie', title: 'The Truman Show' },
+            // Beyond the cap — dropped.
+            ...Array.from({ length: 25 }, (_, i) => ({ id: 1000 + i, title: `Filler ${i}` })),
+          ],
+        },
+      },
+    });
+    const provider = new TmdbProvider(client);
+    const movie = await provider.getMovie(62211, 'en-US');
+
+    const appends = String(client.get.mock.calls[0][1].append_to_response).split(',');
+    expect(appends).toContain('recommendations');
+    expect(appends.length).toBeLessThanOrEqual(20);
+    expect(movie.recommendations).toHaveLength(20);
+    expect(movie.recommendations?.[0]).toEqual({
+      tmdbId: 550,
+      type: 'MOVIE',
+      title: 'Fight Club',
+      posterUrl: 'img:w342:/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg',
+      year: 1999,
+      rating: 8.4,
+    });
+    expect(movie.recommendations?.[1]).toEqual({
+      tmdbId: 551,
+      type: 'MOVIE',
+      title: 'The Truman Show',
+      posterUrl: null,
+      year: null,
+      rating: null,
+    });
+  });
+
+  it('light recommendations fetch hits the single endpoint (no appends)', async () => {
+    const client = makeClient({
+      '/movie/62211/recommendations': {
+        results: [{ id: 550, title: 'Fight Club', release_date: '1999-10-15' }],
+      },
+      '/tv/65942/recommendations': {
+        results: [{ id: 1, name: 'Steins;Gate', first_air_date: '2011-04-06' }],
+      },
+    });
+    const provider = new TmdbProvider(client);
+
+    const movieRecs = await provider.getMovieRecommendations(62211);
+    const showRecs = await provider.getShowRecommendations(65942);
+
+    expect(movieRecs).toEqual([
+      { tmdbId: 550, type: 'MOVIE', title: 'Fight Club', posterUrl: null, year: 1999, rating: null },
+    ]);
+    expect(showRecs).toEqual([
+      { tmdbId: 1, type: 'SHOW', title: 'Steins;Gate', posterUrl: null, year: 2011, rating: null },
+    ]);
+    expect(client.get).toHaveBeenCalledWith('/movie/62211/recommendations');
+    expect(client.get).toHaveBeenCalledWith('/tv/65942/recommendations');
   });
 });

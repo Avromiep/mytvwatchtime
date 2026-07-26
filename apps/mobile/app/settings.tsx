@@ -13,6 +13,7 @@ import { TextField } from '../components/TextField';
 import { useAuth } from '../context/AuthContext';
 import { useAppearance } from '../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
+import { useQueryClient } from '@tanstack/react-query';
 import { SUPPORTED_LOCALES, type LanguagePreference, type ThemePreference } from '@tvwatch/shared';
 import { useMe, useUpdateProfile, useUploadAvatar, useUploadCover } from '../api/hooks';
 import { api, setBaseUrl, SITE_URL } from '../api/client';
@@ -31,6 +32,7 @@ const IOS_TESTFLIGHT_URL = 'https://testflight.apple.com/join/YSTAmpwZ';
 
 export default function SettingsScreen() {
   const { data: me } = useMe();
+  const qc = useQueryClient();
   const update = useUpdateProfile();
   const uploadAvatar = useUploadAvatar();
   const uploadCover = useUploadCover();
@@ -75,6 +77,31 @@ export default function SettingsScreen() {
       {
         onSuccess: () => showToast(t('settings:toast.privacyUpdated')),
         onError: () => showError({ description: t('settings:privacyUpdateFailed') }),
+      },
+    );
+
+  // Explore/discover/trending results are filtered server-side by this flag — drop the
+  // cached lists so the change is visible on the next Explore open.
+  const toggleHideAnime = (next: boolean) =>
+    update.mutate(
+      { hideAnimeInExplore: next },
+      {
+        onSuccess: () => {
+          for (const key of [
+            'search',
+            'discoverSections',
+            'discoverShows',
+            'discoverMovies',
+            'trendingShows',
+            'trendingMovies',
+            'trendingShowsPage',
+            'trendingMoviesPage',
+          ]) {
+            qc.invalidateQueries({ queryKey: [key] });
+          }
+          showToast(t('settings:toast.saved'));
+        },
+        onError: () => showError({ description: t('common:tryAgain') }),
       },
     );
 
@@ -141,6 +168,18 @@ export default function SettingsScreen() {
             <Switch
               value={me?.isPrivate ?? false}
               onValueChange={togglePrivate}
+              trackColor={{ false: tokens.surfaceElevated, true: tokens.primary }}
+              thumbColor={tokens.controlThumb}
+            />
+          </View>
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1, marginRight: spacing.md }}>
+              <T variant="body">{t('settings:hideAnime')}</T>
+              <T variant="micro" muted>{t('settings:hideAnimeHint')}</T>
+            </View>
+            <Switch
+              value={me?.hideAnimeInExplore ?? false}
+              onValueChange={toggleHideAnime}
               trackColor={{ false: tokens.surfaceElevated, true: tokens.primary }}
               thumbColor={tokens.controlThumb}
             />

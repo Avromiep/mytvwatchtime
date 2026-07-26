@@ -260,6 +260,7 @@ export class MetadataBackfillService {
       bannerAsPoster,
       missingRating,
       animeTvdbUnresolvable,
+      recommendationsMissing,
     ] = await Promise.all([
       this.prisma.mediaItem.count(),
       this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
@@ -405,6 +406,12 @@ export class MetadataBackfillService {
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
         WHERE COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '1970-01-01')::timestamptz >= NOW() - INTERVAL '30 days'`,
+      // TMDB-linked rows whose recommendations snapshot was never synced (null stamp).
+      // Filled by the recommendations backfill (one light /recommendations call per row).
+      this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c FROM media_items m
+        WHERE m.recommendations_synced_at IS NULL
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB')`,
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     const enContent = englishContentHealth?.[0];
@@ -443,6 +450,7 @@ export class MetadataBackfillService {
       bannerAsPoster: toNum(bannerAsPoster as any),
       missingRating: toNum(missingRating as any),
       animeTvdbUnresolvable: toNum(animeTvdbUnresolvable as any),
+      recommendationsMissing: toNum(recommendationsMissing as any),
     };
   }
 
@@ -3026,6 +3034,8 @@ export class MetadataBackfillService {
 
   // ---- TVDB banner-as-poster rows (legacy of the swapped series artwork mapping) ----
   private bannerFixRunning = false;
+  /** Prevents concurrent recommendations backfills. */
+  private recommendationsFixRunning = false;
 
   private normalizeDuplicatedTvdbArtworkUrl(url?: string | null): string | null | undefined {
     if (!url) return url;
@@ -3198,6 +3208,110 @@ export class MetadataBackfillService {
       return { processed: succeeded + failed, succeeded, failed, sample };
     } finally {
       this.bannerFixRunning = false;
+    }
+  }
+
+  /**
+   * Sync the TMDB /recommendations snapshot for rows that never got one
+   * (recommendations_synced_at IS NULL). One LIGHT call per row (no appends, no
+   * rehydration) + a direct write of recommendations + the stamp. Most-popular first;
+   * stops early on TMDB rate limits. User data untouched.
+   */
+  async repairRecommendations(limit?: number): Promise<{
+    processed: number;
+    succeeded: number;
+    failed: number;
+    sample: string[];
+  }> {
+    const empty = { processed: 0, succeeded: 0, failed: 0, sample: [] as string[] };
+    if (!this.tmdbProvider.enabled) {
+      this.logger.warn('TMDB not configured — skipping recommendations backfill');
+      return empty;
+    }
+    if (this.recommendationsFixRunning) {
+      this.logger.log('Recommendations backfill already running — skipping');
+      return empty;
+    }
+    this.recommendationsFixRunning = true;
+    this.trackRepair('recommendations', {
+      running: true,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      finishedAt: null,
+    });
+    try {
+      const take = Math.max(1, Math.min(limit ?? 500, 100000));
+      const candidates = await this.prisma.$queryRaw<
+        { id: string; title: string; type: string; tmdb: string }[]
+      >`
+        SELECT m.id, m.title, m.type,
+               (SELECT e.value FROM external_ids e
+                  WHERE e.media_id = m.id AND e.provider = 'TMDB'
+                  ORDER BY e.value LIMIT 1) AS tmdb
+        FROM media_items m
+        WHERE m.recommendations_synced_at IS NULL
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB')
+        ORDER BY m.popularity DESC, m.id
+        LIMIT ${take}`;
+      this.trackRepair('recommendations', { total: candidates.length });
+
+      let succeeded = 0;
+      let failed = 0;
+      const sample: string[] = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const m = candidates[i];
+        this.trackRepair('recommendations', {
+          processed: i + 1,
+          succeeded,
+          failed,
+          current: m.title,
+        });
+        try {
+          const recommendations =
+            m.type === 'SHOW'
+              ? await this.tmdbProvider.getShowRecommendations(Number(m.tmdb))
+              : await this.tmdbProvider.getMovieRecommendations(Number(m.tmdb));
+          // Empty lists stamp too — the provider has none for this row, so the
+          // row leaves the stat and is never re-checked pointlessly.
+          await this.prisma.mediaItem.update({
+            where: { id: m.id },
+            data: { recommendations: recommendations as any, recommendationsSyncedAt: new Date() },
+          });
+          succeeded++;
+          if (sample.length < 5) sample.push(m.title);
+        } catch (e) {
+          if (this.isRateLimitError(e)) {
+            this.logger.warn(
+              `Recommendations backfill: TMDB rate limit at ${i + 1}/${candidates.length} — stopping early (${succeeded} synced, ${failed} failed)`,
+            );
+            break;
+          }
+          failed++;
+          if (failed <= 10)
+            this.logger.warn(
+              `Recommendations backfill failed for "${m.title}" (${m.id}): ${(e as Error).message}`,
+            );
+          else
+            this.logger.debug(
+              `Recommendations backfill failed for "${m.title}": ${(e as Error).message}`,
+            );
+        }
+      }
+      this.trackRepair('recommendations', {
+        running: false,
+        processed: succeeded + failed,
+        succeeded,
+        failed,
+        finishedAt: new Date(),
+      });
+      this.logger.log(
+        `Recommendations backfill: ${succeeded}/${candidates.length} synced from TMDB, ${failed} failed`,
+      );
+      return { processed: succeeded + failed, succeeded, failed, sample };
+    } finally {
+      this.recommendationsFixRunning = false;
     }
   }
 

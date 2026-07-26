@@ -229,6 +229,24 @@ export class AdminController {
     };
   }
 
+  @Post('repair-recommendations/run')
+  @RequireRoles('ADMIN')
+  async runRepairRecommendations(
+    @CurrentUser('id') adminId: string,
+    @Query('count') count?: string,
+  ) {
+    const n = count ? Number(count) : undefined;
+    this.metadataBackfill.repairRecommendations(n).catch((e) => {
+      console.error('[Recommendations backfill] FAILED:', (e as Error)?.message ?? e);
+    });
+    await this.admin.audit(adminId, 'repair_recommendations', 'media', undefined, {
+      count: n ?? 500,
+    });
+    return {
+      message: `Recommendations backfill started (${n ?? 500} rows max). Check API logs for progress + results.`,
+    };
+  }
+
   @Post('backfill-ratings/run')
   @RequireRoles('ADMIN')
   runBackfillRatings(@Query('count') count?: string) {

@@ -10,5 +10,35 @@
   "trendingMovies": "Film di tendenza",
   "seeAll": "Vedi tutto",
   "mediaTypeShow": "Serie TV",
-  "mediaTypeMovie": "Film"
+  "mediaTypeMovie": "Film",
+  "filters": {
+    "genre": "Genere",
+    "exclude": "Escludi",
+    "order": "Ordine",
+    "type": "Tipo",
+    "country": "Paese",
+    "hideAnime": "Nascondi anime",
+    "orderPopularity": "Popolarità",
+    "orderReleaseDate": "Data di uscita",
+    "typeBoth": "Entrambi",
+    "typeMovies": "Film",
+    "typeShows": "Serie TV",
+    "countries": {
+      "US": "Stati Uniti",
+      "GB": "Regno Unito",
+      "FR": "Francia",
+      "DE": "Germania",
+      "ES": "Spagna",
+      "IT": "Italia",
+      "JP": "Giappone",
+      "KR": "Corea del Sud",
+      "CN": "Cina",
+      "IN": "India",
+      "TR": "Turchia",
+      "BR": "Brasile",
+      "MX": "Messico",
+      "CA": "Canada",
+      "AU": "Australia"
+    }
+  }
 }

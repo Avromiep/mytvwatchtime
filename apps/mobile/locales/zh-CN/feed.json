@@ -1,0 +1,11 @@
+{
+  "watched": "{{name}} 观看了 {{title}}",
+  "watchlisted": "{{name}} 将 {{title}} 加入了想看列表",
+  "favorited": "{{name}} 收藏了 {{title}}",
+  "rated": "{{name}} 给 {{title}} 评了 {{value}}/5 分",
+  "reacted": "{{name}} 对 {{title}} 作出了 {{reaction}} 反应",
+  "commented": "{{name}} 评论了 {{title}}",
+  "seeMoreFrom": "查看 {{name}} 的更多动态",
+  "emptyTitle": "暂无动态",
+  "emptySubtitle": "关注他人，看看他们正在看什么。"
+}

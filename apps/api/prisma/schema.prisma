@@ -366,6 +366,7 @@ model UserProfile {
   coverUrl    String?  @map("cover_url")
   location    String?
   isPrivate   Boolean  @default(false) @map("is_private")
+  hideAnimeInExplore Boolean @default(false) @map("hide_anime_in_explore")
   themePreference    ThemePreference    @default(SYSTEM) @map("theme_preference")
   languagePreference LanguagePreference @default(SYSTEM) @map("language_preference")
   createdAt   DateTime @default(now()) @map("created_at")
@@ -471,6 +472,9 @@ model MediaItem {
   metadataRefreshedAt DateTime? @map("metadata_refreshed_at")
   // Last time TMDB reviews were synced for this media (null = never).
   reviewsSyncedAt DateTime? @map("reviews_synced_at")
+  // TMDB /recommendations snapshot (card-shaped: tmdbId, type, title, poster, year, rating).
+  recommendations Json?
+  recommendationsSyncedAt DateTime? @map("recommendations_synced_at")
   // Content classification (independent of structural type) + evidence model.
   contentClassification ContentClassification @default(GENERAL) @map("content_classification")
   classificationConfidence Float              @default(0) @map("classification_confidence")

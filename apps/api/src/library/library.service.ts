@@ -580,7 +580,14 @@ export class LibraryService {
         orderBy: { watchedAt: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
-        include: { media: true },
+        include: {
+          media: {
+            include: {
+              show: { select: { yearStart: true } },
+              movie: { select: { releaseYear: true } },
+            },
+          },
+        },
       }),
       this.prisma.watchHistory.count({ where }),
     ]);
@@ -592,6 +599,10 @@ export class LibraryService {
         title: r.media.title,
         posterUrl: r.media.posterUrl,
         rating: r.media.rating ?? null,
+        year:
+          r.mediaType === MediaType.SHOW
+            ? (r.media.show?.yearStart ?? null)
+            : (r.media.movie?.releaseYear ?? null),
         episodeId: r.episodeId,
         seasonNumber: r.seasonNumber,
         episodeNumber: r.episodeNumber,
@@ -626,11 +637,33 @@ export class LibraryService {
     const [statuses, watchlist] = await Promise.all([
       this.prisma.userShowStatus.findMany({
         where: { userId },
-        include: { media: { select: { id: true, title: true, posterUrl: true, backdropUrl: true, rating: true } } },
+        include: {
+          media: {
+            select: {
+              id: true,
+              title: true,
+              posterUrl: true,
+              backdropUrl: true,
+              rating: true,
+              show: { select: { yearStart: true } },
+            },
+          },
+        },
       }),
       this.prisma.watchlistItem.findMany({
         where: { userId, media: { type: MediaType.SHOW } },
-        include: { media: { select: { id: true, title: true, posterUrl: true, backdropUrl: true, rating: true } } },
+        include: {
+          media: {
+            select: {
+              id: true,
+              title: true,
+              posterUrl: true,
+              backdropUrl: true,
+              rating: true,
+              show: { select: { yearStart: true } },
+            },
+          },
+        },
         orderBy: { createdAt: 'desc' },
       }),
     ]);
@@ -658,7 +691,7 @@ export class LibraryService {
       const w = s.watchedCount ?? 0;
       const airedTotal = airedMap.get(s.mediaId) ?? 0;
       const progress = airedTotal > 0 ? w / airedTotal : 0;
-      const item = { id: s.media.id, title: s.media.title, posterUrl: s.media.posterUrl, rating: s.media.rating ?? null, progress, lastWatchedAt: s.lastWatchedAt };
+      const item = { id: s.media.id, title: s.media.title, posterUrl: s.media.posterUrl, rating: s.media.rating ?? null, year: s.media.show?.yearStart ?? null, progress, lastWatchedAt: s.lastWatchedAt };
       if (w > 0 && progress < 1) watching.push(item);
       else if (airedTotal > 0 && w >= airedTotal) finished.push(item);
     }
@@ -668,7 +701,7 @@ export class LibraryService {
     const progressedIds = new Set([...watching.map((i) => i.id), ...finished.map((i) => i.id)]);
     const notStarted = watchlist
       .filter((w) => !progressedIds.has(w.mediaId))
-      .map((w) => ({ id: w.media.id, title: w.media.title, posterUrl: w.media.posterUrl, rating: w.media.rating ?? null, progress: 0, addedAt: w.createdAt }));
+      .map((w) => ({ id: w.media.id, title: w.media.title, posterUrl: w.media.posterUrl, rating: w.media.rating ?? null, year: w.media.show?.yearStart ?? null, progress: 0, addedAt: w.createdAt }));
 
     const [watchingL, finishedL, notStartedL] = await Promise.all([
       this.localizeItems(watching, (i) => i.id),

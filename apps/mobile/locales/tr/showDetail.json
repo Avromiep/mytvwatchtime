@@ -13,6 +13,7 @@
   "communityRatings": "Topluluk puanları",
   "showInfo": "Dizi bilgisi",
   "years": "Yıllar",
+  "originCountry": "Menşe ülke",
   "status": "Durum",
   "genres": "Türler",
   "runtime": "Süre",
@@ -22,5 +23,6 @@
   "comments": "Yorumlar",
   "showMoreEpisodes": "{{count}} tane daha göster",
   "originalTitle": "Orijinal başlık",
-  "rateShow": "Bu diziyi puanla"
+  "rateShow": "Bu diziyi puanla",
+  "similar": "Benzer diziler"
 }

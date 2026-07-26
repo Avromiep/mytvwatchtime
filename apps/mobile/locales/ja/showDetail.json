@@ -13,6 +13,7 @@
   "communityRatings": "コミュニティ評価",
   "showInfo": "番組情報",
   "years": "放送年",
+  "originCountry": "制作国",
   "status": "ステータス",
   "genres": "ジャンル",
   "runtime": "上映時間",
@@ -22,5 +23,6 @@
   "comments": "コメント",
   "showMoreEpisodes": "さらに{{count}}件表示",
   "originalTitle": "原題",
-  "rateShow": "この番組を評価"
+  "rateShow": "この番組を評価",
+  "similar": "似ている番組"
 }

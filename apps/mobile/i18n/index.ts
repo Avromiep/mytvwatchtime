@@ -22,12 +22,13 @@ import groups from '../locales/en/groups.json';
 import lists from '../locales/en/lists.json';
 import social from '../locales/en/social.json';
 import contact from '../locales/en/contact.json';
+import feed from '../locales/en/feed.json';
 
 export const DEFAULT_NS = 'common';
 export const NAMESPACES = [
   'common', 'settings', 'navigation', 'auth', 'shows', 'movies', 'explore',
   'profile', 'notifications', 'import', 'stats', 'showDetail', 'episode',
-  'comments', 'lists', 'social', 'contact', 'groups',
+  'comments', 'lists', 'social', 'contact', 'groups', 'feed',
 ] as const;
 
 i18n.use(initReactI18next).init({
@@ -35,7 +36,7 @@ i18n.use(initReactI18next).init({
     en: {
       common, settings, navigation, auth, shows, movies, explore,
       profile, notifications, import: importNs, stats, showDetail, episode,
-      comments, lists, social, contact, groups,
+      comments, lists, social, contact, groups, feed,
     },
   },
   lng: 'en',

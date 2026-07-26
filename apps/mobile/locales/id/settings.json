@@ -6,6 +6,8 @@
   "bio": "Bio",
   "private": "Profil pribadi",
   "privateHint": "Sembunyikan profil dan aktivitas Anda dari pengguna lain",
+  "hideAnime": "Sembunyikan anime di Jelajahi",
+  "hideAnimeHint": "Kecualikan anime dari Jelajahi, trending, dan rekomendasi",
   "avatar": "Avatar",
   "changeAvatar": "Ubah avatar",
   "cover": "Sampul",

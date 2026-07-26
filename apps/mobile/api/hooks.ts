@@ -44,6 +44,7 @@ import type {
   CharacterVoteSectionDto,
   WatchNextItemDto,
   ExternalReviewDto,
+  FeedPageDto,
 } from '@tvwatch/shared';
 import { applyVoteChange, MediaType } from '@tvwatch/shared';
 import { api, HttpError } from './client';
@@ -84,6 +85,7 @@ const qk = {
   list: (id: string) => ['list', id] as const,
   contactThreads: ['contactThreads'] as const,
   contactThread: (id: string) => ['contactThread', id] as const,
+  feed: ['feed'] as const,
 };
 
 export const useMe = () =>
@@ -169,9 +171,26 @@ export const useMovie = (id: string) =>
   });
 // Server-paginated search (20/page): the API keeps the merged ordering in a short-lived
 // cache and expands it on demand, so onEndReached reveals results beyond the first page.
-export const useSearch = (q: string, type?: MediaType, genre?: string | null) =>
+/** Explore filter values shared by search / sections / trending (see explore.tsx). */
+export interface ExploreFilters {
+  excludeGenres?: string[];
+  sort?: 'popularity' | 'releaseDate';
+  country?: string | null;
+  hideAnime?: boolean;
+}
+/** ExploreFilters → query params (defaults omitted so URLs stay clean). */
+const filterParams = (f?: ExploreFilters) => ({
+  excludeGenres: f?.excludeGenres?.length ? f.excludeGenres.join(',') : undefined,
+  sort: f?.sort && f.sort !== 'popularity' ? f.sort : undefined,
+  country: f?.country || undefined,
+  hideAnime: f?.hideAnime ? true : undefined,
+});
+/** Every filter value must be part of the query key — filters change the result set. */
+const filterKey = (f?: ExploreFilters) =>
+  `${(f?.excludeGenres ?? []).join(',')}|${f?.sort ?? ''}|${f?.country ?? ''}|${f?.hideAnime ? 1 : 0}`;
+export const useSearch = (q: string, type?: MediaType, genre?: string | null, filters?: ExploreFilters) =>
   useInfiniteQuery({
-    queryKey: [...qk.search(q, type), genre ?? ''],
+    queryKey: [...qk.search(q, type), genre ?? '', filterKey(filters)],
     queryFn: ({ pageParam = 1 }) =>
       api.get<Paginated<MediaCardDto>>('/search', {
         q,
@@ -179,20 +198,33 @@ export const useSearch = (q: string, type?: MediaType, genre?: string | null) =>
         genre: genre || undefined,
         page: pageParam,
         pageSize: 20,
+        ...filterParams(filters),
       }),
     initialPageParam: 1,
     getNextPageParam: (last) => (last?.hasMore ? last.page + 1 : undefined),
     enabled: q.length > 1,
   });
-export const useDiscoverSections = (userId?: string, genre?: string | null) =>
+export const useDiscoverSections = (userId?: string, genre?: string | null, filters?: ExploreFilters) =>
   // User-scoped key: the server's anonymous fallback (topForYou = trending) must NEVER
   // share a cache entry with the personalized sections — otherwise a token-less early
   // request (cold start / expired token) shows trending as "Top shows for you" until
   // the next manual refetch.
   useQuery({
-    queryKey: [...qk.discover(), userId ?? 'anon', genre ?? ''],
+    queryKey: [...qk.discover(), userId ?? 'anon', genre ?? '', filterKey(filters)],
     queryFn: () =>
-      api.get<DiscoverSectionsDto>('/discover/sections', { genre: genre || undefined }),
+      api.get<DiscoverSectionsDto>('/discover/sections', {
+        genre: genre || undefined,
+        ...filterParams(filters),
+      }),
+  });
+// Activity feed (explore "Feed" tab): self + followings, cursor-paginated newest first.
+export const useFeed = () =>
+  useInfiniteQuery({
+    queryKey: qk.feed,
+    queryFn: ({ pageParam }) =>
+      api.get<FeedPageDto>('/feed', { cursor: pageParam, limit: 20 }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
   });
 // Catalog genres for filter chips (explore/search/see-all) — rarely changes.
 export const useGenres = () =>
@@ -211,15 +243,17 @@ export const useDiscoverMovies = (p: any) =>
     queryKey: qk.discoverMovies(p),
     queryFn: () => api.get<Paginated<MediaCardDto>>('/discover/movies', p),
   });
-export const useTrendingShows = () =>
+export const useTrendingShows = (filters?: ExploreFilters) =>
   useQuery({
-    queryKey: qk.trendingShows,
-    queryFn: () => api.get<any>('/trending/shows').then((r) => r.items ?? r),
+    queryKey: [...qk.trendingShows, filterKey(filters)],
+    queryFn: () =>
+      api.get<any>('/trending/shows', { ...filterParams(filters) }).then((r) => r.items ?? r),
   });
-export const useTrendingMovies = () =>
+export const useTrendingMovies = (filters?: ExploreFilters) =>
   useQuery({
-    queryKey: qk.trendingMovies,
-    queryFn: () => api.get<any>('/trending/movies').then((r) => r.items ?? r),
+    queryKey: [...qk.trendingMovies, filterKey(filters)],
+    queryFn: () =>
+      api.get<any>('/trending/movies', { ...filterParams(filters) }).then((r) => r.items ?? r),
   });
 export const useTrendingShowsPaginated = (page: number) =>
   useQuery({

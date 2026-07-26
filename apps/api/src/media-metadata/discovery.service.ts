@@ -11,17 +11,38 @@ import { MediaMetadataService } from './media-metadata.service';
 import { TmdbProvider } from './providers/tmdb.provider';
 import { TvdbProvider } from './providers/tvdb.provider';
 import { HydrationQueue } from './hydration/hydration.queue';
-import { DiscoverQueryDto, SearchQueryDto } from './dto/discover.dto';
+import { DiscoverQueryDto, ExploreFiltersDto, SearchQueryDto } from './dto/discover.dto';
 import { paginate } from '../common/dto/pagination.dto';
+import { isAnimeSignal } from './classification/anime-signal';
+
+/** Trending window entry: media id + the TMDB payload signals used for cheap
+ *  list-time filtering (genre ids for genre chips, origin countries for anime). */
+interface TrendingEntry {
+  id: string;
+  g: number[];
+  oc?: string[];
+}
 
 interface SearchCacheEntry {
   /** Merged ordered media ids (local DB first, then TMDb pages). */
   ids: string[];
   /** TMDB genre ids per media id from the search payload — genre filters on light rows. */
   genreIds: Record<string, number[]>;
+  /** Origin countries per media id from the search payload — anime signal on light rows. */
+  originCountries?: Record<string, string[]>;
   tmdbPagesFetched: number;
   /** True once every enabled source returned a short/empty page. */
   exhausted: boolean;
+}
+
+/** Structural filter input accepted by the DB browse paths (both discover DTOs fit). */
+interface ExploreFilterInput {
+  genre?: string;
+  excludeGenres?: string;
+  sort?: string;
+  country?: string;
+  hideAnime?: boolean;
+  minRating?: number;
 }
 
 @Injectable()
@@ -39,6 +60,33 @@ export class DiscoveryService {
 
   private requireTmdb() {
     if (!this.tmdb.enabled) throw new ServiceUnavailableException('Live metadata not configured');
+  }
+
+  /** Per-user "hide anime in explore" preference (false when absent/anonymous). */
+  private async resolveHideAnime(userId?: string): Promise<boolean> {
+    if (!userId) return false;
+    const profile = await this.prisma.userProfile.findUnique({
+      where: { userId },
+      select: { hideAnimeInExplore: true },
+    });
+    return profile?.hideAnimeInExplore ?? false;
+  }
+
+  /**
+   * Drop anime from trending entries: payload signal first (TMDB genre 16 + JP origin,
+   * same rule as the import matcher), then the DB classification for hydrated rows
+   * (one batched read — only runs when the user opted out of anime).
+   */
+  private async filterAnimeEntries(entries: TrendingEntry[]): Promise<TrendingEntry[]> {
+    const dbAnime = new Set(
+      (
+        await this.prisma.mediaItem.findMany({
+          where: { id: { in: entries.map((e) => e.id) }, contentClassification: 'ANIME' },
+          select: { id: true },
+        })
+      ).map((r) => r.id),
+    );
+    return entries.filter((e) => !dbAnime.has(e.id) && !isAnimeSignal(e.g, e.oc ?? []));
   }
 
   async search(q: SearchQueryDto, userId?: string) {
@@ -60,7 +108,8 @@ export class DiscoveryService {
     const lang = currentLanguage();
     const want = Math.max(1, Math.min(q.pageSize ?? 20, 50));
     const page = Math.max(1, q.page ?? 1);
-    const cacheKey = `search:v5:${q.type ?? 'all'}:${term}:${lang}`;
+    // v6: cache entries gained per-id originCountries (anime signal on light rows).
+    const cacheKey = `search:v6:${q.type ?? 'all'}:${term}:${lang}`;
 
     let entry = await this.redis.get<SearchCacheEntry>(cacheKey);
     if (!entry) {
@@ -84,6 +133,28 @@ export class DiscoveryService {
     // payload genre ids cached alongside the window (zero extra provider calls).
     const genre = q.genre?.trim();
     if (genre) orderedIds = await this.filterIdsByGenre(orderedIds, genre, entry.genreIds ?? {});
+    // Exclusion (multi-select): same dual resolution, inverted.
+    const exclude = this.parseSlugList(q.excludeGenres);
+    if (exclude.length)
+      orderedIds = await this.excludeIdsByGenres(orderedIds, exclude, entry.genreIds ?? {});
+    const country = q.country?.trim().toUpperCase();
+    if (country) orderedIds = await this.filterIdsByCountry(orderedIds, country);
+    // Hide anime: explicit UI toggle OR the profile flag — payload signal for light
+    // rows (cached genre ids + origin countries), DB classification for hydrated ones.
+    const hideAnime = q.hideAnime || (await this.resolveHideAnime(userId));
+    if (hideAnime) {
+      orderedIds = (
+        await this.filterAnimeEntries(
+          orderedIds.map((id) => ({
+            id,
+            g: entry.genreIds?.[id] ?? [],
+            oc: entry.originCountries?.[id] ?? [],
+          })),
+        )
+      ).map((e) => e.id);
+    }
+    // NOTE: sort=releaseDate is honored on the DB browse paths and TMDB discover;
+    // provider search keeps its relevance order (the window carries no release dates).
     const slice = orderedIds.slice(start, start + want);
     const items = await this.fetchListDtos(slice, userId, want);
     // hasMore via paginate's formula: +1 while more pages may exist upstream.
@@ -172,6 +243,8 @@ export class DiscoveryService {
       );
       items.forEach((item, idx) => {
         entry.genreIds[upserted[idx]] = item.genreIds ?? [];
+        if (item.originCountries?.length)
+          (entry.originCountries ??= {})[upserted[idx]] = item.originCountries;
       });
       entry.ids.push(...upserted);
       if (items.length >= 20) allShort = false; // a full page means there may be more
@@ -203,19 +276,58 @@ export class DiscoveryService {
   }
 
   private async searchViaDb(term: string, q: SearchQueryDto, userId?: string) {
-    const where = {
+    const hideAnime = q.hideAnime || (await this.resolveHideAnime(userId));
+    const exclude = this.parseSlugList(q.excludeGenres);
+    const country = q.country?.trim().toUpperCase();
+    // some + none combine on the genres relation: inclusion chip AND multi-exclusion.
+    const genreSome = q.genre?.trim()
+      ? { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } }
+      : undefined;
+    const where: Prisma.MediaItemWhereInput = {
       title: { contains: term, mode: 'insensitive' as const },
       ...(q.type ? { type: q.type } : {}),
-      ...(q.genre?.trim()
-        ? { genres: { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } } }
+      ...(hideAnime ? { contentClassification: { not: 'ANIME' as const } } : {}),
+      ...(genreSome || exclude.length
+        ? {
+            genres: {
+              ...(genreSome ?? {}),
+              ...(exclude.length
+                ? { none: { genre: { slug: { in: exclude, mode: 'insensitive' as const } } } }
+                : {}),
+            },
+          }
+        : {}),
+      // Country: shows match originCountries, movies the production country.
+      ...(country
+        ? q.type === MediaType.MOVIE
+          ? { movie: { is: { country: { equals: country, mode: 'insensitive' as const } } } }
+          : q.type === MediaType.SHOW
+            ? { show: { is: { originCountries: { has: country } } } }
+            : {
+                OR: [
+                  { show: { is: { originCountries: { has: country } } } },
+                  { movie: { is: { country: { equals: country, mode: 'insensitive' as const } } } },
+                ],
+              }
         : {}),
     };
+    // releaseDate sort is year-granular for shows (yearStart — shows store no full
+    // release date); a mixed-type search keeps popularity (two relation order-bys
+    // would sink every movie below every show).
+    const orderBy: Prisma.MediaItemOrderByWithRelationInput =
+      q.sort === 'releaseDate'
+        ? q.type === MediaType.MOVIE
+          ? { movie: { releaseDate: 'desc' } }
+          : q.type === MediaType.SHOW
+            ? { show: { yearStart: 'desc' } }
+            : { popularity: 'desc' }
+        : { popularity: 'desc' };
     const [rows, total] = await Promise.all([
       this.prisma.mediaItem.findMany({
         where,
         skip: ((q.page || 1) - 1) * (q.pageSize || 20),
         take: q.pageSize,
-        orderBy: { popularity: 'desc' },
+        orderBy,
       }),
       this.prisma.mediaItem.count({ where }),
     ]);
@@ -233,6 +345,8 @@ export class DiscoveryService {
       year: q.yearFrom,
       sort: q.sort,
       page: q.page,
+      excludeGenres: await this.tmdbIdsForSlugs(this.parseSlugList(q.excludeGenres)),
+      country: q.country?.trim().toUpperCase() || undefined,
     });
     const ids = await Promise.all(res.items.map((i) => this.meta.lightUpsertShow(i)));
     const items = await this.fetchListDtos(ids, userId);
@@ -246,6 +360,8 @@ export class DiscoveryService {
       year: q.yearFrom,
       sort: q.sort,
       page: q.page,
+      excludeGenres: await this.tmdbIdsForSlugs(this.parseSlugList(q.excludeGenres)),
+      country: q.country?.trim().toUpperCase() || undefined,
     });
     const ids = await Promise.all(res.items.map((i) => this.meta.lightUpsertMovie(i)));
     const items = await this.fetchListDtos(ids, userId);
@@ -262,9 +378,9 @@ export class DiscoveryService {
   private async cachedTrendingEntries(
     kind: 'show' | 'movie',
     page: number,
-  ): Promise<{ id: string; g: number[] }[]> {
-    const key = `trending:ids:v2:${kind}:${currentLanguage()}:${page}`;
-    const cached = await this.redis.get<{ id: string; g: number[] }[]>(key);
+  ): Promise<TrendingEntry[]> {
+    const key = `trending:ids:v3:${kind}:${currentLanguage()}:${page}`;
+    const cached = await this.redis.get<TrendingEntry[]>(key);
     if (cached?.length) return cached;
     const items = kind === 'show'
       ? await this.tmdb.trendingShows('week', page)
@@ -273,22 +389,32 @@ export class DiscoveryService {
       items.map(async (i) => ({
         id: await (kind === 'show' ? this.meta.lightUpsertShow(i) : this.meta.lightUpsertMovie(i)),
         g: i.genreIds ?? [],
+        oc: i.originCountries ?? [],
       })),
     );
     if (entries.length) await this.redis.set(key, entries, 300);
     return entries;
   }
 
-  async trendingShows(userId?: string, page = 1, pageSize = 20, genre?: string) {
+  async trendingShows(
+    userId?: string,
+    page = 1,
+    pageSize = 20,
+    genre?: string,
+    filters?: ExploreFiltersDto,
+  ) {
     if (!this.tmdb.enabled)
       return {
-        items: await this.topDb(MediaType.SHOW, pageSize, userId, genre ? ({ genre } as DiscoverQueryDto) : undefined),
+        items: await this.topDb(MediaType.SHOW, pageSize, userId, { ...filters, genre }),
         page,
         hasMore: false,
       };
+    // NOTE: TMDB trending has no server-side sort — `sort` only applies to the DB
+    // fallback above; exclusion/country/hideAnime filter the window below.
+    const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
     const g = genre?.trim();
-    if (g) {
-      const win = await this.trendingWindow('show', g, page * pageSize);
+    if (g || this.parseSlugList(filters?.excludeGenres).length > 0 || filters?.country?.trim()) {
+      const win = await this.trendingWindow('show', g, page * pageSize, hideAnime, filters);
       const items = await this.fetchListDtos(
         win.ids.slice((page - 1) * pageSize, page * pageSize),
         userId,
@@ -297,20 +423,28 @@ export class DiscoveryService {
       return { items, page, hasMore: win.ids.length > page * pageSize || !win.exhausted };
     }
     const entries = await this.cachedTrendingEntries('show', page);
-    const listItems = await this.fetchListDtos(entries.map((e) => e.id), userId, pageSize);
+    const visible = hideAnime ? await this.filterAnimeEntries(entries) : entries;
+    const listItems = await this.fetchListDtos(visible.map((e) => e.id), userId, pageSize);
     return { items: listItems, page, hasMore: entries.length === 20 };
   }
 
-  async trendingMovies(userId?: string, page = 1, pageSize = 20, genre?: string) {
+  async trendingMovies(
+    userId?: string,
+    page = 1,
+    pageSize = 20,
+    genre?: string,
+    filters?: ExploreFiltersDto,
+  ) {
     if (!this.tmdb.enabled)
       return {
-        items: await this.topDb(MediaType.MOVIE, pageSize, userId, genre ? ({ genre } as DiscoverQueryDto) : undefined),
+        items: await this.topDb(MediaType.MOVIE, pageSize, userId, { ...filters, genre }),
         page,
         hasMore: false,
       };
+    const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
     const g = genre?.trim();
-    if (g) {
-      const win = await this.trendingWindow('movie', g, page * pageSize);
+    if (g || this.parseSlugList(filters?.excludeGenres).length > 0 || filters?.country?.trim()) {
+      const win = await this.trendingWindow('movie', g, page * pageSize, hideAnime, filters);
       const items = await this.fetchListDtos(
         win.ids.slice((page - 1) * pageSize, page * pageSize),
         userId,
@@ -319,23 +453,31 @@ export class DiscoveryService {
       return { items, page, hasMore: win.ids.length > page * pageSize || !win.exhausted };
     }
     const entries = await this.cachedTrendingEntries('movie', page);
-    const listItems = await this.fetchListDtos(entries.map((e) => e.id), userId, pageSize);
+    const visible = hideAnime ? await this.filterAnimeEntries(entries) : entries;
+    const listItems = await this.fetchListDtos(visible.map((e) => e.id), userId, pageSize);
     return { items: listItems, page, hasMore: entries.length === 20 };
   }
 
   /**
-   * Genre-filtered trending window: a genre chip applied to a single 20-item
-   * trending page leaves only a handful of cards (and an unscrollable see-all —
-   * short content never fires onEndReached), so filtered results are accumulated
-   * across upstream pages (cap 10) and cached per (kind, lang, genre). The window
-   * expands on demand when deeper pages are requested.
+   * Filtered trending window: a genre chip (or exclusion/country filter) applied to
+   * a single 20-item trending page leaves only a handful of cards (and an
+   * unscrollable see-all — short content never fires onEndReached), so filtered
+   * results are accumulated across upstream pages (cap 10) and cached per
+   * (kind, lang, genre, filter fingerprint). The window expands on demand when
+   * deeper pages are requested.
    */
   private async trendingWindow(
     kind: 'show' | 'movie',
-    genre: string,
+    genre: string | undefined,
     target: number,
+    hideAnime = false,
+    filters?: ExploreFiltersDto,
   ): Promise<{ ids: string[]; upstreamPages: number; exhausted: boolean }> {
-    const key = `trending:filtered:v1:${kind}:${currentLanguage()}:${genre.toLowerCase()}`;
+    // Filter fingerprint: exclusion slugs + country scope the cached window —
+    // same pattern as the :noanime|:all segment.
+    const exclude = this.parseSlugList(filters?.excludeGenres);
+    const country = filters?.country?.trim().toUpperCase();
+    const key = `trending:filtered:v1:${kind}:${currentLanguage()}:${genre?.toLowerCase() || 'all'}:${hideAnime ? 'noanime' : 'all'}:${exclude.join(',') || '-'}:${country || '-'}`;
     const win = (await this.redis.get<{ ids: string[]; upstreamPages: number; exhausted: boolean }>(key))
       ?? { ids: [], upstreamPages: 0, exhausted: false };
     let rounds = 0;
@@ -351,7 +493,9 @@ export class DiscoveryService {
         win.exhausted = true;
         break;
       }
-      win.ids.push(...(await this.applyGenreToEntries(entries, genre)));
+      const visible = hideAnime ? await this.filterAnimeEntries(entries) : entries;
+      const kept = await this.filterEntriesExcluding(visible, exclude, country);
+      win.ids.push(...(await this.applyGenreToEntries(kept, genre)));
       if (entries.length < 20) win.exhausted = true;
     }
     win.ids = [...new Set(win.ids)];
@@ -360,7 +504,7 @@ export class DiscoveryService {
   }
 
   private async applyGenreToEntries(
-    entries: { id: string; g: number[] }[],
+    entries: TrendingEntry[],
     genre?: string,
   ): Promise<string[]> {
     const ids = entries.map((e) => e.id);
@@ -428,6 +572,100 @@ export class DiscoveryService {
     );
   }
 
+  /** Comma-separated slug list → trimmed, lowercased, deduped. */
+  private parseSlugList(value?: string): string[] {
+    return [
+      ...new Set(
+        (value ?? '')
+          .split(',')
+          .map((s) => s.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    ];
+  }
+
+  /**
+   * Genre slugs → TMDB genre ids, reusing the same mapping as filterIdsByGenre:
+   * the row's English base name maps slug → TMDB genre id (unknown slugs fall back
+   * to the raw slug as a name, matching filterIdsByGenre's row?.name ?? genre).
+   */
+  private async tmdbIdsForSlugs(slugs: string[]): Promise<number[]> {
+    if (slugs.length === 0) return [];
+    const rows = await this.prisma.genre.findMany({
+      where: { slug: { in: slugs, mode: 'insensitive' } },
+      select: { slug: true, name: true },
+    });
+    const found = new Set(rows.map((r) => r.slug.toLowerCase()));
+    const names = [...rows.map((r) => r.name), ...slugs.filter((s) => !found.has(s))];
+    const ids = (await Promise.all(names.map((n) => this.tmdbGenreIds(n)))).flat();
+    return [...new Set(ids)];
+  }
+
+  /**
+   * Inverse of filterIdsByGenre: drop ids matching ANY of the excluded slugs —
+   * hydrated rows via the media_genres join, light rows via cached TMDB payload ids.
+   */
+  private async excludeIdsByGenres(
+    ids: string[],
+    slugs: string[],
+    payloadGenreIds: Record<string, number[]>,
+  ): Promise<string[]> {
+    if (ids.length === 0 || slugs.length === 0) return ids;
+    const [tmdbIds, dbRows] = await Promise.all([
+      this.tmdbIdsForSlugs(slugs),
+      this.prisma.mediaItem.findMany({
+        where: {
+          id: { in: ids },
+          genres: { some: { genre: { slug: { in: slugs, mode: 'insensitive' } } } },
+        },
+        select: { id: true },
+      }),
+    ]);
+    const excluded = new Set(dbRows.map((r) => r.id));
+    return ids.filter(
+      (id) => !excluded.has(id) && !(payloadGenreIds[id] ?? []).some((g) => tmdbIds.includes(g)),
+    );
+  }
+
+  /**
+   * Country filter over an id window (provider search path): shows match on
+   * originCountries, movies on the production country. Light rows carry no origin
+   * data yet, so they join the filtered window only once hydrated.
+   */
+  private async filterIdsByCountry(ids: string[], country: string): Promise<string[]> {
+    if (ids.length === 0) return ids;
+    const rows = await this.prisma.mediaItem.findMany({
+      where: {
+        id: { in: ids },
+        OR: [
+          { show: { is: { originCountries: { has: country } } } },
+          { movie: { is: { country: { equals: country, mode: 'insensitive' } } } },
+        ],
+      },
+      select: { id: true },
+    });
+    const keep = new Set(rows.map((r) => r.id));
+    return ids.filter((id) => keep.has(id));
+  }
+
+  /**
+   * Exclusion + country filters on trending entries, straight from the cached
+   * payload signals (genre ids + origin countries) — zero extra provider calls.
+   */
+  private async filterEntriesExcluding(
+    entries: TrendingEntry[],
+    excludeSlugs: string[],
+    country?: string,
+  ): Promise<TrendingEntry[]> {
+    let out = entries;
+    if (excludeSlugs.length) {
+      const tmdbIds = await this.tmdbIdsForSlugs(excludeSlugs);
+      out = out.filter((e) => !e.g.some((g) => tmdbIds.includes(g)));
+    }
+    if (country) out = out.filter((e) => (e.oc ?? []).includes(country));
+    return out;
+  }
+
   /** Genres present in the catalog, most-used first — filter chip lists. */
   async listGenres(): Promise<GenreFilterDto[]> {
     const rows = await this.prisma.genre.findMany({
@@ -442,34 +680,43 @@ export class DiscoveryService {
     }));
   }
 
-  async discoverSections(userId?: string, genre?: string) {
+  async discoverSections(userId?: string, genre?: string, filters?: ExploreFiltersDto) {
     const g = genre?.trim() || undefined;
     const [trendingShows, trendingMovies] = await Promise.all([
       this.tmdb.enabled
-        ? this.trendingShows(userId, 1, 20, g)
-        : { items: await this.topDb(MediaType.SHOW, 20, userId, g ? ({ genre: g } as DiscoverQueryDto) : undefined), page: 1, hasMore: false },
+        ? this.trendingShows(userId, 1, 20, g, filters)
+        : { items: await this.topDb(MediaType.SHOW, 20, userId, { ...filters, genre: g }), page: 1, hasMore: false },
       this.tmdb.enabled
-        ? this.trendingMovies(userId, 1, 20, g)
-        : { items: await this.topDb(MediaType.MOVIE, 20, userId, g ? ({ genre: g } as DiscoverQueryDto) : undefined), page: 1, hasMore: false },
+        ? this.trendingMovies(userId, 1, 20, g, filters)
+        : { items: await this.topDb(MediaType.MOVIE, 20, userId, { ...filters, genre: g }), page: 1, hasMore: false },
     ]);
     const topForYou = userId
-      ? (await this.forYou(userId, 1, 10, g)).items
+      ? (await this.forYou(userId, 1, 10, g, filters)).items
       : trendingShows.items.slice(0, 10);
     return { topForYou, trendingShows: trendingShows.items, trendingMovies: trendingMovies.items };
   }
 
   /**
    * Paginated "Top shows for you": the full ranked suggestion list is cached per
-   * (user, genre, lang) for 5 min, so both the Explore carousel (page 1, size 10)
-   * and the see-all (20/page, infinite scroll) page through ONE ranking ordered
-   * best-first. Anonymous users get trending shows.
+   * (user, genre, filter fingerprint, lang) for 5 min, so both the Explore
+   * carousel (page 1, size 10) and the see-all (20/page, infinite scroll) page
+   * through ONE ranking ordered best-first. Anonymous users get trending shows.
    */
-  async forYou(userId: string | undefined, page = 1, pageSize = 20, genre?: string) {
-    if (!userId) return this.trendingShows(undefined, page, pageSize, genre);
-    const key = `foryou:v1:${userId}:${genre?.trim().toLowerCase() || 'all'}:${currentLanguage()}`;
+  async forYou(
+    userId: string | undefined,
+    page = 1,
+    pageSize = 20,
+    genre?: string,
+    filters?: ExploreFiltersDto,
+  ) {
+    if (!userId) return this.trendingShows(undefined, page, pageSize, genre, filters);
+    const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
+    // Filter fingerprint segment — same pattern as :noanime|:all.
+    const fp = `${this.parseSlugList(filters?.excludeGenres).join(',') || '-'}:${filters?.country?.trim().toUpperCase() || '-'}`;
+    const key = `foryou:v1:${userId}:${genre?.trim().toLowerCase() || 'all'}:${currentLanguage()}:${hideAnime ? 'noanime' : 'all'}:${fp}`;
     let ids = await this.redis.get<string[]>(key);
     if (!ids) {
-      ids = await this.rankForYouIds(userId, genre?.trim() || undefined);
+      ids = await this.rankForYouIds(userId, genre?.trim() || undefined, hideAnime, filters);
       await this.redis.set(key, ids, 300);
     }
     const items = await this.fetchListDtos(ids.slice((page - 1) * pageSize, page * pageSize), userId, pageSize);
@@ -485,7 +732,14 @@ export class DiscoveryService {
    * pool is that genre's whole catalog (affinity still drives the ranking), so a
    * filter never starves the section. Returns the ranked ids (cap 300).
    */
-  private async rankForYouIds(userId: string, genre?: string): Promise<string[]> {
+  private async rankForYouIds(
+    userId: string,
+    genre?: string,
+    hideAnime = false,
+    filters?: ExploreFiltersDto,
+  ): Promise<string[]> {
+    const exclude = this.parseSlugList(filters?.excludeGenres);
+    const country = filters?.country?.trim().toUpperCase();
     // Score genres: watch history counts double, favorites +1 each.
     // Aggregates in SQL — the old findMany pulled every mediaGenre row for the
     // user's entire history/favorites (thousands of rows) on every Discover open.
@@ -553,11 +807,21 @@ export class DiscoveryService {
       where: {
         type: MediaType.SHOW,
         posterUrl: { not: null },
+        // User opted out of anime: ANIME-classified rows leave the candidate pool.
+        ...(hideAnime ? { contentClassification: { not: 'ANIME' } } : {}),
         // Genre filter active: the pool is that genre's catalog (affinity only ranks).
-        // Otherwise: the pool is the user's affinity genres.
-        genres: genre
-          ? { some: { genre: { slug: { equals: genre, mode: 'insensitive' } } } }
-          : { some: { genre: { name: { in: genreNames } } } },
+        // Otherwise: the pool is the user's affinity genres. Excluded slugs leave the
+        // pool either way (some + none combine on the genres relation).
+        genres: {
+          ...(genre
+            ? { some: { genre: { slug: { equals: genre, mode: 'insensitive' as const } } } }
+            : { some: { genre: { name: { in: genreNames } } } }),
+          ...(exclude.length
+            ? { none: { genre: { slug: { in: exclude, mode: 'insensitive' as const } } } }
+            : {}),
+        },
+        // Country filter: shows match on originCountries (pool is shows-only).
+        ...(country ? { show: { is: { originCountries: { has: country } } } } : {}),
         id: { notIn: excludedIds },
       },
       include: {
@@ -602,17 +866,46 @@ export class DiscoveryService {
     return this.topDb(type, q.pageSize || 20, userId, q);
   }
 
-  private async topDb(type: MediaType, limit: number, userId?: string, q?: DiscoverQueryDto) {
-    const where = {
+  private async topDb(type: MediaType, limit: number, userId?: string, q?: ExploreFilterInput) {
+    const hideAnime = (q?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
+    const exclude = this.parseSlugList(q?.excludeGenres);
+    const country = q?.country?.trim().toUpperCase();
+    const genreSome = q?.genre?.trim()
+      ? { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } }
+      : undefined;
+    const where: Prisma.MediaItemWhereInput = {
       type,
-      ...(q?.genre?.trim()
-        ? { genres: { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } } }
+      ...(hideAnime ? { contentClassification: { not: 'ANIME' as const } } : {}),
+      // some + none combine on the genres relation: inclusion chip AND multi-exclusion.
+      ...(genreSome || exclude.length
+        ? {
+            genres: {
+              ...(genreSome ?? {}),
+              ...(exclude.length
+                ? { none: { genre: { slug: { in: exclude, mode: 'insensitive' as const } } } }
+                : {}),
+            },
+          }
         : {}),
       ...(q?.minRating ? { rating: { gte: q.minRating } } : {}),
+      // Country: shows match originCountries, movies the production country.
+      ...(country
+        ? type === MediaType.MOVIE
+          ? { movie: { is: { country: { equals: country, mode: 'insensitive' as const } } } }
+          : { show: { is: { originCountries: { has: country } } } }
+        : {}),
     };
+    // releaseDate sort is year-granular for shows (yearStart — shows store no full
+    // release date); default popularity is unchanged.
+    const orderBy: Prisma.MediaItemOrderByWithRelationInput =
+      q?.sort === 'releaseDate'
+        ? type === MediaType.MOVIE
+          ? { movie: { releaseDate: 'desc' } }
+          : { show: { yearStart: 'desc' } }
+        : { popularity: 'desc' };
     const rows = await this.prisma.mediaItem.findMany({
       where,
-      orderBy: { popularity: 'desc' },
+      orderBy,
       take: limit,
     });
     return this.fetchListDtos(rows.map((r) => r.id), userId);
@@ -633,7 +926,8 @@ export class DiscoveryService {
     const media = await this.prisma.mediaItem.findMany({
       where: { id: { in: limitedIds } },
       include: {
-        show: { select: { episodesCount: true } },
+        show: { select: { episodesCount: true, yearStart: true } },
+        movie: { select: { releaseYear: true } },
         ...(userId
           ? {
               watchlist: { where: { userId }, select: { id: true } },

@@ -270,3 +270,60 @@ export interface SearchQuery extends PaginationQuery {
   q: string;
   type?: MediaType | 'ALL';
 }
+
+// ---------------------------------------------------------------------------
+// Activity feed (GET /feed) — merged live activity of the viewer + followings.
+// ---------------------------------------------------------------------------
+
+/** Activity-feed event kinds (union over the live activity tables). */
+export type FeedItemType =
+  | 'WATCHED'
+  | 'WATCHLISTED'
+  | 'FAVORITED'
+  | 'RATED'
+  | 'REACTED'
+  | 'COMMENTED';
+
+/** Media card attached to a feed item (always resolvable to a detail route). */
+export interface FeedMediaDto {
+  id: string;
+  type: 'SHOW' | 'MOVIE';
+  title: string;
+  posterUrl?: string | null;
+  year?: number | null;
+}
+
+/** Per-type extras: rating value, reaction, comment excerpt, episode numbers. */
+export interface FeedItemDetailDto {
+  /** 1..5 (RATED only). */
+  rating?: number;
+  /** ReactionType value (REACTED only). */
+  reaction?: string;
+  /** Comment excerpt (COMMENTED only; omitted when spoiler-masked). */
+  excerpt?: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
+}
+
+export interface FeedItemDto {
+  /** Source-prefixed row id (unique across activity sources). */
+  id: string;
+  user: {
+    id: string;
+    username: string;
+    displayName?: string | null;
+    avatarUrl?: string | null;
+  };
+  type: FeedItemType;
+  media: FeedMediaDto;
+  detail?: FeedItemDetailDto;
+  /** Spoiler comment — the excerpt is masked server-side, render the spoiler treatment. */
+  spoiler?: boolean;
+  createdAt: string;
+}
+
+/** Cursor page of feed items (newest first; cursor = last item's (createdAt, id)). */
+export interface FeedPageDto {
+  items: FeedItemDto[];
+  nextCursor?: string;
+}

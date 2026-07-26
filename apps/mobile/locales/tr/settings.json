@@ -6,6 +6,8 @@
   "bio": "Biyografi",
   "private": "Gizli profil",
   "privateHint": "Profilini ve etkinliğini diğer kullanıcılardan gizle",
+  "hideAnime": "Keşfet’te animeleri gizle",
+  "hideAnimeHint": "Animeleri Keşfet, gündem ve önerilerden hariç tut",
   "avatar": "Avatar",
   "changeAvatar": "Avatarı değiştir",
   "cover": "Kapak",

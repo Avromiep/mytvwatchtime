@@ -165,6 +165,7 @@ export default function ListDetailScreen() {
                   ) : null}
                 </View>
                 <T variant="micro" numberOfLines={2} style={{ marginTop: 4 }}>{item.title}</T>
+                {item.year ? <T variant="micro" muted numberOfLines={1} style={{ marginTop: 2 }}>{item.year}</T> : null}
               </Pressable>
             ))}
             {/* Invisible spacers keep incomplete rows aligned with the 3-column grid */}

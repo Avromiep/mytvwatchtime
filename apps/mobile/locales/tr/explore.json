@@ -10,5 +10,35 @@
   "trendingMovies": "Trend Filmler",
   "seeAll": "Tümünü gör",
   "mediaTypeShow": "Dizi",
-  "mediaTypeMovie": "Film"
+  "mediaTypeMovie": "Film",
+  "filters": {
+    "genre": "Tür",
+    "exclude": "Hariç tut",
+    "order": "Sıralama",
+    "type": "Tip",
+    "country": "Ülke",
+    "hideAnime": "Animeyi gizle",
+    "orderPopularity": "Popülerlik",
+    "orderReleaseDate": "Çıkış tarihi",
+    "typeBoth": "İkisi de",
+    "typeMovies": "Filmler",
+    "typeShows": "Diziler",
+    "countries": {
+      "US": "Amerika Birleşik Devletleri",
+      "GB": "Birleşik Krallık",
+      "FR": "Fransa",
+      "DE": "Almanya",
+      "ES": "İspanya",
+      "IT": "İtalya",
+      "JP": "Japonya",
+      "KR": "Güney Kore",
+      "CN": "Çin",
+      "IN": "Hindistan",
+      "TR": "Türkiye",
+      "BR": "Brezilya",
+      "MX": "Meksika",
+      "CA": "Kanada",
+      "AU": "Avustralya"
+    }
+  }
 }

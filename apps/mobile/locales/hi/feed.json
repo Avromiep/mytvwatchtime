@@ -1,0 +1,11 @@
+{
+  "watched": "{{name}} ने {{title}} देखा",
+  "watchlisted": "{{name}} ने {{title}} को अपनी वॉचलिस्ट में जोड़ा",
+  "favorited": "{{name}} ने {{title}} को पसंदीदा बनाया",
+  "rated": "{{name}} ने {{title}} को {{value}}/5 रेट किया",
+  "reacted": "{{name}} ने {{title}} पर {{reaction}} प्रतिक्रिया दी",
+  "commented": "{{name}} ने {{title}} पर टिप्पणी की",
+  "seeMoreFrom": "{{name}} की और गतिविधियाँ देखें",
+  "emptyTitle": "अभी कोई गतिविधि नहीं",
+  "emptySubtitle": "लोगों को फ़ॉलो करें और देखें कि वे क्या देख रहे हैं।"
+}

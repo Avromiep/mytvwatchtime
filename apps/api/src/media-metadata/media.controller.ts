@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { OptionalJwtAuthGuard } from '../common/guards/optional-jwt.guard';
 import { DiscoveryService } from './discovery.service';
-import { DiscoverQueryDto, SearchQueryDto } from './dto/discover.dto';
+import { DiscoverQueryDto, SearchQueryDto, TrendingQueryDto } from './dto/discover.dto';
 
 @ApiTags('discovery')
 @Controller()
@@ -34,42 +34,30 @@ export class MediaController {
   @Get('trending/shows')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
-  trendingShows(
-    @Query('page') page = '1',
-    @Query('genre') genre: string | undefined,
-    @CurrentUser('id') userId?: string,
-  ) {
-    return this.discovery.trendingShows(userId, parseInt(page), 20, genre);
+  trendingShows(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
+    return this.discovery.trendingShows(userId, q.page ?? 1, 20, q.genre, q);
   }
 
   @Get('trending/movies')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
-  trendingMovies(
-    @Query('page') page = '1',
-    @Query('genre') genre: string | undefined,
-    @CurrentUser('id') userId?: string,
-  ) {
-    return this.discovery.trendingMovies(userId, parseInt(page), 20, genre);
+  trendingMovies(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
+    return this.discovery.trendingMovies(userId, q.page ?? 1, 20, q.genre, q);
   }
 
   @Get('discover/sections')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
-  sections(@Query('genre') genre: string | undefined, @CurrentUser('id') userId?: string) {
-    return this.discovery.discoverSections(userId, genre);
+  sections(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
+    return this.discovery.discoverSections(userId, q.genre, q);
   }
 
   /** Paginated personalized suggestions (see-all for "Top shows for you"). */
   @Get('discover/for-you')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
-  forYou(
-    @Query('page') page = '1',
-    @Query('genre') genre: string | undefined,
-    @CurrentUser('id') userId?: string,
-  ) {
-    return this.discovery.forYou(userId, parseInt(page), 20, genre);
+  forYou(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
+    return this.discovery.forYou(userId, q.page ?? 1, 20, q.genre, q);
   }
 
   /** Catalog genres (most-used first) — filter chip lists in explore/search/see-all. */

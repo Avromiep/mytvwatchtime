@@ -6,6 +6,8 @@
   "bio": "소개",
   "private": "비공개 프로필",
   "privateHint": "다른 사용자에게 프로필과 활동을 숨깁니다",
+  "hideAnime": "탐색에서 애니메이션 숨기기",
+  "hideAnimeHint": "탐색, 트렌딩, 추천에서 애니메이션을 제외합니다",
   "avatar": "아바타",
   "changeAvatar": "아바타 변경",
   "cover": "커버",

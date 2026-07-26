@@ -133,6 +133,10 @@ export interface ShowDto {
   runtimeMinutes?: number | null;
   rating?: number | null;
   network?: string | null;
+  /** ISO 3166-1 origin country codes (e.g. ["US","JP"]). */
+  originCountries?: string[];
+  /** ISO 639 original language code (e.g. "en", "ja"). */
+  originalLanguage?: string | null;
   genres: GenreDto[];
   providers: WatchProviderDto[];
   cast: CastMemberDto[];
@@ -156,6 +160,10 @@ export interface MovieDto {
   releaseYear?: number | null;
   runtimeMinutes?: number | null;
   rating?: number | null;
+  /** ISO 3166-1 origin country code (e.g. "US"). */
+  country?: string | null;
+  /** ISO 639 original language code (e.g. "en"). */
+  language?: string | null;
   genres: GenreDto[];
   providers: WatchProviderDto[];
   cast: CastMemberDto[];
@@ -170,11 +178,23 @@ export interface MovieDto {
   trailerUrl?: string | null;
 }
 
+export interface RecommendationDto {
+  /** TMDB id of the recommended media (NOT our internal media id). */
+  tmdbId: number;
+  type: 'SHOW' | 'MOVIE';
+  title: string;
+  posterUrl?: string | null;
+  year?: number | null;
+  rating?: number | null;
+}
+
 export interface ShowDetailDto extends ShowDto {
   seasons: SeasonSummaryDto[];
   seasonsWithSpecials?: SeasonSummaryDto[];
   communityRatings?: { season: number; rating: number; votes: number }[];
   interactions: ShowInteractionsDto;
+  /** TMDB /recommendations snapshot (tmdbId-keyed, not internal ids). */
+  recommendations?: RecommendationDto[];
 }
 
 export interface EpisodeDetailDto extends EpisodeDto {
@@ -190,8 +210,11 @@ export interface EpisodeDetailDto extends EpisodeDto {
 }
 
 export interface MovieDetailDto extends MovieDto {
+  /** Dead field — never populated; kept for compatibility. `recommendations` supersedes it. */
   similar: MovieDto[];
   interactions: MovieInteractionsDto;
+  /** TMDB /recommendations snapshot (tmdbId-keyed, not internal ids). */
+  recommendations?: RecommendationDto[];
 }
 
 // ---------------- Networks ----------------

@@ -69,6 +69,8 @@ export interface HistoryItemDto {
   posterUrl?: string | null;
   /** TMDB vote average (1..10) — null until the row carries a rating. */
   rating?: number | null;
+  /** Release/start year (show.yearStart / movie.releaseYear). */
+  year?: number | null;
   episodeId?: string;
   seasonNumber?: number;
   episodeNumber?: number;

@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
+import { ExternalProvider, MediaType, ProviderEntityKind, RecommendationDto } from '@tvwatch/shared';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -1221,6 +1221,10 @@ export class MediaMetadataService {
             data.backdropUrl,
             enData?.backdropUrl,
           ),
+          // TVDB supplies no recommendations — never clobber the TMDB snapshot.
+          ...(data.recommendations
+            ? { recommendations: data.recommendations as any, recommendationsSyncedAt: new Date() }
+            : {}),
         };
 
         let mediaId = existingId;
@@ -1410,6 +1414,10 @@ export class MediaMetadataService {
             data.backdropUrl,
             englishBase?.backdropUrl,
           ),
+          // TVDB supplies no recommendations — never clobber the TMDB snapshot.
+          ...(data.recommendations
+            ? { recommendations: data.recommendations as any, recommendationsSyncedAt: new Date() }
+            : {}),
         };
 
         let mediaId = existingId;
@@ -1563,7 +1571,14 @@ export class MediaMetadataService {
       userProgress = totalEp > 0 ? watchedEp / totalEp : 0;
     }
 
-    return { ...dto, seasons, seasonsWithSpecials: specials, seasonRatings, userProgress };
+    return {
+      ...dto,
+      seasons,
+      seasonsWithSpecials: specials,
+      seasonRatings,
+      userProgress,
+      recommendations: recommendationsDto(media.recommendations),
+    };
   }
 
   private async computeSeasonRatings(mediaId: string) {
@@ -1674,7 +1689,10 @@ export class MediaMetadataService {
       },
     });
     if (!media || !media.movie) throw new NotFoundException('Movie not found');
-    return mapMovie(media as any, userId);
+    return {
+      ...mapMovie(media as any, userId),
+      recommendations: recommendationsDto(media.recommendations),
+    };
   }
 
   // ---- Mapping normalized seasons/episodes ----
@@ -1997,6 +2015,23 @@ export class MediaMetadataService {
       },
     });
   }
+}
+
+/** Defensive parse of the media_items.recommendations JSON snapshot → DTO.
+ *  Unknown/garbled shapes (legacy rows, partial writes) become an empty array. */
+function recommendationsDto(raw: unknown): RecommendationDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((r): r is Record<string, any> => !!r && typeof r === 'object')
+    .filter((r) => typeof r.tmdbId === 'number')
+    .map((r) => ({
+      tmdbId: r.tmdbId,
+      type: r.type === 'MOVIE' ? ('MOVIE' as const) : ('SHOW' as const),
+      title: typeof r.title === 'string' && r.title ? r.title : 'Untitled',
+      posterUrl: typeof r.posterUrl === 'string' ? r.posterUrl : null,
+      year: typeof r.year === 'number' ? r.year : null,
+      rating: typeof r.rating === 'number' ? r.rating : null,
+    }));
 }
 
 type PrismaTransaction = Omit<

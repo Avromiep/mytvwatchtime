@@ -930,6 +930,122 @@ describe('MetadataBackfillService', () => {
   });
 });
 
+describe('MetadataBackfillService — recommendations backfill', () => {
+  function make(opts: {
+    candidates?: any[];
+    enabled?: boolean;
+    providerImpl?: (id: number) => Promise<any[]>;
+  }) {
+    const prisma: any = {
+      mediaItem: {
+        count: jest.fn(async () => 0),
+        groupBy: jest.fn(async () => []),
+        update: jest.fn(async () => ({})),
+      },
+      $queryRaw: jest.fn(async () => opts.candidates ?? []),
+    };
+    const redis: any = { get: jest.fn(async () => null) };
+    const tmdbProvider: any = {
+      enabled: opts.enabled ?? true,
+      getShowRecommendations: jest.fn(opts.providerImpl ?? (async () => [])),
+      getMovieRecommendations: jest.fn(opts.providerImpl ?? (async () => [])),
+    };
+    const service = new MetadataBackfillService(
+      prisma,
+      {} as any,
+      {} as any,
+      redis,
+      {} as any,
+      {} as any,
+      tmdbProvider,
+      {} as any,
+    );
+    return { service, prisma, tmdbProvider };
+  }
+
+  const candidate = (over: Record<string, unknown> = {}) => ({
+    id: 'm1',
+    title: 'The Office',
+    type: 'SHOW',
+    tmdb: '2316',
+    ...over,
+  });
+
+  it('health stat selects rows with a TMDB id and recommendations_synced_at IS NULL', async () => {
+    const { service, prisma } = make({});
+    const stats = await service.getHealthStats();
+    expect(stats).toMatchObject({ recommendationsMissing: 0 });
+    const sqls = (prisma.$queryRaw as jest.Mock).mock.calls.map((c) =>
+      (Array.isArray(c[0]) ? c[0].join(' ') : String(c[0] ?? '')).replace(/\s+/g, ' '),
+    );
+    expect(
+      sqls.some(
+        (s) =>
+          s.includes('recommendations_synced_at IS NULL') && s.includes("e.provider = 'TMDB'"),
+      ),
+    ).toBe(true);
+  });
+
+  it('repair selection SQL mirrors the stat (null stamp + TMDB id), writes snapshot + stamp', async () => {
+    const recs = [{ tmdbId: 5, type: 'SHOW', title: 'Parks and Recreation' }];
+    const { service, prisma, tmdbProvider } = make({
+      candidates: [candidate()],
+      providerImpl: async () => recs,
+    });
+
+    const res = await service.repairRecommendations(100);
+
+    const [parts] = (prisma.$queryRaw as jest.Mock).mock.calls[0];
+    const sql = parts.join(' ');
+    expect(sql).toContain('recommendations_synced_at IS NULL');
+    expect(tmdbProvider.getShowRecommendations).toHaveBeenCalledWith(2316);
+    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'm1' },
+      data: { recommendations: recs, recommendationsSyncedAt: expect.any(Date) },
+    });
+    expect(res).toEqual({ processed: 1, succeeded: 1, failed: 0, sample: ['The Office'] });
+  });
+
+  it('movies use the movie endpoint; empty provider results still stamp the row', async () => {
+    const { service, prisma, tmdbProvider } = make({
+      candidates: [candidate({ type: 'MOVIE', tmdb: '550' })],
+      providerImpl: async () => [],
+    });
+
+    const res = await service.repairRecommendations(100);
+
+    expect(tmdbProvider.getMovieRecommendations).toHaveBeenCalledWith(550);
+    expect(tmdbProvider.getShowRecommendations).not.toHaveBeenCalled();
+    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'm1' },
+      data: { recommendations: [], recommendationsSyncedAt: expect.any(Date) },
+    });
+    expect(res.succeeded).toBe(1);
+  });
+
+  it('stops early on TMDB rate limits without stamping the failed row', async () => {
+    const { service, prisma, tmdbProvider } = make({
+      candidates: [candidate(), candidate({ id: 'm2', title: 'Parks and Rec' })],
+      providerImpl: async () => {
+        throw new ProviderThrottled('tmdb', 1000);
+      },
+    });
+
+    const res = await service.repairRecommendations(100);
+
+    expect(tmdbProvider.getShowRecommendations).toHaveBeenCalledTimes(1);
+    expect(prisma.mediaItem.update).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ processed: 0, succeeded: 0, failed: 0 });
+  });
+
+  it('does nothing when TMDB is not configured', async () => {
+    const { service, prisma } = make({ enabled: false });
+    const res = await service.repairRecommendations(100);
+    expect(res.processed).toBe(0);
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+});
+
 describe('MetadataBackfillService — repair progress tracking', () => {
   function make() {
     return new MetadataBackfillService(

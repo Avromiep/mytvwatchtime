@@ -13,6 +13,7 @@
   "communityRatings": "Puntuaciones de la comunidad",
   "showInfo": "Información de la serie",
   "years": "Años",
+  "originCountry": "País de origen",
   "status": "Estado",
   "genres": "Géneros",
   "runtime": "Duración",
@@ -22,5 +23,6 @@
   "comments": "Comentarios",
   "showMoreEpisodes": "Mostrar {{count}} más",
   "originalTitle": "Título original",
-  "rateShow": "Califica esta serie"
+  "rateShow": "Califica esta serie",
+  "similar": "Series similares"
 }

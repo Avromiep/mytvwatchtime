@@ -3,7 +3,7 @@ import { ActivityIndicator, Dimensions, FlatList, ScrollView, View } from 'react
 import { useLocalSearchParams } from 'expo-router';
 import { MediaType } from '@tvwatch/shared';
 import { Header } from '../components/Header';
-import { PosterCard, cardProgress } from '../components/cards';
+import { PosterCard, cardProgress, cardYear } from '../components/cards';
 import { Chip, EmptyState, Screen, Spinner } from '../components/primitives';
 import { useAllFavorites, useAllWatchlist, useGenres } from '../api/hooks';
 import { useQuery } from '@tanstack/react-query';
@@ -27,10 +27,24 @@ function useColumns() {
 export default function MoreScreen() {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['social', 'common']);
-  const { t: tab, g: initialGenre } = useLocalSearchParams<{ t: string; g?: string }>();
+  const { t: tab, g: initialGenre, x, s, c, a } = useLocalSearchParams<{
+    t: string;
+    g?: string;
+    /** Explore filters handed over as route params (x=excluded slugs csv, s=sort, c=country, a=hide anime). */
+    x?: string;
+    s?: string;
+    c?: string;
+    a?: string;
+  }>();
   // Genre filter (explore hands its active chip over via the `g` route param).
   const [genre, setGenre] = useState<string | null>(initialGenre ?? null);
   const genres = useGenres();
+  const exploreFilters = {
+    excludeGenres: x || undefined,
+    sort: s || undefined,
+    country: c || undefined,
+    hideAnime: a === '1' ? true : undefined,
+  };
 
   const TITLES: Record<string, string> = {
     'trending-shows': t('social:more.trendingShows'),
@@ -63,11 +77,12 @@ export default function MoreScreen() {
   const [loadingMore, setLoadingMore] = useState(false);
 
   const pageQuery = useQuery({
-    queryKey: ['more-page', pagedPath, page, genre ?? ''],
+    queryKey: ['more-page', pagedPath, page, genre ?? '', x ?? '', s ?? '', c ?? '', a ?? ''],
     queryFn: () =>
       api.get<{ items: any[]; hasMore: boolean }>(pagedPath!, {
         page,
         genre: genre || undefined,
+        ...exploreFilters,
       }),
     enabled: !!pagedPath,
     staleTime: 60000,
@@ -191,6 +206,7 @@ export default function MoreScreen() {
                     poster={item.posterUrl ?? item.images?.poster}
                     progress={cardProgress(item)}
                     rating={item.rating}
+                    year={cardYear(item)}
                     width={cardW}
                     style={{ marginRight: spacing.md }}
                   />

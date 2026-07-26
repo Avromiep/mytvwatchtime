@@ -38,6 +38,15 @@ export class SocialController {
     private readonly flags: FeatureFlagService,
   ) {}
 
+  @Get('feed')
+  feed(
+    @CurrentUser('id') userId: string,
+    @Query('cursor') cursor?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.social.getFeed(userId, cursor, limit ? Number(limit) : undefined);
+  }
+
   @Get('comments')
   listComments(@CurrentUser('id') userId: string, @Query() q: CommentQueryDto) {
     return this.comments.list(userId, q);

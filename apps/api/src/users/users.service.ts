@@ -81,6 +81,7 @@ export class UsersService {
         avatarUrl: dto.avatarUrl ?? null,
         coverUrl: dto.coverUrl ?? null,
         isPrivate: dto.isPrivate ?? false,
+        hideAnimeInExplore: dto.hideAnimeInExplore ?? false,
         ...(dto.themePreference
           ? { themePreference: dtoThemeToDb(dto.themePreference) as any }
           : {}),
@@ -94,6 +95,7 @@ export class UsersService {
         avatarUrl: dto.avatarUrl,
         coverUrl: dto.coverUrl,
         isPrivate: dto.isPrivate,
+        hideAnimeInExplore: dto.hideAnimeInExplore,
         ...(dto.themePreference
           ? { themePreference: dtoThemeToDb(dto.themePreference) as any }
           : {}),

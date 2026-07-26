@@ -13,6 +13,7 @@
   "communityRatings": "Penilaian komunitas",
   "showInfo": "Info acara",
   "years": "Tahun",
+  "originCountry": "Negara asal",
   "status": "Status",
   "genres": "Genre",
   "runtime": "Durasi",
@@ -22,5 +23,6 @@
   "comments": "Komentar",
   "showMoreEpisodes": "Tampilkan {{count}} lainnya",
   "originalTitle": "Judul asli",
-  "rateShow": "Beri rating acara ini"
+  "rateShow": "Beri rating acara ini",
+  "similar": "Acara serupa"
 }

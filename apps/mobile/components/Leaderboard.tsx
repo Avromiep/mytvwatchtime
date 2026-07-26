@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { PosterImage, Spinner, T, APP_ICON } from './primitives';
 import { useAppearance } from '../context/PreferencesProvider';
@@ -174,7 +174,8 @@ function LeaderboardRow({ entry, highlight }: { entry: LeaderboardEntryDto; high
   const medal =
     entry.position === 1 ? '🥇' : entry.position === 2 ? '🥈' : entry.position === 3 ? '🥉' : null;
   return (
-    <View
+    <Pressable
+      onPress={() => router.push(`/user/${entry.username}` as any)}
       style={[
         styles.row,
         { borderBottomColor: tokens.border },
@@ -202,7 +203,7 @@ function LeaderboardRow({ entry, highlight }: { entry: LeaderboardEntryDto; high
       <T variant="caption" style={{ color: tokens.primary, fontWeight: '700' }}>
         {formatWatchTime(entry.totalMinutes)}
       </T>
-    </View>
+    </Pressable>
   );
 }
 

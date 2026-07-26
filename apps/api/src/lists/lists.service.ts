@@ -195,7 +195,14 @@ export class ListsService {
     const [items, total] = await Promise.all([
       this.prisma.customListItem.findMany({
         where: { listId: id },
-        include: { media: true },
+        include: {
+          media: {
+            include: {
+              show: { select: { yearStart: true } },
+              movie: { select: { releaseYear: true } },
+            },
+          },
+        },
         orderBy: { order: 'asc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -212,6 +219,10 @@ export class ListsService {
         posterUrl: i.media.posterUrl,
         backdropUrl: i.media.backdropUrl,
         rating: i.media.rating ?? null,
+        year:
+          i.media.type === 'SHOW'
+            ? (i.media.show?.yearStart ?? null)
+            : (i.media.movie?.releaseYear ?? null),
       })),
       total,
       page,

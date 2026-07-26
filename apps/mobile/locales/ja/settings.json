@@ -22,6 +22,8 @@
   },
   "private": "非公開プロフィール",
   "privateHint": "プロフィールとアクティビティを他のユーザーに表示しない",
+  "hideAnime": "見つけるでアニメを非表示",
+  "hideAnimeHint": "見つける・トレンド・おすすめからアニメを除外します",
   "backendUrl": "バックエンドURL",
   "exportData": "データをエクスポート",
   "deleteAccount": "アカウントを削除",

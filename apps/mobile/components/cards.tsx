@@ -37,6 +37,7 @@ export function PosterCard({
   poster,
   progress,
   rating,
+  year,
   width = 130,
   style,
 }: {
@@ -47,6 +48,8 @@ export function PosterCard({
   progress?: number;
   /** TMDB vote average (1..10) — shown as a star badge on the poster when > 0. */
   rating?: number | null;
+  /** Release/start year — small caption line under the title. */
+  year?: number | null;
   width?: number;
   style?: StyleProp<ViewStyle>;
 }) {
@@ -110,6 +113,11 @@ export function PosterCard({
         <T variant="caption" numberOfLines={2} style={{ marginTop: 6 }}>
           {title}
         </T>
+        {year ? (
+          <T variant="micro" muted numberOfLines={1} style={{ marginTop: 2 }}>
+            {year}
+          </T>
+        ) : null}
       </Pressable>
     </Link>
   );
@@ -129,7 +137,7 @@ export function PosterGrid({ data, kind, emptyTitle, emptyCta, minCardWidth = 11
       {rows.map((row, ri) => (
         <View key={ri} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.sm }}>
           {row.map((it) => (
-            <PosterCard key={it.id} id={it.id} kind={kind} title={it.title} poster={it.images?.poster ?? it.posterUrl} progress={it.userProgress ?? (it.watched ? 1 : undefined)} rating={it.rating} width={cellW} style={{ marginRight: 0 }} />
+            <PosterCard key={it.id} id={it.id} kind={kind} title={it.title} poster={it.images?.poster ?? it.posterUrl} progress={it.userProgress ?? (it.watched ? 1 : undefined)} rating={it.rating} year={cardYear(it)} width={cellW} style={{ marginRight: 0 }} />
           ))}
           {Array.from({ length: cols - row.length }).map((_, fi) => (
             <View key={'f' + fi} style={{ width: cellW }} />
@@ -147,6 +155,12 @@ export function cardProgress(item: any): number | undefined {
   return undefined;
 }
 
+// Cards get a unified `year` from lite/list DTOs; full ShowDto/MovieDto expose
+// yearStart/releaseYear instead. Pick whichever the row carries.
+export function cardYear(item: any): number | null {
+  return item?.year ?? item?.yearStart ?? item?.releaseYear ?? null;
+}
+
 // ---------------- Horizontal carousel ----------------
 export function Carousel({ title, action, onAction, data, kind, width = 120 }: { title: string; action?: string; onAction?: () => void; data: any[]; kind: 'shows' | 'movies'; width?: number }) {
   if (!data || data.length === 0) return null;
@@ -162,7 +176,7 @@ export function Carousel({ title, action, onAction, data, kind, width = 120 }: {
         contentContainerStyle={{ paddingHorizontal: spacing.lg }}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <PosterCard id={item.id} kind={kind} title={item.title} poster={item.images?.poster ?? item.posterUrl} progress={cardProgress(item)} rating={item.rating} width={width} />
+          <PosterCard id={item.id} kind={kind} title={item.title} poster={item.images?.poster ?? item.posterUrl} progress={cardProgress(item)} rating={item.rating} year={cardYear(item)} width={width} />
         )}
       />
     </View>

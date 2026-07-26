@@ -6,6 +6,8 @@
   "bio": "Bio",
   "private": "Profil privé",
   "privateHint": "Masquer votre profil et votre activité aux autres utilisateurs",
+  "hideAnime": "Masquer les animés dans Explorer",
+  "hideAnimeHint": "Exclure les animés d’Explorer, des tendances et des recommandations",
   "avatar": "Avatar",
   "changeAvatar": "Changer l’avatar",
   "cover": "Image de couverture",

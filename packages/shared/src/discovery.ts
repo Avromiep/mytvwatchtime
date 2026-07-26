@@ -37,6 +37,8 @@ export interface MediaCardLiteDto {
   images: ImageSet;
   /** TMDB vote average (1..10) — null until the row carries a rating. */
   rating?: number | null;
+  /** Release/start year (show.yearStart / movie.releaseYear). */
+  year?: number | null;
   inWatchlist?: boolean;
   favorite?: boolean;
   /** Shows only: 0..1 watched fraction of AIRED episodes. */

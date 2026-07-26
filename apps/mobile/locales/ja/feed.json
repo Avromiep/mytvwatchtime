@@ -1,0 +1,11 @@
+{
+  "watched": "{{name}}さんが{{title}}を視聴しました",
+  "watchlisted": "{{name}}さんが{{title}}をウォッチリストに追加しました",
+  "favorited": "{{name}}さんが{{title}}をお気に入りに追加しました",
+  "rated": "{{name}}さんが{{title}}を{{value}}/5と評価しました",
+  "reacted": "{{name}}さんが{{title}}に{{reaction}}とリアクションしました",
+  "commented": "{{name}}さんが{{title}}にコメントしました",
+  "seeMoreFrom": "{{name}}さんのアクティビティをもっと見る",
+  "emptyTitle": "まだアクティビティがありません",
+  "emptySubtitle": "人をフォローして、視聴状況をチェックしましょう。"
+}

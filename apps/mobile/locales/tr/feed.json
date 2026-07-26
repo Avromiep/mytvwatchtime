@@ -1,0 +1,11 @@
+{
+  "watched": "{{name}} {{title}} izledi",
+  "watchlisted": "{{name}} {{title}} izleme listesine ekledi",
+  "favorited": "{{name}} {{title}} favorilere ekledi",
+  "rated": "{{name}} {{title}} için {{value}}/5 puan verdi",
+  "reacted": "{{name}} {{title}} için {{reaction}} tepkisi verdi",
+  "commented": "{{name}} {{title}} hakkında yorum yaptı",
+  "seeMoreFrom": "{{name}} kullanıcısının diğer etkinliklerini gör",
+  "emptyTitle": "Henüz etkinlik yok",
+  "emptySubtitle": "İnsanları takip ederek neler izlediklerini görün."
+}

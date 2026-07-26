@@ -10,5 +10,35 @@
   "trendingMovies": "Films tendance",
   "seeAll": "Tout voir",
   "mediaTypeShow": "Série",
-  "mediaTypeMovie": "Film"
+  "mediaTypeMovie": "Film",
+  "filters": {
+    "genre": "Genre",
+    "exclude": "Exclure",
+    "order": "Tri",
+    "type": "Type",
+    "country": "Pays",
+    "hideAnime": "Masquer les animés",
+    "orderPopularity": "Popularité",
+    "orderReleaseDate": "Date de sortie",
+    "typeBoth": "Les deux",
+    "typeMovies": "Films",
+    "typeShows": "Séries",
+    "countries": {
+      "US": "États-Unis",
+      "GB": "Royaume-Uni",
+      "FR": "France",
+      "DE": "Allemagne",
+      "ES": "Espagne",
+      "IT": "Italie",
+      "JP": "Japon",
+      "KR": "Corée du Sud",
+      "CN": "Chine",
+      "IN": "Inde",
+      "TR": "Turquie",
+      "BR": "Brésil",
+      "MX": "Mexique",
+      "CA": "Canada",
+      "AU": "Australie"
+    }
+  }
 }

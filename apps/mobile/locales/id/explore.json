@@ -10,5 +10,35 @@
   "trendingMovies": "Film Tren",
   "seeAll": "Lihat semua",
   "mediaTypeShow": "Acara TV",
-  "mediaTypeMovie": "Film"
+  "mediaTypeMovie": "Film",
+  "filters": {
+    "genre": "Genre",
+    "exclude": "Kecualikan",
+    "order": "Urutan",
+    "type": "Jenis",
+    "country": "Negara",
+    "hideAnime": "Sembunyikan anime",
+    "orderPopularity": "Popularitas",
+    "orderReleaseDate": "Tanggal rilis",
+    "typeBoth": "Keduanya",
+    "typeMovies": "Film",
+    "typeShows": "Serial",
+    "countries": {
+      "US": "Amerika Serikat",
+      "GB": "Britania Raya",
+      "FR": "Prancis",
+      "DE": "Jerman",
+      "ES": "Spanyol",
+      "IT": "Italia",
+      "JP": "Jepang",
+      "KR": "Korea Selatan",
+      "CN": "Tiongkok",
+      "IN": "India",
+      "TR": "Turki",
+      "BR": "Brasil",
+      "MX": "Meksiko",
+      "CA": "Kanada",
+      "AU": "Australia"
+    }
+  }
 }

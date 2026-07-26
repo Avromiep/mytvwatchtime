@@ -10,5 +10,35 @@
   "trendingMovies": "Trending Movies",
   "seeAll": "See all",
   "mediaTypeShow": "TV show",
-  "mediaTypeMovie": "Movie"
+  "mediaTypeMovie": "Movie",
+  "filters": {
+    "genre": "Genre",
+    "exclude": "Exclude",
+    "order": "Order",
+    "type": "Type",
+    "country": "Country",
+    "hideAnime": "Hide anime",
+    "orderPopularity": "Popularity",
+    "orderReleaseDate": "Release date",
+    "typeBoth": "Both",
+    "typeMovies": "Movies",
+    "typeShows": "Shows",
+    "countries": {
+      "US": "United States",
+      "GB": "United Kingdom",
+      "FR": "France",
+      "DE": "Germany",
+      "ES": "Spain",
+      "IT": "Italy",
+      "JP": "Japan",
+      "KR": "South Korea",
+      "CN": "China",
+      "IN": "India",
+      "TR": "Türkiye",
+      "BR": "Brazil",
+      "MX": "Mexico",
+      "CA": "Canada",
+      "AU": "Australia"
+    }
+  }
 }

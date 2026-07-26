@@ -527,6 +527,49 @@ describe('MediaMetadataService — TMDB sparse light upserts verify English titl
   });
 });
 
+describe('MediaMetadataService — recommendations persistence', () => {
+  const recs = [
+    { tmdbId: 1, type: 'SHOW', title: 'Steins;Gate', posterUrl: null, year: 2011, rating: 8.8 },
+  ];
+
+  it('TMDB persist writes recommendations + the synced stamp', async () => {
+    const { tx, calls } = fakeTx();
+    const getShow = jest.fn(async () => ({ ...makeShow([{ name: 'Animation' }]), recommendations: recs }));
+    const svc = makeTmdbService(tx, getShow);
+
+    await runInLanguage('en', () => svc.ensureShowFull(65942));
+
+    expect(calls.mediaItemCreate).toHaveLength(1);
+    expect(calls.mediaItemCreate[0].data.recommendations).toEqual(recs);
+    expect(calls.mediaItemCreate[0].data.recommendationsSyncedAt).toBeInstanceOf(Date);
+  });
+
+  it('TVDB persist (no recommendations) never writes/clobbers the TMDB snapshot', async () => {
+    const { tx, calls } = fakeTx({
+      prev: {
+        type: 'SHOW',
+        titles: null,
+        overviews: null,
+        posterUrls: null,
+        backdropUrls: null,
+        titleLocale: 'en',
+      },
+    });
+    // Stale existing show row → update path in persistShow.
+    const findFirst = jest.fn(async () => ({
+      mediaId: 'show-1',
+      media: { id: 'show-1', type: 'SHOW', metadataRefreshedAt: null },
+    }));
+    const svc = makeService(tx, findFirst); // TVDB getShow payload has no recommendations
+
+    await runInLanguage('en', () => svc.ensureShowFullTvdb(280103));
+
+    expect(calls.mediaItemUpdate).toHaveLength(1);
+    expect(calls.mediaItemUpdate[0].data).not.toHaveProperty('recommendations');
+    expect(calls.mediaItemUpdate[0].data).not.toHaveProperty('recommendationsSyncedAt');
+  });
+});
+
 describe('MediaMetadataService — TVDB light upserts are born with an English base', () => {
   function make(enTitle: string | null, existing?: any) {
     const created: any[] = [];

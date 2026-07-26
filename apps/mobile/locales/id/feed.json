@@ -1,0 +1,11 @@
+{
+  "watched": "{{name}} menonton {{title}}",
+  "watchlisted": "{{name}} menambahkan {{title}} ke watchlist",
+  "favorited": "{{name}} memfavoritkan {{title}}",
+  "rated": "{{name}} memberi rating {{title}} {{value}}/5",
+  "reacted": "{{name}} bereaksi {{reaction}} pada {{title}}",
+  "commented": "{{name}} mengomentari {{title}}",
+  "seeMoreFrom": "Lihat aktivitas lainnya dari {{name}}",
+  "emptyTitle": "Belum ada aktivitas",
+  "emptySubtitle": "Ikuti orang untuk melihat apa yang mereka tonton."
+}

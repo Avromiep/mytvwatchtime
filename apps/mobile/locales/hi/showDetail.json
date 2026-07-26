@@ -13,6 +13,7 @@
   "communityRatings": "समुदाय की रेटिंग",
   "showInfo": "शो की जानकारी",
   "years": "वर्ष",
+  "originCountry": "मूल देश",
   "status": "स्थिति",
   "genres": "शैलियाँ",
   "runtime": "अवधि",
@@ -22,5 +23,6 @@
   "comments": "टिप्पणियाँ",
   "showMoreEpisodes": "{{count}} और दिखाएँ",
   "originalTitle": "मूल शीर्षक",
-  "rateShow": "इस शो को रेट करें"
+  "rateShow": "इस शो को रेट करें",
+  "similar": "मिलते-जुलते शो"
 }

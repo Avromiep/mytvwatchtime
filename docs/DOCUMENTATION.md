@@ -339,12 +339,25 @@ All endpoints under `/api`. Auth: `Authorization: Bearer <token>`.
 ### Search & Discover (public, optional auth)
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/search?q=&type=` | Search shows/movies |
+| GET | `/search?q=&type=&genre=&excludeGenres=&sort=&country=&hideAnime=` | Search shows/movies (filters: genre exclusion csv, popularity\|releaseDate sort, ISO origin country, anime toggle) |
 | GET | `/discover/shows` | Discover with filters |
 | GET | `/discover/movies` | Discover movies |
-| GET | `/trending/shows` | Trending |
-| GET | `/trending/movies` | Trending |
-| GET | `/discover/sections` | Home sections |
+| GET | `/trending/shows` | Trending (same filter params) |
+| GET | `/trending/movies` | Trending (same filter params) |
+| GET | `/discover/sections` | Home sections (same filter params) |
+| GET | `/feed?cursor=&limit=` | Activity feed: me + followings (watch, watchlist, favorite, rating, reaction, comment; import-sourced rows excluded; cursor-paginated) |
+
+Explore filter behavior: `hideAnime` is OR-ed with the per-user profile setting
+`UserProfile.hideAnimeInExplore` (PATCH `/me`, cached-flagged Redis keys); anime detection =
+`contentClassification` column + TMDB anime signal (genre 16 + JP origin) for unclassified
+payloads. `sort=releaseDate` is year-granular for shows (no first-air-date column) and
+applies to DB/discover paths — provider search keeps relevance, TMDB trending has no
+server-side sort. Origin country filters hydrated data (`shows.originCountries` /
+`movies.country`); light rows match once hydrated. Media recommendations: TMDB
+`/recommendations` appended at hydration (12 season appends + recommendations = the 20 cap
+for shows), stored on `media_items.recommendations` (never clobbered by TVDB refreshes),
+served on show/movie detail DTOs; backfill via Metadata Health `recommendationsMissing` +
+the daily `recommendations_backfill` cron (500/run).
 
 ### Shows & Episodes
 | Method | Path | Purpose |
