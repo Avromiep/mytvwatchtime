@@ -1,6 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   ImageBackground,
   Pressable,
   RefreshControl,
@@ -95,8 +94,6 @@ export default function ProfileScreen() {
 
   // Skeleton only on the first-ever load (no data yet, including a retry after an error).
   const statsLoading = !summary.data && (summary.isLoading || summary.isFetching);
-  // Subtle "refreshing" indicator only once we have data to show (never overlaps the Skeleton).
-  const statsRefreshing = !!summary.data && (!!summary.data.stale || summary.isFetching);
 
   // When the user has no cover image, fall back to a backdrop from their watchlist.
   // Deterministic pick (first with a backdrop): Math.random() re-rolled the cover on
@@ -165,25 +162,6 @@ export default function ProfileScreen() {
               </>
             )}
           </ScrollView>
-          {statsRefreshing ? (
-            <View
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                paddingHorizontal: spacing.lg,
-                paddingBottom: spacing.sm,
-              }}
-            >
-              <ActivityIndicator
-                size="small"
-                color={tokens.primary}
-                style={{ marginRight: spacing.xs }}
-              />
-              <T variant="micro" muted>
-                {t('common:updating')}
-              </T>
-            </View>
-          ) : null}
         </View>
 
         <View style={{ paddingHorizontal: spacing.lg, gap: spacing.lg, paddingBottom: 60 }}>

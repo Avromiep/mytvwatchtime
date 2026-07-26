@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -73,6 +73,32 @@ export class CollectionsService {
       await this.invalidateUserLibraryCaches(userId);
     }
     return { inWatchlist: false };
+  }
+
+  // ---------------- Tracking pause ----------------
+  /** Pause tracking: hidden from watch-next/upcoming, no episode/watchlist
+   *  notifications. Idempotent; the row is upserted because watchlist-only shows
+   *  (never watched) may not have a UserShowStatus row yet. */
+  async pauseTracking(userId: string, mediaId: string) {
+    const media = await this.prisma.mediaItem.findUnique({ where: { id: mediaId } });
+    if (!media) throw new NotFoundException('Media not found');
+    if (media.type !== MediaType.SHOW) throw new BadRequestException('Only shows can be paused');
+    await this.prisma.userShowStatus.upsert({
+      where: { userId_mediaId: { userId, mediaId } },
+      create: { userId, mediaId, pausedAt: new Date() },
+      update: { pausedAt: new Date() },
+    });
+    await this.invalidateUserLibraryCaches(userId);
+    return { trackingPaused: true };
+  }
+
+  async resumeTracking(userId: string, mediaId: string) {
+    await this.prisma.userShowStatus.updateMany({
+      where: { userId, mediaId, pausedAt: { not: null } },
+      data: { pausedAt: null },
+    });
+    await this.invalidateUserLibraryCaches(userId);
+    return { trackingPaused: false };
   }
 
   async watchlist(userId: string, type?: MediaType, page = 1, pageSize = 20, genre?: string) {

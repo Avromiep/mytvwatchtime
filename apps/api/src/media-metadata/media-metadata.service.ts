@@ -1530,7 +1530,7 @@ export class MediaMetadataService {
             favorites: { where: { userId }, select: { id: true } },
             showStatuses: {
               where: { userId },
-              select: { id: true, watchedCount: true, totalCount: true },
+              select: { id: true, watchedCount: true, totalCount: true, pausedAt: true },
             },
           }
         : {}),

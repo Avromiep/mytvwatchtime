@@ -32,26 +32,9 @@ import { useAppearance } from '../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../theme/theme';
 import { showConfirm, showError } from '../lib/dialog';
+import { formatAirDate, formatAirTime } from '../lib/format';
 
 const HERO_HEIGHT = 240;
-
-/** Localized "Month D, YYYY" for air dates. Date-only ISO strings are parsed as a LOCAL
- *  date (not UTC midnight), so the displayed day never shifts with the timezone. */
-function formatAirDate(iso: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
-  const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(iso);
-  return d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
-}
-
-/** Localized "H:MM" for a raw 24h air time, matching the watched-time format. */
-function formatAirTime(hhmm: string): string {
-  const m = /^(\d{1,2}):(\d{2})/.exec(hhmm);
-  if (!m) return hhmm;
-  return new Date(2000, 0, 1, Number(m[1]), Number(m[2])).toLocaleTimeString(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
 
 /**
  * Full episode detail body for a single episode. Fetches its own detail so it can be

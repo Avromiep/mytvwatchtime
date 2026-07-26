@@ -843,6 +843,11 @@ model UserShowStatus {
   /// is kept. Cleared when the show is re-added to the watchlist or an episode
   /// is watched again.
   dropped      Boolean  @default(false) @map("dropped")
+  /// Set when the user pauses tracking — hidden from watch-next/upcoming and no
+  /// episode/watchlist notifications, while watch history and progress are kept.
+  /// Unlike `dropped`, watching an episode does NOT clear it (imports would
+  /// silently unpause everything); only the explicit resume action clears it.
+  pausedAt     DateTime? @map("paused_at")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 

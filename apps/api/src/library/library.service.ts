@@ -96,9 +96,9 @@ export class LibraryService {
 
     // Shows the user has started watching (has user_show_status). Dropped shows
     // (removed from the watchlist) are hidden from watch-next even though their
-    // watch history is kept.
+    // watch history is kept. Paused shows (tracking paused) are hidden the same way.
     const statuses = await this.prisma.userShowStatus.findMany({
-      where: { userId, dropped: false },
+      where: { userId, dropped: false, pausedAt: null },
       include: { media: { include: { show: true } } },
       orderBy: { lastWatchedAt: 'desc' },
       take: 500,
@@ -110,7 +110,7 @@ export class LibraryService {
       this.prisma.watchlistItem.findMany({
         where: {
           userId,
-          media: { type: 'SHOW' },
+          media: { type: 'SHOW', showStatuses: { none: { userId, pausedAt: { not: null } } } },
           ...(statusMediaIds.size ? { mediaId: { notIn: [...statusMediaIds] } } : {}),
         },
         include: { media: { include: { show: true } } },
@@ -134,13 +134,13 @@ export class LibraryService {
       ...statusMediaIds,
       ...watchlistShows.map((w) => w.mediaId),
     ]);
-    // Media ids of dropped shows: the fallback watched-episodes query below must
-    // NOT resurrect them into watch-next.
-    const droppedRows = await this.prisma.userShowStatus.findMany({
-      where: { userId, dropped: true },
+    // Media ids of dropped or paused shows: the fallback watched-episodes query
+    // below must NOT resurrect them into watch-next.
+    const excludedRows = await this.prisma.userShowStatus.findMany({
+      where: { userId, OR: [{ dropped: true }, { pausedAt: { not: null } }] },
       select: { mediaId: true },
     });
-    const droppedMediaIds = new Set(droppedRows.map((r) => r.mediaId));
+    const excludedMediaIds = new Set(excludedRows.map((r) => r.mediaId));
     const watchedShowsRaw = await this.prisma.$queryRaw<
       Array<{ mediaId: string; watchedCount: number; lastWatchedAt: Date | null }>
     >`
@@ -153,7 +153,7 @@ export class LibraryService {
       GROUP BY sh.media_id
     `;
     const missingShowIds = watchedShowsRaw
-      .filter((r) => !existingMediaIds.has(r.mediaId) && !droppedMediaIds.has(r.mediaId))
+      .filter((r) => !existingMediaIds.has(r.mediaId) && !excludedMediaIds.has(r.mediaId))
       .map((r) => r.mediaId);
     const missingShows = missingShowIds.length
       ? await this.prisma.mediaItem.findMany({
@@ -666,11 +666,14 @@ export class LibraryService {
   // ---------------- helpers ----------------
   private async trackedMediaIds(userId: string): Promise<string[]> {
     // Dropped shows (removed from the watchlist) are excluded from upcoming even
-    // though their watch history is kept.
+    // though their watch history is kept. Paused shows are excluded the same way.
     const [statuses, watchlist] = await Promise.all([
-      this.prisma.userShowStatus.findMany({ where: { userId, dropped: false }, select: { mediaId: true } }),
+      this.prisma.userShowStatus.findMany({ where: { userId, dropped: false, pausedAt: null }, select: { mediaId: true } }),
       this.prisma.watchlistItem.findMany({
-        where: { userId, media: { type: MediaType.SHOW } },
+        where: {
+          userId,
+          media: { type: MediaType.SHOW, showStatuses: { none: { userId, pausedAt: { not: null } } } },
+        },
         select: { mediaId: true },
       }),
     ]);

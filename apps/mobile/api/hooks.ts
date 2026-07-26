@@ -1605,6 +1605,22 @@ export const useToggleListSub = () => {
   });
 };
 
+export const useToggleTrackingPause = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, paused }: { id: string; paused: boolean }) =>
+      paused
+        ? api.post<{ trackingPaused: boolean }>(`/shows/${id}/pause`)
+        : api.del<{ trackingPaused: boolean }>(`/shows/${id}/pause`),
+    onSuccess: () => {
+      // Paused shows leave watch-next/upcoming; the show detail carries the flag.
+      qc.invalidateQueries({ queryKey: ['show'] });
+      qc.invalidateQueries({ queryKey: ['watchNext'] });
+      qc.invalidateQueries({ queryKey: ['upcoming'] });
+    },
+  });
+};
+
 export const useToggleListNotify = () => {
   const qc = useQueryClient();
   return useMutation({

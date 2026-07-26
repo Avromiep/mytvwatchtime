@@ -111,6 +111,16 @@ export class ShowsController {
     return this.collections.removeWatchlist(userId, id);
   }
 
+  @Post('shows/:id/pause')
+  pauseTracking(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.collections.pauseTracking(userId, id);
+  }
+
+  @Delete('shows/:id/pause')
+  resumeTracking(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.collections.resumeTracking(userId, id);
+  }
+
   @Post('shows/:id/favorite')
   addFavorite(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.collections.addFavorite(userId, id);

@@ -146,6 +146,11 @@ export interface ShowDto {
   match?: MatchScore;
   inWatchlist?: boolean;
   favorite?: boolean;
+  /** True when the user paused tracking — hidden from watch-next/upcoming and no
+   *  episode notifications until resumed. Only set on user-scoped show payloads. */
+  trackingPaused?: boolean;
+  /** ISO timestamp of when tracking was paused (null when not paused). */
+  trackingPausedAt?: string | null;
   userProgress?: number; // 0..1
   trailerUrl?: string | null;
 }

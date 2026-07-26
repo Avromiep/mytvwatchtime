@@ -37,6 +37,15 @@ export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undef
     ref.current?.scrollToIndex({ index: next, animated: true });
   };
 
+  // Viewability drives the header season number: onMomentumScrollEnd alone is
+  // unreliable on web and for slow drags (the swipe changed pages but the header
+  // never updated).
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 }).current;
+  const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
+    const idx = viewableItems?.[0]?.index;
+    if (idx != null) setActive(idx);
+  }).current;
+
   return (
     <View onLayout={(e) => setContainerW(e.nativeEvent.layout.width)}>
       <View style={styles.head}>
@@ -59,6 +68,8 @@ export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undef
         getItemLayout={getItemLayout}
         initialScrollIndex={Math.max(0, firstRegular)}
         onMomentumScrollEnd={(e) => setActive(Math.round(e.nativeEvent.contentOffset.x / containerW))}
+        viewabilityConfig={viewabilityConfig}
+        onViewableItemsChanged={onViewableItemsChanged}
         renderItem={({ item }) => <SeasonLineChart season={item} width={containerW} tokens={tokens} />}
       />
     </View>

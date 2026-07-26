@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { api } from '../api/client';
-import { useAddListItem, useRemoveListItem } from '../api/hooks';
+import { useAddListItem, useRemoveListItem, useToggleTrackingPause } from '../api/hooks';
 import { dismissAllDialogs, showConfirm, showDialog, showError } from '../lib/dialog';
 import { showToast } from '../lib/toast';
 import { PosterImage, T } from '../components/primitives';
@@ -120,6 +120,7 @@ export function useAddToList() {
   const addItem = useAddListItem();
   const removeItem = useRemoveListItem();
   const reassign = useReassign();
+  const togglePause = useToggleTrackingPause();
 
   const invalidateLists = () => {
     // Prefix match: covers ['myLists'] and the picker-scoped keys below.
@@ -183,8 +184,14 @@ export function useAddToList() {
   };
 
   /** Overflow (⋯) menu for a media detail page. Movies also get a "Reassign" action
-   *  (wrong-match fix); `reassignModal` must be rendered by the calling screen. */
-  const openMediaMenu = (media: { id: string; title: string; kind?: 'movie' | 'show' }) => {
+   *  (wrong-match fix); shows get "Pause/Resume tracking" (hidden from watch-next,
+   *  no notifications while paused). `reassignModal` must be rendered by the calling screen. */
+  const openMediaMenu = (media: {
+    id: string;
+    title: string;
+    kind?: 'movie' | 'show';
+    trackingPaused?: boolean;
+  }) => {
     showDialog({
       title: media.title,
       buttons: [
@@ -196,6 +203,33 @@ export function useAddToList() {
                 label: t('lists:reassign'),
                 variant: 'secondary' as const,
                 onPress: () => reassign.openReassign(media),
+              },
+            ]
+          : []),
+        ...(media.kind === 'show'
+          ? [
+              {
+                label: media.trackingPaused
+                  ? t('lists:resumeTracking')
+                  : t('lists:pauseTracking'),
+                variant: 'secondary' as const,
+                onPress: () => {
+                  const next = !media.trackingPaused;
+                  togglePause.mutate(
+                    { id: media.id, paused: next },
+                    {
+                      onSuccess: () =>
+                        showToast(
+                          next ? t('lists:trackingPausedToast') : t('lists:trackingResumedToast'),
+                        ),
+                      onError: (e: any) =>
+                        showError({
+                          title: t('lists:failedToSave'),
+                          description: e?.message ?? t('common:pleaseTryAgain'),
+                        }),
+                    },
+                  );
+                },
               },
             ]
           : []),

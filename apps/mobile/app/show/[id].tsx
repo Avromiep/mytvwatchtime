@@ -36,17 +36,20 @@ import {
   useShowEpisodes,
   useShowVotes,
   useToggleFavorite,
+  useToggleTrackingPause,
   useToggleWatchlist,
 } from '../../api/hooks';
 import { useQueryClient } from '@tanstack/react-query';
+import { MediaStatus } from '@tvwatch/shared';
 import { useAddToList } from '../../hooks/useAddToList';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useConfetti } from '../../components/Confetti';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../theme/theme';
-import { showError } from '../../lib/dialog';
+import { showError, showConfirm } from '../../lib/dialog';
 import { countryFlag } from '../../lib/country';
 import { formatRuntime } from '../../lib/format';
+import { EpisodeHistoryCarousel } from '../../components/EpisodeHistoryCarousel';
 
 export default function ShowDetailScreen() {
   const { tokens } = useAppearance();
@@ -64,9 +67,10 @@ export default function ShowDetailScreen() {
     }
   }, [show?.id]);
   const votes = useShowVotes(id);
-  const [tab, setTab] = useState<'about' | 'episodes'>('episodes');
+  const [tab, setTab] = useState<'about' | 'episodes'>('about');
   const watchlist = useToggleWatchlist();
   const favorite = useToggleFavorite();
+  const pause = useToggleTrackingPause();
   const addToList = useAddToList();
   const [refreshing, setRefreshing] = useState(false);
   const { confettiEl, fire } = useConfetti();
@@ -87,6 +91,24 @@ export default function ShowDetailScreen() {
 
   if (isLoading || !show || show.id !== id) return <Screen><Header showBack /><Spinner /></Screen>;
 
+  // Years + run status on their own row: "2024 – 2026 · Ended", "2024 – Returning",
+  // or just "2024" when neither the end year nor the status is known.
+  const statusLabel =
+    show.status === MediaStatus.ENDED
+      ? t('showDetail:statusEnded')
+      : show.status === MediaStatus.CANCELED
+        ? t('showDetail:statusCanceled')
+        : show.status === MediaStatus.RETURNING
+          ? t('showDetail:statusReturning')
+          : null;
+  const yearsText = !show.yearStart
+    ? null
+    : show.yearEnd
+      ? `${show.yearStart} – ${show.yearEnd}${statusLabel ? ` · ${statusLabel}` : ''}`
+      : show.status === MediaStatus.RETURNING && statusLabel
+        ? `${show.yearStart} – ${statusLabel}`
+        : `${show.yearStart}${statusLabel ? ` · ${statusLabel}` : ''}`;
+
   return (
     <Screen>
       {confettiEl}
@@ -97,7 +119,7 @@ export default function ShowDetailScreen() {
             <Header
               showBack
               right={
-                <Pressable hitSlop={10} onPress={() => addToList.openMediaMenu({ id: show.id, title: show.title, kind: 'show' })}>
+                <Pressable hitSlop={10} onPress={() => addToList.openMediaMenu({ id: show.id, title: show.title, kind: 'show', trackingPaused: show.trackingPaused })}>
                   <Ionicons name="ellipsis-horizontal" size={24} color={tokens.mediaText} />
                 </Pressable>
               }
@@ -106,10 +128,14 @@ export default function ShowDetailScreen() {
               <T variant="title" style={{ fontSize: 26, color: tokens.mediaText }}>{show.title}</T>
             </View>
             <View style={{ padding: spacing.lg, marginTop: 'auto' }}>
+              {yearsText ? (
+                <T variant="caption" style={{ color: tokens.mediaText, marginBottom: spacing.xs }}>
+                  {yearsText}
+                </T>
+              ) : null}
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs }}>
                 <T variant="caption" style={{ color: tokens.mediaText }}>
                   {[
-                    show.yearStart ? String(show.yearStart) : null,
                     t('showDetail:seasonsCount', { count: show.seasonsCount }),
                     show.network || null,
                     ...(show.originCountries ?? []).map(countryFlag),
@@ -145,6 +171,48 @@ export default function ShowDetailScreen() {
             </Pressable>
           </View>
 
+          {show.trackingPaused ? (
+            <Pressable
+              onPress={() =>
+                showConfirm({
+                  title: t('showDetail:trackingPaused'),
+                  description: t('showDetail:trackingPausedDesc', {
+                    date: show.trackingPausedAt
+                      ? new Date(show.trackingPausedAt).toLocaleDateString(undefined, {
+                          month: 'long',
+                          day: 'numeric',
+                          year: 'numeric',
+                        })
+                      : '—',
+                  }),
+                  confirmLabel: t('showDetail:resumeTracking'),
+                  onConfirm: () => pause.mutate({ id, paused: false }),
+                })
+              }
+              style={({ pressed }) => ({
+                marginTop: spacing.sm,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: spacing.xs,
+                backgroundColor: tokens.surfaceElevated,
+                borderRadius: radius.md,
+                paddingHorizontal: spacing.md,
+                paddingVertical: spacing.sm,
+                opacity: pressed ? 0.85 : 1,
+              })}
+            >
+              <Ionicons name="pause-circle" size={18} color={tokens.warning} />
+              <T variant="caption" style={{ flex: 1 }}>{t('showDetail:trackingPaused')}</T>
+              <Ionicons name="chevron-forward" size={16} color={tokens.textMuted} />
+            </Pressable>
+          ) : null}
+
+          {/* Negative margins break out of the parent's horizontal padding so the
+              adjacent-card peeks sit flush with the screen edges. */}
+          <View style={{ marginTop: spacing.lg, marginHorizontal: -spacing.lg }}>
+            <EpisodeHistoryCarousel showId={id} />
+          </View>
+
           {show.inWatchlist && (show.userProgress ?? 0) > 0 && show.interactions?.rating ? (
             <View style={{ marginTop: spacing.lg }}>
               <VotingSection title={t('showDetail:rateShow')}>
@@ -160,8 +228,8 @@ export default function ShowDetailScreen() {
         </View>
 
         <View style={[styles.tabs, { paddingHorizontal: spacing.lg }]}>
-          <Chip label={t('showDetail:episodes')} active={tab === 'episodes'} onPress={() => setTab('episodes')} />
           <Chip label={t('showDetail:about')} active={tab === 'about'} onPress={() => setTab('about')} />
+          <Chip label={t('showDetail:episodes')} active={tab === 'episodes'} onPress={() => setTab('episodes')} />
         </View>
 
         {tab === 'episodes' ? <EpisodesTab showId={id} /> : <AboutTab show={show} id={id} />}
