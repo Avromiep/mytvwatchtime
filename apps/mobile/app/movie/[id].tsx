@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../theme/theme';
 import { showError } from '../../lib/dialog';
 import { countryFlag } from '../../lib/country';
+import { formatRuntime } from '../../lib/format';
 
 export default function MovieDetailScreen() {
   const { tokens } = useAppearance();
@@ -72,7 +73,7 @@ export default function MovieDetailScreen() {
                   <T variant="caption" muted>
                     {[
                       movie.releaseYear ? String(movie.releaseYear) : null,
-                      movie.runtimeMinutes ? `${movie.runtimeMinutes}m` : null,
+                      formatRuntime(movie.runtimeMinutes),
                       movie.country ? countryFlag(movie.country) : null,
                     ]
                       .filter(Boolean)

@@ -36,6 +36,7 @@
   "listEmpty": "이 목록은 비어 있습니다",
   "tapAddItems": "“항목 추가”를 눌러 프로그램이나 영화를 추가하세요",
   "searchToAddShort": "추가할 콘텐츠 검색…",
+  "recentlyWatched": "최근 시청한 항목",
   "failedToSave": "저장 실패",
   "deleteListQuestion": "목록을 삭제할까요?",
   "deleteCannotUndo": "이 작업은 되돌릴 수 없습니다.",

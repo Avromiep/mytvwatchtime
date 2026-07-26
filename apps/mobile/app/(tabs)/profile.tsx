@@ -187,6 +187,13 @@ export default function ProfileScreen() {
         </View>
 
         <View style={{ paddingHorizontal: spacing.lg, gap: spacing.lg, paddingBottom: 60 }}>
+          <Button
+            title={t('profile:importWatchHistory')}
+            variant="ghost"
+            icon="cloud-upload-outline"
+            onPress={() => router.push('/import')}
+          />
+
           {/* Stats link */}
           <Pressable onPress={() => router.push('/stats')}>
             <Card style={styles.chevron}>
@@ -406,12 +413,6 @@ export default function ProfileScreen() {
             </View>
           ) : null}
 
-          <Button
-            title={t('profile:importWatchHistory')}
-            variant="ghost"
-            icon="cloud-upload-outline"
-            onPress={() => router.push('/import')}
-          />
         </View>
       </ScrollView>
     </Screen>

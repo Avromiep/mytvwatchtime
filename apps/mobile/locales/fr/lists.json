@@ -36,6 +36,7 @@
   "listEmpty": "Cette liste est vide",
   "tapAddItems": "Touchez « Ajouter des éléments » pour ajouter des séries ou des films",
   "searchToAddShort": "Rechercher pour ajouter…",
+  "recentlyWatched": "Vus récemment",
   "failedToSave": "Échec de l’enregistrement",
   "deleteListQuestion": "Supprimer la liste ?",
   "deleteCannotUndo": "Cette action est irréversible.",

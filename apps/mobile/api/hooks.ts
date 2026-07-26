@@ -137,6 +137,19 @@ export const useHistory = (p: { mediaType?: MediaType; page?: number }) =>
     queryKey: qk.history(p),
     queryFn: () => api.get<Paginated<HistoryItemDto>>('/me/history', { ...p, pageSize: 500 }),
   });
+/**
+ * Paginated mixed movies+shows watch history (20/page, newest first) for
+ * "recently watched" rails. Callers dedupe shows client-side by mediaId —
+ * one row per media item even when many episodes were watched.
+ */
+export const useRecentWatched = () =>
+  useInfiniteQuery({
+    queryKey: [...qk.history({}), 'recent'],
+    queryFn: ({ pageParam = 1 }) =>
+      api.get<Paginated<HistoryItemDto>>('/me/history', { page: pageParam, pageSize: 20 }),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last?.hasMore ? last.page + 1 : undefined),
+  });
 export const useShow = (id: string) =>
   useQuery({
     queryKey: qk.show(id),

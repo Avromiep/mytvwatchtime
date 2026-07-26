@@ -46,6 +46,7 @@ import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../theme/theme';
 import { showError } from '../../lib/dialog';
 import { countryFlag } from '../../lib/country';
+import { formatRuntime } from '../../lib/format';
 
 export default function ShowDetailScreen() {
   const { tokens } = useAppearance();
@@ -315,7 +316,7 @@ function AboutTab({ show, id }: { show: any; id: string }) {
         <InfoRow label={t('showDetail:originCountry')} value={show.originCountries?.length ? show.originCountries.map(countryFlag).join(' ') : null} />
         <InfoRow label={t('showDetail:status')} value={show.status} />
         <InfoRow label={t('showDetail:genres')} value={show.genres?.map((g: any) => g.name).join(', ')} />
-        <InfoRow label={t('showDetail:runtime')} value={show.runtimeMinutes ? `${show.runtimeMinutes}m` : '—'} />
+        <InfoRow label={t('showDetail:runtime')} value={formatRuntime(show.runtimeMinutes) ?? '—'} />
         <InfoRow label={t('showDetail:addedBy')} value={`${show.addedCount} users`} />
         <T variant="body" muted style={{ marginTop: spacing.sm }}>{show.overview}</T>
         {show.trailerUrl ? (

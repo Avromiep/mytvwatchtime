@@ -36,6 +36,7 @@
   "listEmpty": "Esta lista está vacía",
   "tapAddItems": "Toca «Añadir elementos» para añadir series o películas",
   "searchToAddShort": "Buscar para añadir…",
+  "recentlyWatched": "Vistos recientemente",
   "failedToSave": "Error al guardar",
   "deleteListQuestion": "¿Eliminar lista?",
   "deleteCannotUndo": "Esta acción no se puede deshacer.",

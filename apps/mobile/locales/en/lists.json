@@ -36,6 +36,7 @@
   "listEmpty": "This list is empty",
   "tapAddItems": "Tap \"Add items\" to add shows or movies",
   "searchToAddShort": "Search to add...",
+  "recentlyWatched": "Recently watched",
   "failedToSave": "Failed to save",
   "deleteListQuestion": "Delete list?",
   "deleteCannotUndo": "This cannot be undone.",

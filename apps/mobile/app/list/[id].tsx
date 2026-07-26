@@ -1,18 +1,19 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { FlatList, Modal, Pressable, Share, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, Keyboard, Modal, Pressable, Share, StyleSheet, TextInput, View } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Header } from '../../components/Header';
+import { cardYear } from '../../components/cards';
 import { Button, Card, EmptyState, PosterImage, Screen, Spinner, T } from '../../components/primitives';
 import { TextField } from '../../components/TextField';
 import { api } from '../../api/client';
-import { useList, useListItems, useToggleListLike, useToggleListSub, useToggleListNotify, useAddListItem, useRemoveListItem } from '../../api/hooks';
+import { useList, useListItems, useToggleListLike, useToggleListSub, useToggleListNotify, useAddListItem, useRemoveListItem, useSearch, useRecentWatched } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
+import { countryFlag } from '../../lib/country';
 import { showError, showConfirm } from '../../lib/dialog';
 
 /** Poster grid columns (chunked rows — never FlatList numColumns, see AGENTS.md). */
@@ -27,6 +28,14 @@ export default function ListDetailScreen() {
   const [activeTab, setActiveTab] = useState<'SHOW' | 'MOVIE'>('SHOW');
   const [showAddSearch, setShowAddSearch] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  // When the add-items search is open and the list below is empty, the keyboard
+  // would cover the results — pad the scroll view by the keyboard height.
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', (e) => setKeyboardHeight(e.endCoordinates.height));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardHeight(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
 
   const likeMut = useToggleListLike();
   const subMut = useToggleListSub();
@@ -84,7 +93,8 @@ export default function ListDetailScreen() {
       <FlatList
         data={gridRows}
         keyExtractor={(row) => row.map((i) => i.id).join('_')}
-        contentContainerStyle={{ paddingBottom: 40 }}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ paddingBottom: showAddSearch ? keyboardHeight + 40 : 40 }}
         ListHeaderComponent={
           <View>
             <View style={{ position: 'relative', height: 200, marginBottom: spacing.md }}>
@@ -190,30 +200,85 @@ function AddItemSearch({ listId, existingIds, onAdd }: { listId: string; existin
   const { tokens } = useAppearance();
   const { t } = useTranslation(['lists']);
   const [query, setQuery] = useState('');
-  const results = useQuery({
-    queryKey: ['search', 'list-add', query],
-    queryFn: () => api.get<{ items: any[] }>('/search', { q: query, pageSize: 10 }),
-    enabled: query.length >= 2,
-  });
-  const filtered = (results.data?.items ?? []).filter((i) => !existingIds.includes(i.id));
+  // Debounce like Explore (400ms) — without it every keystroke hits /search.
+  const [debouncedQ, setDebouncedQ] = useState('');
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedQ(query.trim()), 400);
+    return () => clearTimeout(id);
+  }, [query]);
+  const results = useSearch(debouncedQ);
+  const found = useMemo(() => (results.data?.pages ?? []).flatMap((p: any) => p.items ?? []), [results.data]);
+  const filtered = found.filter((i: any) => !existingIds.includes(i.id));
+
+  const recentQuery = useRecentWatched();
+  // One row per media item: 10 watched episodes of a show collapse to the show once.
+  const recent = useMemo(() => {
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const item of (recentQuery.data?.pages ?? []).flatMap((p: any) => p.items ?? [])) {
+      if (seen.has(item.mediaId) || existingIds.includes(item.mediaId)) continue;
+      seen.add(item.mediaId);
+      out.push(item);
+    }
+    return out;
+  }, [recentQuery.data, existingIds]);
 
   return (
     <Card>
+      {recent.length > 0 ? (
+        <View style={{ marginBottom: spacing.sm }}>
+          <T variant="micro" muted style={{ marginBottom: spacing.xs }}>{t('lists:recentlyWatched')}</T>
+          <FlatList
+            horizontal
+            data={recent}
+            keyExtractor={(item) => item.mediaId}
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            onEndReached={() => { if (recentQuery.hasNextPage && !recentQuery.isFetchingNextPage) recentQuery.fetchNextPage(); }}
+            onEndReachedThreshold={0.5}
+            renderItem={({ item }) => (
+              <Pressable onPress={() => onAdd(item.mediaId)} style={{ width: 72, marginRight: spacing.sm }}>
+                <Image source={item.posterUrl ? { uri: item.posterUrl } : undefined} style={{ width: 72, height: 108, borderRadius: radius.sm, backgroundColor: tokens.surfaceElevated }} contentFit="cover" transition={150} />
+                <T variant="micro" numberOfLines={1} style={{ marginTop: 4 }}>{item.title}</T>
+              </Pressable>
+            )}
+          />
+        </View>
+      ) : null}
       <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: tokens.surfaceAlt, borderRadius: radius.md, paddingHorizontal: spacing.md }}>
         <Ionicons name="search" size={18} color={tokens.textMuted} />
         <TextInput value={query} onChangeText={setQuery} placeholder={t('lists:searchToAddShort')} placeholderTextColor={tokens.placeholder} autoCapitalize="none" style={{ flex: 1, marginLeft: spacing.sm, color: tokens.textPrimary, paddingVertical: spacing.sm }} />
         {query ? <Pressable onPress={() => setQuery('')} hitSlop={8}><Ionicons name="close-circle" size={18} color={tokens.textMuted} /></Pressable> : null}
       </View>
-      {filtered.map((item: any) => (
-        <Pressable key={item.id} onPress={() => onAdd(item.id)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm, borderBottomColor: tokens.border, borderBottomWidth: 1 }}>
-          <Image source={item.posterUrl ? { uri: item.posterUrl } : undefined} style={{ width: 32, height: 48, borderRadius: 4, backgroundColor: tokens.surfaceElevated }} contentFit="cover" />
-          <View style={{ flex: 1, marginLeft: spacing.sm }}>
-            <T variant="caption" numberOfLines={1}>{item.title}</T>
-            <T variant="micro" muted>{item.type}</T>
-          </View>
-          <Ionicons name="add-circle" size={22} color={tokens.primary} />
-        </Pressable>
-      ))}
+      {debouncedQ.length > 1 && results.isLoading ? <Spinner /> : null}
+      {filtered.map((item: any) => {
+        const year = cardYear(item);
+        const country = item.country ?? item.originCountries?.[0];
+        return (
+          <Pressable key={item.id} onPress={() => onAdd(item.id)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm, borderBottomColor: tokens.border, borderBottomWidth: 1 }}>
+            <Image source={item.images?.poster ?? item.images?.backdrop ? { uri: item.images?.poster ?? item.images?.backdrop } : undefined} style={{ width: 32, height: 48, borderRadius: 4, backgroundColor: tokens.surfaceElevated }} contentFit="cover" />
+            <View style={{ flex: 1, marginLeft: spacing.sm }}>
+              <T variant="caption" numberOfLines={1}>{item.title}</T>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }}>
+                <T variant="micro" muted>
+                  {[
+                    item.type === 'SHOW' ? t('lists:showsTab') : t('lists:moviesTab'),
+                    year ? String(year) : null,
+                    country ? countryFlag(country) : null,
+                  ].filter(Boolean).join(' · ')}
+                </T>
+                {item.rating ? (
+                  <>
+                    <Ionicons name="star" size={10} color={tokens.warning} style={{ marginLeft: 6 }} />
+                    <T variant="micro" muted style={{ marginLeft: 2 }}>{item.rating.toFixed(1)}</T>
+                  </>
+                ) : null}
+              </View>
+            </View>
+            <Ionicons name="add-circle" size={22} color={tokens.primary} />
+          </Pressable>
+        );
+      })}
     </Card>
   );
 }

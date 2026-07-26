@@ -36,6 +36,7 @@
   "listEmpty": "このリストは空です",
   "tapAddItems": "「項目を追加」をタップして番組や映画を追加してください",
   "searchToAddShort": "追加する作品を検索…",
+  "recentlyWatched": "最近観た作品",
   "failedToSave": "保存に失敗しました",
   "deleteListQuestion": "リストを削除しますか？",
   "deleteCannotUndo": "この操作は元に戻せません。",
