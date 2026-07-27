@@ -151,7 +151,11 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
+    // See movies.tsx — the overhang covers the sticky-header seam where cards peek
+    // through between the stuck header and the page Header.
+    marginTop: -8,
+    paddingTop: 16,
+    paddingBottom: 8,
     borderBottomWidth: 1,
   },
   headerLeft: {

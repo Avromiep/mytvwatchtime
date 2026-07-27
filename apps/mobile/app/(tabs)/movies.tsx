@@ -197,7 +197,14 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
+    // Negative top margin + equal extra padding: content position is unchanged, but
+    // the opaque background extends 8px above the cell. When the header sticks, that
+    // overhang covers the 1-2px sub-pixel seam between the stuck header and the page
+    // Header, where scrolling cards otherwise peek through (Android). The 8px overlap
+    // only ever lands on the card rows' empty marginBottom gap, never on cards.
+    marginTop: -8,
+    paddingTop: 16,
+    paddingBottom: 8,
     borderBottomWidth: 1,
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
