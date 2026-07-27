@@ -685,6 +685,53 @@ describe('MediaMetadataService — TVDB light upserts are born with an English b
     expect(created[0].data.titles.en).toBeUndefined();
   });
 
+  it('create race (P2002) falls back to the concurrently created row', async () => {
+    // Prod race: the synchronous discovery fallback AND a background tvdb-search
+    // hydration job both find nothing for the same TVDB id, both create — the loser
+    // hits the unique (provider, kind, value) constraint and must recover the winner.
+    const winner = {
+      id: 'winner-1',
+      titles: { en: 'The Vampire Diaries' },
+      overviews: null,
+      posterUrls: null,
+      backdropUrls: null,
+    };
+    const findFirst = jest
+      .fn()
+      .mockResolvedValueOnce(null) // initial existence check
+      .mockResolvedValue({ media: winner }); // post-P2002 recovery lookup
+    const prisma = {
+      mediaItem: {
+        create: async () => {
+          const e: any = new Error('Unique constraint failed');
+          e.code = 'P2002';
+          throw e;
+        },
+        update: async () => ({}),
+      },
+      externalId: { findFirst },
+      show: { updateMany: async () => ({ count: 0 }) },
+    };
+    const tvdb = {
+      enabled: true,
+      localizedShowBase: jest.fn(async () => ({ title: 'The Vampire Diaries', overview: null })),
+    };
+    const svc = new MediaMetadataService(
+      prisma as any,
+      {} as any, // tmdb
+      tvdb as any,
+      {} as any, // tvmaze
+      {} as any, // config
+      { enqueueClassifyCandidate: async () => undefined } as any,
+      { get: async () => null, set: async () => undefined, del: async () => undefined } as any,
+    );
+
+    const id = await runInLanguage('en', () => svc.lightUpsertShowTvdb(item));
+
+    expect(id).toBe('winner-1');
+    expect(findFirst).toHaveBeenCalledTimes(2);
+  });
+
   it('existing en upsert writes the trusted TVDB English title, not a localized match name', async () => {
     const existing = {
       id: 'm1',

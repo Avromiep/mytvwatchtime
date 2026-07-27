@@ -445,29 +445,43 @@ export class MediaMetadataService {
     // row with the US id and mis-routed every later lookup). Unknown id = a new row, always.
     // The base is English whenever TVDB has an English title (fetched once, light) — the
     // request language lives in the override slots, so the row isn't born contaminated.
-    const created = await this.prisma.mediaItem.create({
-      data: {
-        ...this.newMediaLocaleFields(
-          item,
-          await this.fetchEnBaseTvdb(MediaType.SHOW, item.tvdbId),
-          lang,
-          lang !== 'en',
-        ),
-        type: MediaType.SHOW,
-        popularity: item.popularity ?? 0,
-        show: { create: { yearStart: item.year ?? null, inProduction: true } },
-        externalIds: {
-          create: [
-            {
-              provider: ExternalProvider.THE_TVDB,
-              providerEntityKind: ProviderEntityKind.SERIES,
-              value: tvdbVal,
-            },
-          ],
+    try {
+      const created = await this.prisma.mediaItem.create({
+        data: {
+          ...this.newMediaLocaleFields(
+            item,
+            await this.fetchEnBaseTvdb(MediaType.SHOW, item.tvdbId),
+            lang,
+            lang !== 'en',
+          ),
+          type: MediaType.SHOW,
+          popularity: item.popularity ?? 0,
+          show: { create: { yearStart: item.year ?? null, inProduction: true } },
+          externalIds: {
+            create: [
+              {
+                provider: ExternalProvider.THE_TVDB,
+                providerEntityKind: ProviderEntityKind.SERIES,
+                value: tvdbVal,
+              },
+            ],
+          },
         },
-      },
-    });
-    return created.id;
+      });
+      return created.id;
+    } catch (e: any) {
+      // Race condition: a concurrent fallback / tvdb-search hydration job created this
+      // media first (same check-then-create recovery as the TMDB light upserts).
+      if (e?.code === 'P2002') {
+        const found = await this.findMediaByExternal(
+          ExternalProvider.THE_TVDB,
+          tvdbVal,
+          ProviderEntityKind.SERIES,
+        );
+        if (found) return found.id;
+      }
+      throw e;
+    }
   }
 
   /** Light-upsert a movie resolved from TVDB (backup provider). */
@@ -510,29 +524,41 @@ export class MediaMetadataService {
     // is not (US vs AU "Married at First Sight" collide; attaching by title poisoned the AU
     // row with the US id and mis-routed every later lookup). Unknown id = a new row, always.
     // English base when TVDB has one (see the show path above).
-    const created = await this.prisma.mediaItem.create({
-      data: {
-        ...this.newMediaLocaleFields(
-          item,
-          await this.fetchEnBaseTvdb(MediaType.MOVIE, item.tvdbId),
-          lang,
-          lang !== 'en',
-        ),
-        type: MediaType.MOVIE,
-        popularity: item.popularity ?? 0,
-        movie: { create: { releaseYear: item.year ?? null } },
-        externalIds: {
-          create: [
-            {
-              provider: ExternalProvider.THE_TVDB,
-              providerEntityKind: ProviderEntityKind.MOVIE,
-              value: tvdbVal,
-            },
-          ],
+    try {
+      const created = await this.prisma.mediaItem.create({
+        data: {
+          ...this.newMediaLocaleFields(
+            item,
+            await this.fetchEnBaseTvdb(MediaType.MOVIE, item.tvdbId),
+            lang,
+            lang !== 'en',
+          ),
+          type: MediaType.MOVIE,
+          popularity: item.popularity ?? 0,
+          movie: { create: { releaseYear: item.year ?? null } },
+          externalIds: {
+            create: [
+              {
+                provider: ExternalProvider.THE_TVDB,
+                providerEntityKind: ProviderEntityKind.MOVIE,
+                value: tvdbVal,
+              },
+            ],
+          },
         },
-      },
-    });
-    return created.id;
+      });
+      return created.id;
+    } catch (e: any) {
+      if (e?.code === 'P2002') {
+        const found = await this.findMediaByExternal(
+          ExternalProvider.THE_TVDB,
+          tvdbVal,
+          ProviderEntityKind.MOVIE,
+        );
+        if (found) return found.id;
+      }
+      throw e;
+    }
   }
 
   /** Populate the request-locale override (media title/overview/images) for list
