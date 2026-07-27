@@ -34,12 +34,17 @@ function makeService() {
     syncTmdbChanges: jest.fn(),
     rehydrateAnimeFromTvdb: jest.fn(),
   };
+  const providerAlerts = {
+    checkAlerts: jest.fn(),
+    syncCatalog: jest.fn(),
+  };
   const svc = new CronManagerService(
     prisma,
     scheduler as any,
     notificationScheduler as any,
     adminService as any,
     metadataBackfill as any,
+    providerAlerts as any,
   );
   return { svc, prisma, scheduler, adminService };
 }

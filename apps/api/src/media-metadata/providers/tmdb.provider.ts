@@ -24,13 +24,18 @@ export interface NormalizedProvider {
   name: string;
   logoUrl?: string | null;
 }
+/** Provider entry inside the per-country blob — carries the TMDB provider id so
+ *  availability alerts can match offers against subscribed providers. */
+export interface NormalizedBlobProvider extends NormalizedProvider {
+  id: number;
+}
 /** Watch offers for one ISO 3166-1 country (JustWatch-sourced via TMDB watch/providers).
  *  `stream` merges flatrate/free/ads; `rent`/`buy` are purchase offers. */
 export interface NormalizedCountryProviders {
   link?: string | null;
-  stream: NormalizedProvider[];
-  rent: NormalizedProvider[];
-  buy: NormalizedProvider[];
+  stream: NormalizedBlobProvider[];
+  rent: NormalizedBlobProvider[];
+  buy: NormalizedBlobProvider[];
 }
 /** watch/providers `results` map, normalized per country (empty countries omitted). */
 export type NormalizedProvidersByCountry = Record<string, NormalizedCountryProviders>;
@@ -394,7 +399,7 @@ export class TmdbProvider {
     const results = watch?.results;
     if (!results || typeof results !== 'object') return undefined;
     const CAP = 8;
-    const mapList = (list: any[] | undefined): NormalizedProvider[] => {
+    const mapList = (list: any[] | undefined): NormalizedBlobProvider[] => {
       const seen = new Set<number>();
       return ((list ?? []) as {
         provider_id: number;
@@ -405,7 +410,11 @@ export class TmdbProvider {
         .filter((p) => p.provider_name && !seen.has(p.provider_id) && seen.add(p.provider_id))
         .sort((a, b) => (a.display_priority ?? 999) - (b.display_priority ?? 999))
         .slice(0, CAP)
-        .map((p) => ({ name: p.provider_name, logoUrl: this.tmdb.img(p.logo_path, 'w92') }));
+        .map((p) => ({
+          id: p.provider_id,
+          name: p.provider_name,
+          logoUrl: this.tmdb.img(p.logo_path, 'w92'),
+        }));
     };
     const out: NormalizedProvidersByCountry = {};
     for (const [country, offers] of Object.entries(results)) {

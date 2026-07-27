@@ -1,9 +1,9 @@
-{
+﻿{
   "seasonsCount": "{{count}} stagioni",
-  "inWatchlist": "Nella watchlist",
+  "inWatchlist": "Aggiunto alla watchlist",
   "addWatchlist": "Aggiungi alla watchlist",
   "trackingPaused": "Tracciamento in pausa",
-  "trackingPausedDesc": "In pausa dal {{date}}. Questa serie è nascosta da «Da guardare» e non riceverai notifiche sugli episodi.",
+  "trackingPausedDesc": "In pausa dal {{date}}. Questa serie Ã¨ nascosta da Â«Da guardareÂ» e non riceverai notifiche sugli episodi.",
   "resumeTracking": "Riprendi il tracciamento",
   "statusReturning": "In corso",
   "statusEnded": "Conclusa",

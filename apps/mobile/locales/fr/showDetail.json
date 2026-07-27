@@ -1,6 +1,6 @@
 {
   "seasonsCount": "{{count}} saisons",
-  "inWatchlist": "Dans la liste à regarder",
+  "inWatchlist": "Dans ma liste",
   "addWatchlist": "Ajouter à la liste à regarder",
   "trackingPaused": "Suivi suspendu",
   "trackingPausedDesc": "Suspendu le {{date}}. Cette série est masquée de « À suivre » et vous ne recevrez pas de notifications d'épisodes.",

@@ -363,6 +363,7 @@ function AboutTab({ show, id }: { show: any; id: string }) {
           watchProviders={show.watchProviders}
           legacyProviders={show.providers}
           emptyLabel={t('showDetail:noProviders')}
+          mediaId={id}
         />
       </Card>
 

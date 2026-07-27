@@ -1,6 +1,6 @@
-{
+﻿{
   "seasonsCount": "{{count}} seasons",
-  "inWatchlist": "In Watchlist",
+  "inWatchlist": "Watchlisted",
   "addWatchlist": "Add to Watchlist",
   "trackingPaused": "Tracking paused",
   "trackingPausedDesc": "Paused on {{date}}. This show is hidden from Watch Next and you won't get episode notifications.",
@@ -30,7 +30,7 @@
   "noRatings": "No community ratings yet. Rate episodes to fill the chart.",
   "specials": "Specials",
   "seasonLabel": "Season {{number}}",
-  "chartCaption": "Swipe ‹ › for other seasons · y: user rating (0–5, unrated = 0)",
+  "chartCaption": "Swipe â€¹ â€º for other seasons Â· y: user rating (0â€“5, unrated = 0)",
   "showMoreEpisodes": "Show {{count}} more",
   "originalTitle": "Original title",
   "rateShow": "Rate this show",

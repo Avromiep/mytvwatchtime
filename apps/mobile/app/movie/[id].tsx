@@ -163,6 +163,7 @@ export default function MovieDetailScreen() {
               watchProviders={movie.watchProviders}
               legacyProviders={movie.providers}
               emptyLabel={t('movies:noProviders')}
+              mediaId={movie.id}
             />
           </Card>
 

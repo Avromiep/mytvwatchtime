@@ -48,6 +48,9 @@ import type {
   WatchNextResponseDto,
   ExternalReviewDto,
   FeedPageDto,
+  ProviderAlertDto,
+  ProviderOfferType,
+  WatchProviderCatalogEntryDto,
 } from '@tvwatch/shared';
 import { applyVoteChange, MediaType } from '@tvwatch/shared';
 import { api, HttpError } from './client';
@@ -90,6 +93,8 @@ export const qk = {
   contactThreads: ['contactThreads'] as const,
   contactThread: (id: string) => ['contactThread', id] as const,
   feed: ['feed'] as const,
+  providerAlerts: (mediaId: string) => ['providerAlerts', mediaId] as const,
+  providerCatalog: (country?: string) => ['providerCatalog', country ?? 'auto'] as const,
 };
 
 export const useMe = () =>
@@ -1641,6 +1646,58 @@ export const useToggleListNotify = () => {
   return useMutation({
     mutationFn: (id: string) => api.post(`/lists/${id}/notify`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['list'] }),
+  });
+};
+
+export const useProviderCatalog = (country?: string) =>
+  useQuery({
+    queryKey: qk.providerCatalog(country),
+    queryFn: () =>
+      api.get<WatchProviderCatalogEntryDto[]>(
+        `/watch-providers/catalog${country ? `?country=${country}` : ''}`,
+      ),
+    staleTime: 24 * 60 * 60 * 1000, // regional catalog changes rarely
+  });
+
+export const useProviderAlerts = (mediaId: string) =>
+  useQuery({
+    queryKey: qk.providerAlerts(mediaId),
+    queryFn: () => api.get<ProviderAlertDto[]>(`/media/${mediaId}/provider-alerts`),
+    enabled: !!mediaId,
+  });
+
+export const useSaveProviderAlert = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      mediaId,
+      offerType,
+      providerIds,
+      country,
+    }: {
+      mediaId: string;
+      offerType: ProviderOfferType;
+      providerIds: number[];
+      country?: string;
+    }) =>
+      api.put<ProviderAlertDto[]>(`/media/${mediaId}/provider-alerts/${offerType.toLowerCase()}`, {
+        providerIds,
+        country,
+      }),
+    onSuccess: (data, { mediaId }) => {
+      qc.setQueryData(qk.providerAlerts(mediaId), data);
+    },
+  });
+};
+
+export const useRemoveProviderAlert = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ mediaId, offerType }: { mediaId: string; offerType: ProviderOfferType }) =>
+      api.del<ProviderAlertDto[]>(`/media/${mediaId}/provider-alerts/${offerType.toLowerCase()}`),
+    onSuccess: (data, { mediaId }) => {
+      qc.setQueryData(qk.providerAlerts(mediaId), data);
+    },
   });
 };
 

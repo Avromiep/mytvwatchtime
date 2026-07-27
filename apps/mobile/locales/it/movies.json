@@ -1,4 +1,4 @@
-{
+﻿{
   "title": "Film",
   "watchlist": "Watchlist",
   "watchlistEmpty": "Aggiungi film alla watchlist per vederli qui.",
@@ -7,8 +7,8 @@
   "favorites": "Preferiti",
   "favoritesEmpty": "Aggiungi film preferiti.",
   "watchedButton": "Visto",
-  "watchedButtonCount": "Visto ×{{count}}",
-  "inWatchlist": "Nella watchlist",
+  "watchedButtonCount": "Visto Ã—{{count}}",
+  "inWatchlist": "Aggiunto alla watchlist",
   "addWatchlist": "Watchlist",
   "overview": "Panoramica",
   "noOverview": "Nessuna panoramica disponibile.",

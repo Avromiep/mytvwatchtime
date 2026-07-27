@@ -32,6 +32,7 @@ import { CommentImageModule } from './comment-images/comment-image.module';
 import { AdminModule } from './admin/admin.module';
 import { DataDeletionModule } from './data-deletion/data-deletion.module';
 import { ContactModule } from './contact/contact.module';
+import { ProviderAlertsModule } from './provider-alerts/provider-alerts.module';
 
 @Module({
   imports: [
@@ -71,6 +72,7 @@ import { ContactModule } from './contact/contact.module';
     AdminModule,
     DataDeletionModule,
     ContactModule,
+    ProviderAlertsModule,
   ],
   controllers: [HealthController],
   providers: [

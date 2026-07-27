@@ -1,6 +1,6 @@
 {
   "seasonsCount": "{{count}} sezon",
-  "inWatchlist": "İzleme Listesinde",
+  "inWatchlist": "Listeye eklendi",
   "addWatchlist": "İzleme Listesine ekle",
   "trackingPaused": "Takip duraklatıldı",
   "trackingPausedDesc": "{{date}} tarihinde duraklatıldı. Bu dizi 'Sıradaki' bölümünde gizlendi ve bölüm bildirimleri almazsınız.",

@@ -1,6 +1,6 @@
-{
+﻿{
   "seasonsCount": "{{count}} musim",
-  "inWatchlist": "Dalam Daftar Tontonan",
+  "inWatchlist": "Sudah di daftar",
   "addWatchlist": "Tambahkan ke Daftar Tontonan",
   "trackingPaused": "Pelacakan dijeda",
   "trackingPausedDesc": "Dijeda pada {{date}}. Acara ini disembunyikan dari Tonton Berikutnya dan kamu tidak akan menerima notifikasi episode.",

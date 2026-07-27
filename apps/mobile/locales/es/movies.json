@@ -1,21 +1,21 @@
-{
-  "title": "Películas",
+﻿{
+  "title": "PelÃ­culas",
   "watchlist": "Lista de seguimiento",
-  "watchlistEmpty": "Añade películas a tu lista de seguimiento para verlas aquí.",
+  "watchlistEmpty": "AÃ±ade pelÃ­culas a tu lista de seguimiento para verlas aquÃ­.",
   "watched": "Vistas",
-  "watchedEmpty": "Aún no has visto ninguna película.",
+  "watchedEmpty": "AÃºn no has visto ninguna pelÃ­cula.",
   "favorites": "Favoritas",
-  "favoritesEmpty": "Añade películas favoritas.",
+  "favoritesEmpty": "AÃ±ade pelÃ­culas favoritas.",
   "watchedButton": "Vista",
-  "watchedButtonCount": "Vista ×{{count}}",
-  "inWatchlist": "En la lista de seguimiento",
+  "watchedButtonCount": "Vista Ã—{{count}}",
+  "inWatchlist": "En mi lista",
   "addWatchlist": "Lista de seguimiento",
   "overview": "Sinopsis",
   "noOverview": "No hay sinopsis disponible.",
-  "watchTrailer": "Ver tráiler",
-  "whereToWatch": "Dónde ver",
+  "watchTrailer": "Ver trÃ¡iler",
+  "whereToWatch": "DÃ³nde ver",
   "noProviders": "No hay proveedores disponibles.",
   "cast": "Reparto",
-  "rateMovie": "Califica esta película",
-  "similar": "Películas similares"
+  "rateMovie": "Califica esta pelÃ­cula",
+  "similar": "PelÃ­culas similares"
 }

@@ -5,6 +5,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { NotificationScheduler } from '../notifications/notification.scheduler';
 import { MetadataBackfillService } from '../media-metadata/metadata-backfill.service';
 import { AdminService } from './admin.service';
+import { ProviderAlertsService } from '../provider-alerts/provider-alerts.service';
 import { CronExpression } from '@nestjs/schedule';
 
 interface JobHandler {
@@ -64,6 +65,16 @@ const DEFAULTS: { name: string; label: string; schedule: string }[] = [
     label: 'Scheduled Hydrations Sync',
     schedule: CronExpression.EVERY_HOUR,
   },
+  {
+    name: 'provider_alerts_check',
+    label: 'Watch Provider Alerts Check',
+    schedule: '0 8 * * *',
+  },
+  {
+    name: 'watch_provider_catalog_sync',
+    label: 'Watch Provider Catalog Sync',
+    schedule: '0 3 * * 1',
+  },
 ];
 
 @Injectable()
@@ -79,6 +90,7 @@ export class CronManagerService implements OnModuleInit {
     private readonly notificationScheduler: NotificationScheduler,
     private readonly adminService: AdminService,
     private readonly metadataBackfill: MetadataBackfillService,
+    private readonly providerAlerts: ProviderAlertsService,
   ) {}
 
   async onModuleInit() {
@@ -154,6 +166,16 @@ export class CronManagerService implements OnModuleInit {
       label: 'Scheduled Hydrations Sync',
       defaultSchedule: CronExpression.EVERY_HOUR,
       fn: () => this.syncHydrationSchedules(),
+    });
+    this.handlers.set('provider_alerts_check', {
+      label: 'Watch Provider Alerts Check',
+      defaultSchedule: '0 8 * * *',
+      fn: () => this.providerAlerts.checkAlerts(),
+    });
+    this.handlers.set('watch_provider_catalog_sync', {
+      label: 'Watch Provider Catalog Sync',
+      defaultSchedule: '0 3 * * 1',
+      fn: () => this.providerAlerts.syncCatalog(),
     });
 
     // Seed defaults

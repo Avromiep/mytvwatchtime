@@ -29,6 +29,27 @@ export interface NotificationQuery extends PaginationQuery {
 
 export interface PaginatedNotifications extends Paginated<NotificationItemDto> {}
 
+export type ProviderOfferType = 'STREAM' | 'RENT' | 'BUY';
+
+/** One watch-provider availability subscription for a media + offer type. */
+export interface ProviderAlertDto {
+  offerType: ProviderOfferType;
+  /** ISO 3166-1 country whose offers are matched. */
+  country: string;
+  /** TMDB provider ids; empty = any provider. */
+  providerIds: number[];
+  active: boolean;
+  notifiedAt?: string | null;
+}
+
+/** Regional catalog entry for the alert picker. */
+export interface WatchProviderCatalogEntryDto {
+  /** TMDB provider id. */
+  id: number;
+  name: string;
+  logoUrl?: string | null;
+}
+
 export interface UpdateNotificationPreferencesDto {
   preferences?: Record<NotificationCategory, { push: boolean; inApp: boolean }>;
   quietHoursEnabled?: boolean;

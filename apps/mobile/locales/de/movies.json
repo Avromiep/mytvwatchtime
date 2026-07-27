@@ -1,21 +1,21 @@
-{
+﻿{
   "title": "Filme",
   "watchlist": "Merkliste",
-  "watchlistEmpty": "Füge Filme zu deiner Merkliste hinzu, um sie hier zu sehen.",
+  "watchlistEmpty": "FÃ¼ge Filme zu deiner Merkliste hinzu, um sie hier zu sehen.",
   "watched": "Gesehen",
   "watchedEmpty": "Noch keine Filme gesehen.",
   "favorites": "Favoriten",
-  "favoritesEmpty": "Füge Lieblingsfilme hinzu.",
+  "favoritesEmpty": "FÃ¼ge Lieblingsfilme hinzu.",
   "watchedButton": "Gesehen",
-  "watchedButtonCount": "Gesehen ×{{count}}",
-  "inWatchlist": "Auf der Merkliste",
+  "watchedButtonCount": "Gesehen Ã—{{count}}",
+  "inWatchlist": "Gemerkt",
   "addWatchlist": "Merkliste",
-  "overview": "Übersicht",
-  "noOverview": "Keine Übersicht verfügbar.",
+  "overview": "Ãœbersicht",
+  "noOverview": "Keine Ãœbersicht verfÃ¼gbar.",
   "watchTrailer": "Trailer ansehen",
   "whereToWatch": "Wo ansehen",
-  "noProviders": "Keine Anbieter verfügbar.",
+  "noProviders": "Keine Anbieter verfÃ¼gbar.",
   "cast": "Besetzung",
   "rateMovie": "Diesen Film bewerten",
-  "similar": "Ähnliche Filme"
+  "similar": "Ã„hnliche Filme"
 }

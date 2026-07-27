@@ -106,6 +106,7 @@ enum NotificationCategory {
   PREMIERE
   MOVIE_RELEASE
   WATCHLIST_REMINDER
+  PROVIDER_ALERT
   BADGE
   FOLLOW
   COMMENT_LIKE
@@ -339,6 +340,7 @@ model User {
   externalReviewLikes ExternalReviewLike[]
   notifications      Notification[]
   notificationPrefs  NotificationPreference?
+  providerAlerts     WatchProviderAlert[]
   badges             UserBadge[]
   imports            Import[]
   followsInitiated   Follow[]      @relation("FollowFollower")
@@ -507,6 +509,7 @@ model MediaItem {
   watchHistory WatchHistory[]
   lists        CustomListItem[]
   externalReviews ExternalReview[]
+  providerAlerts WatchProviderAlert[]
 
   @@index([type])
   @@index([status])
@@ -744,6 +747,51 @@ model WatchProvider {
   media MediaWatchProvider[]
 
   @@map("watch_providers")
+}
+
+enum ProviderOfferType {
+  STREAM
+  RENT
+  BUY
+}
+
+/// User opt-in: "notify me when this media becomes available on these providers".
+/// One row per (user, media, offer type); providerIds empty = any provider.
+/// One-shot: the daily check disables the row after notifying (no repeat spam).
+model WatchProviderAlert {
+  id          String            @id @default(cuid())
+  userId      String            @map("user_id")
+  mediaId     String            @map("media_id")
+  offerType   ProviderOfferType @map("offer_type")
+  /// ISO 3166-1 country whose offers are matched (resolved from the user's locale at subscribe time).
+  country     String
+  /// TMDB provider ids to match; empty array = notify on ANY provider appearing.
+  providerIds Int[]             @map("provider_ids")
+  active      Boolean           @default(true)
+  createdAt   DateTime          @default(now()) @map("created_at")
+  notifiedAt  DateTime?         @map("notified_at")
+
+  media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mediaId, offerType])
+  @@index([active])
+  @@map("watch_provider_alerts")
+}
+
+/// Regional watch-provider catalog synced from TMDB /watch/providers/{movie,tv}
+/// per region — powers the alert picker's provider list for the user's country.
+model WatchProviderCatalog {
+  id              String  @id @default(cuid())
+  tmdbId          Int     @map("tmdb_id")
+  name            String
+  logoUrl         String? @map("logo_url")
+  country         String
+  displayPriority Int     @map("display_priority")
+
+  @@unique([tmdbId, country])
+  @@index([country])
+  @@map("watch_provider_catalog")
 }
 
 model MediaWatchProvider {

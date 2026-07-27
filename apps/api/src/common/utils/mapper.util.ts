@@ -87,11 +87,15 @@ export function requestOfferCountry(lang: string = currentLanguage()): string {
 
 function blobProviders(list: any): WatchProviderDto[] {
   if (!Array.isArray(list)) return [];
-  // No internal id in the blob — the slugged name is a stable render key.
+  // Blob entries carry the TMDB provider id (stringified for the DTO); the slugged
+  // name is the fallback render key for blobs written before ids were stored.
   return list
     .filter((p) => p && typeof p.name === 'string')
     .map((p) => ({
-      id: String(p.name).toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      id:
+        p.id != null
+          ? String(p.id)
+          : String(p.name).toLowerCase().replace(/[^a-z0-9]+/g, '-'),
       name: p.name,
       logoUrl: p.logoUrl ?? null,
     }));

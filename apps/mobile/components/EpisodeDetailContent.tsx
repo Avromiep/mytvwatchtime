@@ -274,6 +274,7 @@ export function EpisodeDetailContent({
                 watchProviders={ep.watchProviders}
                 legacyProviders={ep.providers}
                 emptyLabel={t('episode:noProviders')}
+                mediaId={ep.showId}
               />
             </View>
           </Card>

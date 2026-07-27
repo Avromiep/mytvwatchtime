@@ -33,5 +33,12 @@
   "providersRent": "Louer",
   "providersBuy": "Acheter",
   "providersAttribution": "Données des plateformes par JustWatch",
+  "providersNotifyTitle": "Me notifier",
+  "providersNotifyDesc": "Choisissez les plateformes pour lesquelles vous voulez être alerté. Nous vous préviendrons quand ce titre y sera disponible.",
+  "providersAll": "Toutes les plateformes",
+  "providersNotifySet": "Vous serez prévenu dès sa disponibilité.",
+  "providersNotifyRemoved": "Notification supprimée.",
+  "providersRemove": "Retirer",
+  "providersNotifyWhenAvailable": "Notifier quand disponible :",
   "deletedUser": "Utilisateur supprimé"
 }
