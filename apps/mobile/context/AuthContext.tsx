@@ -10,6 +10,7 @@ import { api, HttpError } from '../api/client';
 import { tokenStorage } from '../api/storage';
 import { setBaseUrl, resetBaseUrl } from '../api/client';
 import { clearWidgetCredentials, syncWidgetCredentials } from '../widgets/sync';
+import { logFirstEvent, setAnalyticsUser } from '../lib/analytics';
 
 interface AuthContextValue {
   user: CurrentUserDto | null;
@@ -42,13 +43,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const selfHosted = await tokenStorage.getIsSelfHosted();
       setIsSelfHostedState(selfHosted);
       const stored = await tokenStorage.getUser<CurrentUserDto>();
-      if (stored) setUser(stored);
+      if (stored) {
+        setUser(stored);
+        setAnalyticsUser(stored.id);
+      }
       const access = await tokenStorage.getAccess();
       if (access) {
         try {
           const me = await api.get<CurrentUserDto>('/me');
           setUser(me);
           await tokenStorage.setUser(me);
+          setAnalyticsUser(me.id);
         } catch (e) {
           // 401 = access + refresh both invalid (refresh already attempted in client)
           if (e instanceof HttpError && e.status === 401) {
@@ -85,6 +90,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await tokenStorage.set(s.accessToken, s.refreshToken);
     await tokenStorage.setUser(s.user);
     setUser(s.user);
+    setAnalyticsUser(s.user.id);
+    logFirstEvent('first_login', s.user.id);
     void syncWidgetCredentials();
   }, []);
 
@@ -127,6 +134,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     await tokenStorage.clear();
     setUser(null);
+    setAnalyticsUser(null);
     void clearWidgetCredentials();
   }, []);
 

@@ -20,6 +20,7 @@ import { api, setBaseUrl, SITE_URL } from '../api/client';
 import { radius, spacing } from '../theme/theme';
 import { showError, showConfirm } from '../lib/dialog';
 import { showToast } from '../lib/toast';
+import { logEvent } from '../lib/analytics';
 
 const API_BASE = (Constants.expoConfig?.extra as any)?.apiBaseUrl || 'http://localhost:4000/api';
 
@@ -145,6 +146,7 @@ export default function SettingsScreen() {
       destructive: true,
       onConfirm: async () => {
         await api.del('/me');
+        logEvent('delete_account');
         await logout();
         router.replace('/(auth)/login');
       },

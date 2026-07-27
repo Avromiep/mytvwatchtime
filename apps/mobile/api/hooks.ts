@@ -53,6 +53,7 @@ import { applyVoteChange, MediaType } from '@tvwatch/shared';
 import { api, HttpError } from './client';
 import { applyWatchStateToItems } from './watch-next-optimistic';
 import { refreshWidgets } from '../widgets/sync';
+import { logFirstEvent } from '../lib/analytics';
 
 export const qk = {
   me: ['me'] as const,
@@ -625,6 +626,7 @@ export const useCreateComment = () => {
       externalReviewId?: string;
     }) => api.post<CommentDto>('/comments', dto),
     onSuccess: (_data, vars) => {
+      logFirstEvent('first_comment');
       qc.invalidateQueries({ queryKey: ['comments'] });
       if (vars.parentId) {
         qc.invalidateQueries({ queryKey: ['commentReplies', vars.parentId] });
@@ -658,6 +660,10 @@ export const useToggleCommentLike = () => {
         likedByMe: liked,
         likesCount: Math.max(0, c.likesCount + (liked ? 1 : -1)),
       }));
+    },
+    onSuccess: (_d, { liked }) => {
+      // liked === true means the action was an UNlike — only a like counts.
+      if (!liked) logFirstEvent('first_comment_like');
     },
   });
 };
@@ -760,6 +766,9 @@ export const useMarkEpisodeWatched = () => {
       ctx?.prevShowEpisodes?.forEach(([key, data]: [any, any]) => qc.setQueryData(key, data));
       if (ctx?.prevEpisode) qc.setQueryData(qk.episode(vars.id), ctx.prevEpisode);
     },
+    onSuccess: (_d, vars) => {
+      if (vars.on) logFirstEvent('first_watched_episode');
+    },
     onSettled: (_d, _e, vars) => {
       // Invalidate all relevant queries so every consumer updates
       qc.invalidateQueries({ queryKey: ['watchNext'] });
@@ -781,7 +790,9 @@ export const useMarkSeasonWatched = () => {
   return useMutation({
     mutationFn: ({ id, on }: { id: string; on: boolean }) =>
       on ? api.post(`/seasons/${id}/watched`, {}) : api.del(`/seasons/${id}/watched`),
-    onSuccess: () => {
+    onSuccess: (_d, vars) => {
+      // A season mark watches episodes in bulk — counts as a first watched episode too.
+      if (vars.on) logFirstEvent('first_watched_episode');
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['show'] });
       // A season mark is a bulk watch action — the Shows tab and leaderboard change too.
@@ -1148,7 +1159,8 @@ export const useToggleMovieWatchlist = () => {
   return useMutation({
     mutationFn: ({ id, on }: { id: string; on: boolean }) =>
       on ? api.post(`/movies/${id}/watchlist`, {}) : api.del(`/movies/${id}/watchlist`),
-    onSuccess: () => {
+    onSuccess: (_d, vars) => {
+      if (vars.on) logFirstEvent('first_movie_watchlist');
       qc.invalidateQueries({ queryKey: ['watchlist'] });
       qc.invalidateQueries({ queryKey: ['movie'] });
     },
@@ -1185,6 +1197,9 @@ export const useMarkMovieWatched = () => {
     onError: (_e, vars, ctx) => {
       if (ctx?.prevMovie) qc.setQueryData(qk.movie(vars.id), ctx.prevMovie);
       ctx?.prevWatchlist?.forEach(([key, data]: [any, any]) => qc.setQueryData(key, data));
+    },
+    onSuccess: (_d, vars) => {
+      if (vars.on) logFirstEvent('first_watched_movie');
     },
     onSettled: () => {
       // Stats refresh is driven by the SWR stale flag + polling (no per-mark invalidation).

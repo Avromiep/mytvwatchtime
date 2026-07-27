@@ -15,9 +15,11 @@ import { PreferencesProvider, useAppearance } from '../context/PreferencesProvid
 import { DialogProvider } from '../components/DialogProvider';
 import { ToastHost } from '../components/ToastHost';
 import { useNotificationNavigation } from '../hooks/useNotificationNavigation';
+import { initAnalytics } from '../lib/analytics';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync();
+  initAnalytics();
 }
 
 const queryClient = new QueryClient({
