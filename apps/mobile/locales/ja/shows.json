@@ -28,5 +28,6 @@
   "pastYearsAgo_one": "1年前",
   "pastYearsAgo_other": "{{count}}年前",
   "pastYearsMonthsAgo_one": "{{years}}年{{count}}か月前",
-  "pastYearsMonthsAgo_other": "{{years}}年{{count}}か月前"
+  "pastYearsMonthsAgo_other": "{{years}}年{{count}}か月前",
+  "paused": "一時停止中"
 }

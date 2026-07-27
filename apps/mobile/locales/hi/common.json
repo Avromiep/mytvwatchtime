@@ -93,5 +93,9 @@
   "tomorrow": "कल",
   "thisWeek": "इस सप्ताह",
   "nextWeek": "अगला सप्ताह",
-  "deletedUser": "हटाया गया उपयोगकर्ता"
+  "deletedUser": "हटाया गया उपयोगकर्ता",
+  "unwatchOnce": "एक देखना हटाएँ",
+  "unwatchAll": "सभी को नहीं देखा के रूप में चिह्नित करें",
+  "unwatchAllConfirmTitle": "सभी को नहीं देखा के रूप में चिह्नित करें?",
+  "unwatchAllConfirmDesc": "इससे सभी {{count}} दर्ज बार देखे जाने की प्रविष्टियाँ हट जाएँगी।"
 }

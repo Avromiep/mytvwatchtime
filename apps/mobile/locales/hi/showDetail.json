@@ -30,5 +30,10 @@
   "showMoreEpisodes": "{{count}} और दिखाएँ",
   "originalTitle": "मूल शीर्षक",
   "rateShow": "इस शो को रेट करें",
-  "similar": "मिलते-जुलते शो"
+  "similar": "मिलते-जुलते शो",
+  "rewatchAll": "सभी फिर से देखें",
+  "unwatchSeason": "सीज़न को नहीं देखा के रूप में चिह्नित करें",
+  "rewatchCount": "×{{count}}",
+  "unwatchSeasonConfirmTitle": "सीज़न को नहीं देखा के रूप में चिह्नित करें?",
+  "unwatchSeasonConfirmDesc": "इससे \"{{title}}\" की सभी दर्ज बार देखे जाने की प्रविष्टियाँ हट जाएँगी।"
 }

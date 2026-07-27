@@ -10,7 +10,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { T, WatchButton, SectionHeader, useWatchMenu } from './primitives';
-import { useMarkEpisodeWatched, useRewatchEpisode, useShowEpisodes } from '../api/hooks';
+import { useMarkEpisodeWatched, useRewatchEpisode, useShowEpisodes, useUnwatchEpisodeOnce } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
 import { formatAirDate, formatAirTime } from '../lib/format';
@@ -38,6 +38,7 @@ export function EpisodeHistoryCarousel({ showId }: { showId: string }) {
   const { data: seasons } = useShowEpisodes(showId);
   const mark = useMarkEpisodeWatched();
   const rewatch = useRewatchEpisode();
+  const unwatchOnce = useUnwatchEpisodeOnce();
   const menu = useWatchMenu();
 
   const { width: screenW } = useWindowDimensions();
@@ -186,8 +187,10 @@ export function EpisodeHistoryCarousel({ showId }: { showId: string }) {
                     onPress={() =>
                       menu({
                         watched: !!e.watched,
+                        watchCount: e.watchCount ?? 0,
                         onMarkWatched: () => mark.mutate({ id: e.id, on: true }),
                         onRewatch: () => rewatch.mutate(e.id),
+                        onUnwatchOnce: () => unwatchOnce.mutate(e.id),
                         onUnwatch: () => mark.mutate({ id: e.id, on: false }),
                       })
                     }

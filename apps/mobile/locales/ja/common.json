@@ -93,5 +93,9 @@
   "tomorrow": "明日",
   "thisWeek": "今週",
   "nextWeek": "来週",
-  "deletedUser": "削除されたユーザー"
+  "deletedUser": "削除されたユーザー",
+  "unwatchOnce": "1回分の視聴を取り消す",
+  "unwatchAll": "すべて未視聴にする",
+  "unwatchAllConfirmTitle": "すべて未視聴にしますか？",
+  "unwatchAllConfirmDesc": "記録された {{count}} 回の視聴がすべて削除されます。"
 }

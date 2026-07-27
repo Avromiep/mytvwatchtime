@@ -40,5 +40,9 @@
   "providersNotifyRemoved": "Notification supprimée.",
   "providersRemove": "Retirer",
   "providersNotifyWhenAvailable": "Notifier quand disponible :",
-  "deletedUser": "Utilisateur supprimé"
+  "deletedUser": "Utilisateur supprimé",
+  "unwatchOnce": "Retirer un visionnage",
+  "unwatchAll": "Tout marquer comme non vu",
+  "unwatchAllConfirmTitle": "Tout marquer comme non vu ?",
+  "unwatchAllConfirmDesc": "Cela supprime les {{count}} visionnages enregistrés."
 }

@@ -28,6 +28,7 @@ import {
   useMarkEpisodeWatched,
   useEpisodeVotes,
   useRewatchEpisode,
+  useUnwatchEpisodeOnce,
 } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
@@ -53,6 +54,7 @@ export function EpisodeDetailContent({
   const { data: ep, isLoading } = useEpisode(episodeId);
   const mark = useMarkEpisodeWatched();
   const rewatch = useRewatchEpisode();
+  const unwatchOnce = useUnwatchEpisodeOnce();
   const votes = useEpisodeVotes(episodeId);
   const { tokens } = useAppearance();
   const { t } = useTranslation(['episode', 'common']);
@@ -214,8 +216,10 @@ export function EpisodeDetailContent({
               onPress={() =>
                 menu({
                   watched: !!ep.watched,
+                  watchCount: ep.watchCount ?? 0,
                   onMarkWatched: () => mark.mutate({ id: episodeId, on: true }),
                   onRewatch: () => rewatch.mutate(episodeId),
+                  onUnwatchOnce: () => unwatchOnce.mutate(episodeId),
                   onUnwatch: () => mark.mutate({ id: episodeId, on: false }),
                 })
               }

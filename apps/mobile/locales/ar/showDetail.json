@@ -30,5 +30,10 @@
   "showMoreEpisodes": "عرض {{count}} إضافية",
   "originalTitle": "العنوان الأصلي",
   "rateShow": "قيّم هذا المسلسل",
-  "similar": "مسلسلات مشابهة"
+  "similar": "مسلسلات مشابهة",
+  "rewatchAll": "إعادة مشاهدة الكل",
+  "unwatchSeason": "وضع الموسم كغير مشاهد",
+  "rewatchCount": "×{{count}}",
+  "unwatchSeasonConfirmTitle": "وضع الموسم كغير مشاهد؟",
+  "unwatchSeasonConfirmDesc": "سيؤدي هذا إلى إزالة جميع المشاهدات المسجلة لـ \"{{title}}\"."
 }

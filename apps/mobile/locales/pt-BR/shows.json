@@ -28,5 +28,6 @@
   "pastYearsAgo_one": "Há 1 ano",
   "pastYearsAgo_other": "Há {{count}} anos",
   "pastYearsMonthsAgo_one": "Há {{years}} ano e {{count}} mês",
-  "pastYearsMonthsAgo_other": "Há {{years}} ano e {{count}} meses"
+  "pastYearsMonthsAgo_other": "Há {{years}} ano e {{count}} meses",
+  "paused": "Pausadas"
 }

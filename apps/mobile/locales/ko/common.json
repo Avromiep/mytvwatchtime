@@ -93,5 +93,9 @@
   "tomorrow": "내일",
   "thisWeek": "이번 주",
   "nextWeek": "다음 주",
-  "deletedUser": "삭제된 사용자"
+  "deletedUser": "삭제된 사용자",
+  "unwatchOnce": "한 번 시청 취소",
+  "unwatchAll": "모두 안 본 것으로 표시",
+  "unwatchAllConfirmTitle": "모두 안 본 것으로 표시할까요?",
+  "unwatchAllConfirmDesc": "기록된 {{count}}회 시청이 모두 삭제됩니다."
 }

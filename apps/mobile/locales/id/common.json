@@ -93,5 +93,9 @@
   "tomorrow": "Besok",
   "thisWeek": "Minggu ini",
   "nextWeek": "Minggu depan",
-  "deletedUser": "Pengguna dihapus"
+  "deletedUser": "Pengguna dihapus",
+  "unwatchOnce": "Batalkan satu tontonan",
+  "unwatchAll": "Tandai semua belum ditonton",
+  "unwatchAllConfirmTitle": "Tandai semua belum ditonton?",
+  "unwatchAllConfirmDesc": "Ini menghapus semua {{count}} tontonan yang tercatat."
 }

@@ -30,5 +30,10 @@
   "showMoreEpisodes": "{{count}} tane daha göster",
   "originalTitle": "Orijinal başlık",
   "rateShow": "Bu diziyi puanla",
-  "similar": "Benzer diziler"
+  "similar": "Benzer diziler",
+  "rewatchAll": "Tümünü tekrar izle",
+  "unwatchSeason": "Sezonu izlenmedi olarak işaretle",
+  "rewatchCount": "×{{count}}",
+  "unwatchSeasonConfirmTitle": "Sezon izlenmedi olarak işaretlensin mi?",
+  "unwatchSeasonConfirmDesc": "Bu, \"{{title}}\" için kaydedilmiş tüm izlemeleri kaldırır."
 }

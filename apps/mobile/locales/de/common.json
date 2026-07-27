@@ -93,5 +93,9 @@
   "tomorrow": "Morgen",
   "thisWeek": "Diese Woche",
   "nextWeek": "Nächste Woche",
-  "deletedUser": "Gelöschter Nutzer"
+  "deletedUser": "Gelöschter Nutzer",
+  "unwatchOnce": "Eine Wiederholung entfernen",
+  "unwatchAll": "Alle als nicht gesehen markieren",
+  "unwatchAllConfirmTitle": "Alle als nicht gesehen markieren?",
+  "unwatchAllConfirmDesc": "Dadurch werden alle {{count}} erfassten Sichtungen entfernt."
 }

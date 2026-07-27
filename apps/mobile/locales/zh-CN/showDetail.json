@@ -30,5 +30,10 @@
   "showMoreEpisodes": "再显示 {{count}} 集",
   "originalTitle": "原标题",
   "rateShow": "为这部剧评分",
-  "similar": "类似剧集"
+  "similar": "类似剧集",
+  "rewatchAll": "全部重看",
+  "unwatchSeason": "将本季标记为未看",
+  "rewatchCount": "×{{count}}",
+  "unwatchSeasonConfirmTitle": "将本季标记为未看？",
+  "unwatchSeasonConfirmDesc": "这将删除“{{title}}”所有已记录的观看。"
 }

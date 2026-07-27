@@ -93,5 +93,9 @@
   "tomorrow": "Yarın",
   "thisWeek": "Bu hafta",
   "nextWeek": "Gelecek hafta",
-  "deletedUser": "Silinmiş kullanıcı"
+  "deletedUser": "Silinmiş kullanıcı",
+  "unwatchOnce": "Bir izlemeyi geri al",
+  "unwatchAll": "Tümünü izlenmedi olarak işaretle",
+  "unwatchAllConfirmTitle": "Tümü izlenmedi olarak işaretlensin mi?",
+  "unwatchAllConfirmDesc": "Bu, kaydedilmiş {{count}} izlemeyi kaldırır."
 }

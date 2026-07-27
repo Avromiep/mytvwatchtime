@@ -95,5 +95,9 @@
   "processing": "Processing…",
   "nothingHereYet": "Nothing here yet",
   "browse": "Browse",
-  "deletedUser": "Deleted user"
+  "deletedUser": "Deleted user",
+  "unwatchOnce": "Unwatch once",
+  "unwatchAll": "Unwatch all",
+  "unwatchAllConfirmTitle": "Unwatch all?",
+  "unwatchAllConfirmDesc": "This removes all {{count}} recorded watches."
 }

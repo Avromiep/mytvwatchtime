@@ -93,5 +93,9 @@
   "tomorrow": "غداً",
   "thisWeek": "هذا الأسبوع",
   "nextWeek": "الأسبوع المقبل",
-  "deletedUser": "مستخدم محذوف"
+  "deletedUser": "مستخدم محذوف",
+  "unwatchOnce": "التراجع عن مشاهدة واحدة",
+  "unwatchAll": "وضع الكل كغير مشاهد",
+  "unwatchAllConfirmTitle": "وضع الكل كغير مشاهد؟",
+  "unwatchAllConfirmDesc": "سيؤدي هذا إلى إزالة جميع المشاهدات المسجلة ({{count}})."
 }

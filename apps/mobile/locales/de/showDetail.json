@@ -30,5 +30,10 @@
   "showMoreEpisodes": "{{count}} weitere anzeigen",
   "originalTitle": "Originaltitel",
   "rateShow": "Diese Serie bewerten",
-  "similar": "Ã„hnliche Serien"
+  "similar": "Ã„hnliche Serien",
+  "rewatchAll": "Alle erneut ansehen",
+  "unwatchSeason": "Staffel als nicht gesehen markieren",
+  "rewatchCount": "×{{count}}",
+  "unwatchSeasonConfirmTitle": "Staffel als nicht gesehen markieren?",
+  "unwatchSeasonConfirmDesc": "Dadurch werden alle erfassten Sichtungen von „{{title}}“ entfernt."
 }

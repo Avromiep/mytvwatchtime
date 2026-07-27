@@ -140,6 +140,7 @@ export enum WatchNextBucket {
   HISTORY = 'HISTORY',
   NOT_RECENTLY = 'NOT_RECENTLY',
   START_WATCHING = 'START_WATCHING',
+  PAUSED = 'PAUSED',
 }
 
 export enum UpcomingBucket {

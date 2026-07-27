@@ -30,5 +30,10 @@
   "showMoreEpisodes": "Tampilkan {{count}} lainnya",
   "originalTitle": "Judul asli",
   "rateShow": "Beri rating acara ini",
-  "similar": "Acara serupa"
+  "similar": "Acara serupa",
+  "rewatchAll": "Tonton ulang semua",
+  "unwatchSeason": "Tandai musim belum ditonton",
+  "rewatchCount": "×{{count}}",
+  "unwatchSeasonConfirmTitle": "Tandai musim belum ditonton?",
+  "unwatchSeasonConfirmDesc": "Ini menghapus semua tontonan yang tercatat untuk \"{{title}}\"."
 }

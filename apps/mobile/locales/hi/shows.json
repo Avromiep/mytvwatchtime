@@ -28,5 +28,6 @@
   "pastYearsAgo_one": "1 साल पहले",
   "pastYearsAgo_other": "{{count}} साल पहले",
   "pastYearsMonthsAgo_one": "{{years}} साल और {{count}} महीना पहले",
-  "pastYearsMonthsAgo_other": "{{years}} साल और {{count}} महीने पहले"
+  "pastYearsMonthsAgo_other": "{{years}} साल और {{count}} महीने पहले",
+  "paused": "रुकी हुई"
 }

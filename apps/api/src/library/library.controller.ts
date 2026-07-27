@@ -60,6 +60,11 @@ export class LibraryController {
     return this.library.watchNext(userId);
   }
 
+  @Get('watch-next/paused')
+  pausedWatchNext(@CurrentUser('id') userId: string) {
+    return this.library.pausedWatchNext(userId);
+  }
+
   // Burst-by-design (infinite scroll-up pagination) — double the global 60/min.
   @Throttle({ default: { limit: 120, ttl: 60_000 } })
   @Get('watch-next/history')

@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,6 +24,9 @@ interface FlatRow {
   cards?: StatusItem[];
 }
 
+/** Hoisted so the memoized PosterCard sees a stable style reference. */
+const GRID_CARD_STYLE = { marginRight: 0 } as const;
+
 export default function MyShowsScreen() {
   const { width } = useWindowDimensions();
   const { tokens } = useAppearance();
@@ -36,37 +39,40 @@ export default function MyShowsScreen() {
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
   const [expanded, setExpanded] = useState<Record<SectionKey, boolean>>({ watching: true, notStarted: true, finished: true });
 
-  if (isLoading) return <Screen><Header title={t('social:myShows.title')} showBack /><Spinner /></Screen>;
-
   const containerW = width - 32; // spacing.lg * 2
   const gap = 8;
   const cols = Math.max(2, Math.floor((containerW + gap) / (110 + gap)));
   const cellW = Math.floor((containerW - gap * (cols - 1)) / cols);
 
-  const defs: { key: SectionKey; title: string; empty: string; items: StatusItem[] }[] = [
-    { key: 'watching', title: t('social:myShows.toWatch'), empty: t('social:myShows.toWatchEmpty'), items: data?.watching ?? [] },
-    { key: 'notStarted', title: t('social:myShows.notStarted'), empty: t('social:myShows.notStartedEmpty'), items: data?.notStarted ?? [] },
-    { key: 'finished', title: t('social:myShows.finished'), empty: t('social:myShows.finishedEmpty'), items: data?.finished ?? [] },
-  ];
+  const defs: { key: SectionKey; title: string; empty: string; items: StatusItem[] }[] = useMemo(
+    () => [
+      { key: 'watching', title: t('social:myShows.toWatch'), empty: t('social:myShows.toWatchEmpty'), items: data?.watching ?? [] },
+      { key: 'notStarted', title: t('social:myShows.notStarted'), empty: t('social:myShows.notStartedEmpty'), items: data?.notStarted ?? [] },
+      { key: 'finished', title: t('social:myShows.finished'), empty: t('social:myShows.finishedEmpty'), items: data?.finished ?? [] },
+    ],
+    [t, data],
+  );
 
-  const rows: FlatRow[] = [];
-  for (const s of defs) {
-    rows.push({ type: 'header', key: `h_${s.key}`, title: s.title, count: s.items.length, section: s.key });
-    if (expanded[s.key]) {
-      if (s.items.length === 0) {
-        rows.push({ type: 'empty', key: `e_${s.key}`, message: s.empty });
-      } else {
-        for (let i = 0; i < s.items.length; i += cols) {
-          rows.push({ type: 'cards', key: `r_${s.key}_${i}`, cards: s.items.slice(i, i + cols) });
+  const { rows, stickyIndices } = useMemo(() => {
+    const rows: FlatRow[] = [];
+    for (const s of defs) {
+      rows.push({ type: 'header', key: `h_${s.key}`, title: s.title, count: s.items.length, section: s.key });
+      if (expanded[s.key]) {
+        if (s.items.length === 0) {
+          rows.push({ type: 'empty', key: `e_${s.key}`, message: s.empty });
+        } else {
+          for (let i = 0; i < s.items.length; i += cols) {
+            rows.push({ type: 'cards', key: `r_${s.key}_${i}`, cards: s.items.slice(i, i + cols) });
+          }
         }
       }
     }
-  }
+    const stickyIndices: number[] = [];
+    rows.forEach((r, i) => { if (r.type === 'header') stickyIndices.push(i); });
+    return { rows, stickyIndices };
+  }, [defs, expanded, cols]);
 
-  const stickyIndices: number[] = [];
-  rows.forEach((r, i) => { if (r.type === 'header') stickyIndices.push(i); });
-
-  const renderItem = ({ item }: { item: FlatRow }) => {
+  const renderItem = useCallback(({ item }: { item: FlatRow }) => {
     if (item.type === 'header') {
       const sec = item.section!;
       const open = expanded[sec];
@@ -101,7 +107,7 @@ export default function MyShowsScreen() {
       <View style={styles.cardRow}>
         {cards.map((it) => (
           <View key={it.id} style={{ width: cellW, marginRight: gap, marginBottom: gap }}>
-            <PosterCard id={it.id} kind="shows" title={it.title} poster={it.posterUrl} progress={it.progress} rating={it.rating} year={cardYear(it)} width={cellW} style={{ marginRight: 0 }} />
+            <PosterCard id={it.id} kind="shows" title={it.title} poster={it.posterUrl} progress={it.progress} rating={it.rating} year={cardYear(it)} width={cellW} style={GRID_CARD_STYLE} />
           </View>
         ))}
         {Array.from({ length: fillCount }).map((_, i) => (
@@ -109,7 +115,9 @@ export default function MyShowsScreen() {
         ))}
       </View>
     );
-  };
+  }, [expanded, tokens, cols, cellW]);
+
+  if (isLoading) return <Screen><Header title={t('social:myShows.title')} showBack /><Spinner /></Screen>;
 
   return (
     <Screen>
@@ -122,7 +130,7 @@ export default function MyShowsScreen() {
         renderItem={renderItem}
         initialNumToRender={12}
         maxToRenderPerBatch={8}
-        windowSize={6}
+        windowSize={10}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}
       />
     </Screen>

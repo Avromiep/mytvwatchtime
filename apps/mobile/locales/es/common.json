@@ -93,5 +93,9 @@
   "tomorrow": "Mañana",
   "thisWeek": "Esta semana",
   "nextWeek": "Próxima semana",
-  "deletedUser": "Usuario eliminado"
+  "deletedUser": "Usuario eliminado",
+  "unwatchOnce": "Quitar una visualización",
+  "unwatchAll": "Marcar todo como no visto",
+  "unwatchAllConfirmTitle": "¿Marcar todo como no visto?",
+  "unwatchAllConfirmDesc": "Esto elimina las {{count}} visualizaciones registradas."
 }

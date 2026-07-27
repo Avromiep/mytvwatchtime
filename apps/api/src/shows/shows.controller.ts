@@ -58,6 +58,11 @@ export class ShowsController {
     return this.tracking.rewatchEpisode(userId, id);
   }
 
+  @Post('episodes/:id/unwatch-once')
+  unwatchEpisodeOnce(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.tracking.unwatchEpisodeOnce(userId, id);
+  }
+
   // ----- Episode voting (icon-based interaction sections) -----
   // Each upserts the single active vote for a category and returns the recomputed
   // section (counts + total) so the client can reconcile + render percentages.
@@ -99,6 +104,16 @@ export class ShowsController {
   @Delete('seasons/:id/watched')
   unmarkSeason(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.tracking.unmarkSeasonWatched(userId, id);
+  }
+
+  @Post('seasons/:id/rewatch')
+  rewatchSeason(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.tracking.rewatchSeason(userId, id);
+  }
+
+  @Post('seasons/:id/unwatch-once')
+  unwatchSeasonOnce(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.tracking.unwatchSeasonOnce(userId, id);
   }
 
   @Post('shows/:id/watchlist')

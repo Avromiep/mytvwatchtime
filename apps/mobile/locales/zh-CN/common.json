@@ -93,5 +93,9 @@
   "tomorrow": "明天",
   "thisWeek": "本周",
   "nextWeek": "下周",
-  "deletedUser": "已删除用户"
+  "deletedUser": "已删除用户",
+  "unwatchOnce": "撤销一次观看",
+  "unwatchAll": "全部标记为未看",
+  "unwatchAllConfirmTitle": "全部标记为未看？",
+  "unwatchAllConfirmDesc": "这将删除全部 {{count}} 次已记录的观看。"
 }

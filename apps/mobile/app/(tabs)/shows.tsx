@@ -7,7 +7,9 @@ import { Chip, EmptyState, Screen, SectionHeader, Spinner } from '../../componen
 import { InfoBanner } from '../../components/InfoBanner';
 import {
   useMarkEpisodeWatched,
+  usePausedWatchNext,
   useRewatchEpisode,
+  useUnwatchEpisodeOnce,
   useUpcoming,
   useUpcomingPast,
   useWatchNext,
@@ -145,6 +147,7 @@ function WatchList() {
     [WatchNextBucket.NOT_RECENTLY]: t('shows:notRecently'),
     [WatchNextBucket.HISTORY]: t('shows:history'),
     [WatchNextBucket.START_WATCHING]: t('shows:startWatching'),
+    [WatchNextBucket.PAUSED]: t('shows:paused'),
   };
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
@@ -156,6 +159,7 @@ function WatchList() {
   }, [refetch, queryClient]);
   const mark = useMarkEpisodeWatched();
   const rewatch = useRewatchEpisode();
+  const unwatchOnce = useUnwatchEpisodeOnce();
 
   // Cursor for the scroll-up history pages: the OLDEST item of the initial slice
   // (data order is newest-first). historyId is the watch_history row id tiebreaker —
@@ -168,6 +172,7 @@ function WatchList() {
     return { before, beforeId: oldest.historyId };
   }, [data?.items]);
   const pastQuery = useWatchNextHistory(historyCursor);
+  const pausedQuery = usePausedWatchNext();
 
   // Flat rows (header / card) so the list virtualizes — a plain ScrollView rendered
   // EVERY card (300+ for heavy users) with no windowing, and fully re-rendered on
@@ -192,17 +197,28 @@ function WatchList() {
         seenEpisode.add(k);
         return true;
       });
+    // Paused shows: next episodes from tracking-paused shows, own rail under
+    // "Haven't watched for a while" (separate endpoint — watch-next excludes them).
+    const pausedItems = (pausedQuery.data?.items ?? []).filter((it) => {
+      const k = it.episode.id;
+      if (seenEpisode.has(k)) return false;
+      seenEpisode.add(k);
+      return true;
+    });
     // History is always visible (scroll up to see it), auto-scroll lands on Watch Next
     const buckets = [
       WatchNextBucket.HISTORY,
       WatchNextBucket.WATCH_NEXT,
       WatchNextBucket.START_WATCHING,
       WatchNextBucket.NOT_RECENTLY,
+      WatchNextBucket.PAUSED,
     ];
     const out: WatchRow[] = [{ type: 'spacer', key: 'top', h: spacing.lg }];
     let isFirstSection = true;
     for (const bucket of buckets) {
-      const group = items.filter((i) => i.bucket === bucket);
+      const group = bucket === WatchNextBucket.PAUSED
+        ? pausedItems
+        : items.filter((i) => i.bucket === bucket);
       if (group.length === 0 && !(bucket === WatchNextBucket.HISTORY && older.length > 0)) continue;
       // History: oldest on top, latest at the bottom (right above Watch Next). Older
       // pages are all older than the initial slice, so ascending order is older-pages
@@ -232,7 +248,7 @@ function WatchList() {
       }
     }
     return out;
-  }, [data?.items, pastQuery.data?.pages]);
+  }, [data?.items, pastQuery.data?.pages, pausedQuery.data?.items]);
 
   const watchNextIndex = useMemo(
     () => rows.findIndex((r) => r.type === 'header' && r.bucket === WatchNextBucket.WATCH_NEXT),
@@ -328,6 +344,7 @@ function WatchList() {
             item={it}
             onMarkWatched={() => mark.mutate({ id: it.episode.id, on: true })}
             onRewatch={() => rewatch.mutate(it.episode.id)}
+            onUnwatchOnce={() => unwatchOnce.mutate(it.episode.id)}
             onUnwatch={() => mark.mutate({ id: it.episode.id, on: false })}
           />
         </View>

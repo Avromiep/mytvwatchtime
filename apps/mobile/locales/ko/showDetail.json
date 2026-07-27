@@ -30,5 +30,10 @@
   "showMoreEpisodes": "{{count}}개 더 보기",
   "originalTitle": "원제",
   "rateShow": "이 프로그램 평가하기",
-  "similar": "비슷한 프로그램"
+  "similar": "비슷한 프로그램",
+  "rewatchAll": "모두 다시 보기",
+  "unwatchSeason": "시즌을 안 본 것으로 표시",
+  "rewatchCount": "×{{count}}",
+  "unwatchSeasonConfirmTitle": "시즌을 안 본 것으로 표시할까요?",
+  "unwatchSeasonConfirmDesc": "\"{{title}}\"의 기록된 시청이 모두 삭제됩니다."
 }

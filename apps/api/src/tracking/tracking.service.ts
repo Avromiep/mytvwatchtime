@@ -136,6 +136,46 @@ export class TrackingService {
     return { watched: true, watchCount: nextCount };
   }
 
+  /**
+   * Undo ONE viewing of an episode with multiple recorded watches: watchCount
+   * decrements and the LATEST watchHistory row is removed, but the episode stays
+   * watched (watchedAt keeps the first-watch date). Full reset stays on
+   * unmarkEpisodeWatched.
+   */
+  async unwatchEpisodeOnce(userId: string, episodeId: string) {
+    const [episode, prev] = await Promise.all([
+      this.prisma.episode.findUnique({
+        where: { id: episodeId },
+        include: { season: { include: { show: true } } },
+      }),
+      this.prisma.userEpisodeStatus.findUnique({
+        where: { userId_episodeId: { userId, episodeId } },
+      }),
+    ]);
+    if (!episode) throw new NotFoundException('Episode not found');
+    if (!prev?.watched) throw new BadRequestException('Episode is not watched');
+    if ((prev.watchCount ?? 0) < 2) {
+      throw new BadRequestException('Only one viewing recorded — unwatch instead');
+    }
+    const mediaId = episode.season.show.mediaId;
+
+    const latest = await this.prisma.watchHistory.findFirst({
+      where: { userId, episodeId },
+      orderBy: { watchedAt: 'desc' },
+      select: { id: true },
+    });
+    await this.prisma.$transaction([
+      this.prisma.userEpisodeStatus.update({
+        where: { userId_episodeId: { userId, episodeId } },
+        data: { watchCount: { decrement: 1 } },
+      }),
+      ...(latest ? [this.prisma.watchHistory.delete({ where: { id: latest.id } })] : []),
+    ]);
+    this.events.emit('unwatch.episode', { userId, mediaId, episodeId });
+    await this.invalidateUserCache(userId);
+    return { watched: true, watchCount: prev.watchCount - 1 };
+  }
+
   async unmarkEpisodeWatched(userId: string, episodeId: string) {
     const [episode, prev] = await Promise.all([
       this.prisma.episode.findUnique({
@@ -232,6 +272,103 @@ export class TrackingService {
     }
     await this.invalidateUserCache(userId);
     return { watched: true, count: season.episodes.length };
+  }
+
+  /**
+   * Record another viewing of every already-watched, aired episode of a season.
+   * Mirrors rewatchEpisode per episode: watchCount increments and a watchHistory row
+   * is appended (stats count the rewatch), but watchedAt and the show's distinct
+   * watchedCount are left untouched. Unwatched episodes stay unwatched — a rewatch
+   * never creates first watches.
+   */
+  async rewatchSeason(userId: string, seasonId: string) {
+    const season = await this.prisma.season.findUnique({
+      where: { id: seasonId },
+      include: { episodes: true, show: true },
+    });
+    if (!season) throw new NotFoundException('Season not found');
+    const mediaId = season.show.mediaId;
+    const now = new Date();
+    const aired = season.episodes.filter((e) => e.airDate && e.airDate <= now);
+    if (aired.length === 0) return { watched: true, count: 0 };
+
+    const watched = await this.prisma.userEpisodeStatus.findMany({
+      where: { userId, episodeId: { in: aired.map((e) => e.id) }, watched: true },
+      select: { episodeId: true },
+    });
+    if (watched.length === 0) {
+      throw new BadRequestException('Mark at least one episode as watched first');
+    }
+    const ids = new Set(watched.map((w) => w.episodeId));
+    const rewatched = aired.filter((e) => ids.has(e.id));
+
+    await this.prisma.$transaction([
+      this.prisma.userEpisodeStatus.updateMany({
+        where: { userId, episodeId: { in: rewatched.map((e) => e.id) } },
+        data: { watchCount: { increment: 1 } },
+      }),
+      this.prisma.watchHistory.createMany({
+        data: rewatched.map((e) => ({
+          userId,
+          mediaId,
+          mediaType: MediaType.SHOW,
+          episodeId: e.id,
+          seasonNumber: season.number,
+          episodeNumber: e.number,
+          runtimeMinutes: e.runtimeMinutes,
+          watchedAt: now,
+        })),
+      }),
+    ]);
+    // One event for the whole season (same batching rationale as markSeasonWatched).
+    this.events.emit('rewatch.episode', { userId, mediaId });
+    await this.invalidateUserCache(userId);
+    return { watched: true, count: rewatched.length };
+  }
+
+  /**
+   * Undo ONE viewing of every re-watched episode of a season: watchCount decrements
+   * (only for episodes watched 2+ times — episodes on their first watch stay watched)
+   * and each decremented episode loses its LATEST watchHistory row. This lowers the
+   * season's complete-viewing count by one without unwatching anything.
+   */
+  async unwatchSeasonOnce(userId: string, seasonId: string) {
+    const season = await this.prisma.season.findUnique({
+      where: { id: seasonId },
+      include: { episodes: true, show: true },
+    });
+    if (!season) throw new NotFoundException('Season not found');
+    const mediaId = season.show.mediaId;
+    const now = new Date();
+    const aired = season.episodes.filter((e) => e.airDate && e.airDate <= now);
+    if (aired.length === 0) return { watched: true, count: 0 };
+
+    const rewatched = await this.prisma.userEpisodeStatus.findMany({
+      where: { userId, episodeId: { in: aired.map((e) => e.id) }, watched: true, watchCount: { gte: 2 } },
+      select: { episodeId: true },
+    });
+    if (rewatched.length === 0) {
+      throw new BadRequestException('No rewatches to undo — unwatch instead');
+    }
+    const ids = rewatched.map((w) => w.episodeId);
+
+    await this.prisma.$transaction([
+      this.prisma.userEpisodeStatus.updateMany({
+        where: { userId, episodeId: { in: ids } },
+        data: { watchCount: { decrement: 1 } },
+      }),
+      // Latest history row per decremented episode (Postgres DISTINCT ON).
+      this.prisma.$executeRaw`
+        DELETE FROM watch_history WHERE id IN (
+          SELECT DISTINCT ON (episode_id) id FROM watch_history
+          WHERE user_id = ${userId} AND episode_id IN (${Prisma.join(ids)})
+          ORDER BY episode_id, watched_at DESC
+        )
+      `,
+    ]);
+    this.events.emit('unwatch.episode', { userId, mediaId });
+    await this.invalidateUserCache(userId);
+    return { watched: true, count: ids.length };
   }
 
   async unmarkSeasonWatched(userId: string, seasonId: string) {

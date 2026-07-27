@@ -5,7 +5,7 @@ import { Image } from 'expo-image';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing, typography } from '../theme/theme';
 import { useAppearance } from '../context/PreferencesProvider';
-import { showDialog } from '../lib/dialog';
+import { showDialog, showConfirm } from '../lib/dialog';
 
 /** The bundled app icon, used as a default avatar placeholder. */
 export const APP_ICON = require('../assets/icon.png');
@@ -213,21 +213,41 @@ export function WatchButton({
 
 /**
  * Build a press handler for a watch button. When the item is already watched (and
- * rewatch/unwatch handlers are supplied), pressing opens a Rewatch / Unwatch menu
- * instead of toggling. When not watched, it marks the item watched.
+ * rewatch/unwatch handlers are supplied), pressing opens a menu instead of toggling:
+ * with multiple recorded watches it offers Rewatch / Unwatch once / Unwatch all —
+ * Unwatch all asks for confirmation because it erases the whole rewatch history.
+ * When not watched, it marks the item watched.
  */
 export function useWatchMenu() {
   const { t } = useTranslation(['common']);
   return useCallback(
-    (opts: { watched: boolean; onMarkWatched?: () => void; onRewatch?: () => void; onUnwatch?: () => void }) => {
-      const { watched, onMarkWatched, onRewatch, onUnwatch } = opts;
+    (opts: {
+      watched: boolean;
+      watchCount?: number;
+      onMarkWatched?: () => void;
+      onRewatch?: () => void;
+      onUnwatchOnce?: () => void;
+      onUnwatch?: () => void;
+    }) => {
+      const { watched, watchCount = 0, onMarkWatched, onRewatch, onUnwatchOnce, onUnwatch } = opts;
       if (watched && (onRewatch || onUnwatch)) {
-        showDialog({
-          buttons: [
-            { label: t('common:rewatch'), variant: 'primary', onPress: onRewatch },
-            { label: t('common:unwatch'), variant: 'danger', onPress: onUnwatch },
-          ],
-        });
+        const confirmUnwatchAll = () =>
+          showConfirm({
+            title: t('common:unwatchAllConfirmTitle'),
+            description: t('common:unwatchAllConfirmDesc', { count: watchCount }),
+            confirmLabel: t('common:unwatchAll'),
+            destructive: true,
+            onConfirm: () => onUnwatch?.(),
+          });
+        const buttons: { label: string; variant: 'primary' | 'secondary' | 'danger'; onPress?: () => void }[] = [];
+        if (onRewatch) buttons.push({ label: t('common:rewatch'), variant: 'primary', onPress: onRewatch });
+        if (watchCount >= 2 && onUnwatchOnce) {
+          buttons.push({ label: t('common:unwatchOnce'), variant: 'secondary', onPress: onUnwatchOnce });
+          buttons.push({ label: t('common:unwatchAll'), variant: 'danger', onPress: confirmUnwatchAll });
+        } else if (onUnwatch) {
+          buttons.push({ label: t('common:unwatch'), variant: 'danger', onPress: onUnwatch });
+        }
+        showDialog({ buttons });
         return;
       }
       onMarkWatched?.();

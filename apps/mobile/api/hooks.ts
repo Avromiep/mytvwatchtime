@@ -104,6 +104,12 @@ export const useWatchNext = () =>
     queryKey: qk.watchNext,
     queryFn: () => api.get<WatchNextResponseDto>('/me/watch-next'),
   });
+/** Next episodes to watch from PAUSED shows — own rail under "Haven't watched for a while". */
+export const usePausedWatchNext = () =>
+  useQuery({
+    queryKey: ['watchNext', 'paused'] as const,
+    queryFn: () => api.get<{ items: WatchNextItemDto[] }>('/me/watch-next/paused'),
+  });
 export const useUpcoming = () =>
   useQuery({
     queryKey: qk.upcoming,
@@ -342,6 +348,7 @@ function useAllPages<T>(key: readonly unknown[], path: string, params: Record<st
       api.get<Paginated<T>>(path, { ...params, page: pageParam, pageSize: 500 }),
     initialPageParam: 1,
     getNextPageParam: (last) => (last?.hasMore ? last.page + 1 : undefined),
+    placeholderData: (prev) => prev,
   });
   const { hasNextPage, isFetchingNextPage, fetchNextPage, data } = query;
   useEffect(() => {
@@ -809,6 +816,22 @@ export const useMarkSeasonWatched = () => {
   });
 };
 
+/** Bulk rewatch of a season's already-watched aired episodes (watchCount +1 each). */
+export const useRewatchSeason = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post(`/seasons/${id}/rewatch`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['showEpisodes'] });
+      qc.invalidateQueries({ queryKey: ['show'] });
+      qc.invalidateQueries({ queryKey: ['watchNext'] });
+      qc.invalidateQueries({ queryKey: ['upcoming'] });
+      invalidateLeaderboardSoon(qc);
+      void refreshWidgets();
+    },
+  });
+};
+
 /**
  * Record another viewing of an already-watched episode. watchCount increments
  * optimistically across all caches while the watched flag stays true.
@@ -864,6 +887,82 @@ export const useRewatchEpisode = () => {
       qc.invalidateQueries({ queryKey: qk.episode(id) });
       qc.invalidateQueries({ queryKey: ['watchNext'] });
       invalidateLeaderboardSoon(qc);
+    },
+  });
+};
+
+/**
+ * Undo ONE viewing of an episode watched 2+ times: watchCount decrements
+ * optimistically across all caches while the watched flag stays true.
+ */
+export const useUnwatchEpisodeOnce = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post<{ watchCount: number }>(`/episodes/${id}/unwatch-once`, {}),
+    onMutate: async (id: string) => {
+      const bump = (n: any) => Math.max(1, (Number(n?.watchCount) || 1) - 1);
+
+      const prevWatchNext = qc.getQueryData(qk.watchNext);
+      qc.setQueryData(qk.watchNext, (old: any) =>
+        old
+          ? {
+              ...old,
+              items: old.items.map((it: any) =>
+                it.episode?.id === id
+                  ? { ...it, episode: { ...it.episode, watchCount: bump(it.episode) } }
+                  : it,
+              ),
+            }
+          : old,
+      );
+
+      const prevShowEpisodes = qc.getQueriesData({ queryKey: ['showEpisodes'] });
+      prevShowEpisodes.forEach(([key, data]: [any, any]) => {
+        if (!Array.isArray(data)) return;
+        qc.setQueryData(
+          key,
+          data.map((s: any) => ({
+            ...s,
+            episodes: s.episodes?.map((e: any) =>
+              e.id === id ? { ...e, watchCount: bump(e) } : e,
+            ),
+          })),
+        );
+      });
+
+      const prevEpisode = qc.getQueryData(qk.episode(id));
+      qc.setQueryData(qk.episode(id), (old: any) =>
+        old ? { ...old, watchCount: bump(old) } : old,
+      );
+
+      return { prevWatchNext, prevShowEpisodes, prevEpisode };
+    },
+    onError: (_e, id, ctx) => {
+      if (ctx?.prevWatchNext) qc.setQueryData(qk.watchNext, ctx.prevWatchNext);
+      ctx?.prevShowEpisodes?.forEach(([key, data]: [any, any]) => qc.setQueryData(key, data));
+      if (ctx?.prevEpisode) qc.setQueryData(qk.episode(id), ctx.prevEpisode);
+    },
+    onSettled: (_d, _e, id) => {
+      qc.invalidateQueries({ queryKey: qk.episode(id) });
+      qc.invalidateQueries({ queryKey: ['showEpisodes'] });
+      qc.invalidateQueries({ queryKey: ['watchNext'] });
+      invalidateLeaderboardSoon(qc);
+    },
+  });
+};
+
+/** Undo ONE viewing of a whole season (decrements watchCount of re-watched episodes). */
+export const useUnwatchSeasonOnce = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post(`/seasons/${id}/unwatch-once`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['showEpisodes'] });
+      qc.invalidateQueries({ queryKey: ['show'] });
+      qc.invalidateQueries({ queryKey: ['watchNext'] });
+      qc.invalidateQueries({ queryKey: ['upcoming'] });
+      invalidateLeaderboardSoon(qc);
+      void refreshWidgets();
     },
   });
 };

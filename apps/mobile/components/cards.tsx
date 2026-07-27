@@ -30,7 +30,7 @@ import { firstNetwork } from '@tvwatch/shared';
 
 
 
-export function PosterCard({
+function PosterCardImpl({
   id,
   kind,
   title,
@@ -123,6 +123,21 @@ export function PosterCard({
   );
 }
 
+// Memoized: big grids (Movies tab, My Shows) rebuild their row arrays on every
+// paginated append, and re-rendering every visible PosterCard made the posters
+// flicker. `style` is intentionally excluded from the comparison — call sites
+// only pass static layout constants (e.g. { marginRight: 0 }).
+export const PosterCard = React.memo(PosterCardImpl, (prev, next) =>
+  prev.id === next.id &&
+  prev.kind === next.kind &&
+  prev.title === next.title &&
+  prev.poster === next.poster &&
+  prev.progress === next.progress &&
+  prev.rating === next.rating &&
+  prev.year === next.year &&
+  prev.width === next.width,
+);
+
 export function PosterGrid({ data, kind, emptyTitle, emptyCta, minCardWidth = 110 }: { data: any[]; kind: 'shows' | 'movies'; emptyTitle: string; emptyCta?: string; minCardWidth?: number }) {
   const { width } = useWindowDimensions();
   if (!data || data.length === 0) return <EmptyState title={emptyTitle} cta={emptyCta} icon="layers-outline" />;
@@ -191,11 +206,13 @@ function EpisodeCardImpl({
   item,
   onMarkWatched,
   onRewatch,
+  onUnwatchOnce,
   onUnwatch,
 }: {
   item: any;
   onMarkWatched?: () => void;
   onRewatch?: () => void;
+  onUnwatchOnce?: () => void;
   onUnwatch?: () => void;
 }) {
   const swipeRef = useRef<any>(null);
@@ -204,7 +221,7 @@ function EpisodeCardImpl({
   const menu = useWatchMenu();
   const watched = !!item.episode.watched;
   const handleWatch = () =>
-    menu({ watched, onMarkWatched, onRewatch, onUnwatch });
+    menu({ watched, watchCount: item.episode.watchCount ?? 0, onMarkWatched, onRewatch, onUnwatchOnce, onUnwatch });
 
   const cardContent = (
     <View style={[styles.epCard, { backgroundColor: tokens.surface }]}>

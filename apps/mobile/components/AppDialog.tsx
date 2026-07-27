@@ -50,9 +50,10 @@ export function AppDialog({ entry }: { entry: DialogEntry }) {
   // Concrete pixel cap — a percentage maxHeight does not resolve on the unbounded
   // dialog card (Android), letting long content push the card off screen. The cap
   // accounts for the real chrome: safe-area margins, card padding, title, and the
-  // button row (which STACKS once there are more than two buttons, tripling its height).
+  // button row (which STACKS once there are more than two buttons, and WRAPS to a
+  // second row for two long labels).
   const { height: windowHeight } = useWindowDimensions();
-  const buttonsHeight = (buttons.length > 2 ? buttons.length * 54 : 64) + spacing.lg;
+  const buttonsHeight = (buttons.length > 2 ? buttons.length * 54 : buttons.length === 2 ? 2 * 54 : 64) + spacing.lg;
   const contentMaxHeight = Math.max(
     160,
     windowHeight -
@@ -190,6 +191,7 @@ const styles = StyleSheet.create({
   buttonRow: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
+    flexWrap: 'wrap',
     gap: spacing.sm,
     marginTop: spacing.lg,
   },
@@ -204,6 +206,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     borderRadius: radius.pill,
     minWidth: 96,
+    flexShrink: 1,
     ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
   } as ViewStyle,
   btnFull: {

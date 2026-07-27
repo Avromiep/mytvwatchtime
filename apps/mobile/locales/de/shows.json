@@ -28,5 +28,6 @@
   "pastYearsAgo_one": "Vor 1 Jahr",
   "pastYearsAgo_other": "Vor {{count}} Jahren",
   "pastYearsMonthsAgo_one": "Vor {{years}} Jahr und {{count}} Monat",
-  "pastYearsMonthsAgo_other": "Vor {{years}} Jahr und {{count}} Monaten"
+  "pastYearsMonthsAgo_other": "Vor {{years}} Jahr und {{count}} Monaten",
+  "paused": "Pausiert"
 }

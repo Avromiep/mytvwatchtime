@@ -34,5 +34,10 @@
   "showMoreEpisodes": "Show {{count}} more",
   "originalTitle": "Original title",
   "rateShow": "Rate this show",
-  "similar": "Similar shows"
+  "similar": "Similar shows",
+  "rewatchAll": "Rewatch all",
+  "unwatchSeason": "Unwatch season",
+  "rewatchCount": "×{{count}}",
+  "unwatchSeasonConfirmTitle": "Unwatch season?",
+  "unwatchSeasonConfirmDesc": "This removes every recorded watch of \"{{title}}\"."
 }

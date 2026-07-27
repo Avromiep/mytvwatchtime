@@ -32,6 +32,9 @@ import {
   useMarkEpisodeWatched,
   useMarkSeasonWatched,
   useRewatchEpisode,
+  useRewatchSeason,
+  useUnwatchEpisodeOnce,
+  useUnwatchSeasonOnce,
   useShow,
   useShowEpisodes,
   useShowVotes,
@@ -46,7 +49,7 @@ import { useAppearance } from '../../context/PreferencesProvider';
 import { useConfetti } from '../../components/Confetti';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../theme/theme';
-import { showError, showConfirm } from '../../lib/dialog';
+import { showError, showConfirm, showDialog } from '../../lib/dialog';
 import { countryFlag } from '../../lib/country';
 import { formatRuntime } from '../../lib/format';
 import { EpisodeHistoryCarousel } from '../../components/EpisodeHistoryCarousel';
@@ -251,7 +254,10 @@ function EpisodesTab({ showId }: { showId: string }) {
   const [expandedAll, setExpandedAll] = useState<Record<string, boolean>>({});
   const markEp = useMarkEpisodeWatched();
   const rewatchEp = useRewatchEpisode();
+  const unwatchOnceEp = useUnwatchEpisodeOnce();
   const markSeason = useMarkSeasonWatched();
+  const rewatchSeason = useRewatchSeason();
+  const unwatchSeasonOnce = useUnwatchSeasonOnce();
   const menu = useWatchMenu();
 
   if (isLoading) return <Spinner />;
@@ -263,6 +269,14 @@ function EpisodesTab({ showId }: { showId: string }) {
         // Only count episodes that have AIRED (airDate exists and is in the past)
         const aired = s.episodes.filter((e: any) => e.airDate && new Date(e.airDate) <= now);
         const watched = aired.filter((e: any) => e.watched).length;
+        const fullyWatched = aired.length > 0 && watched === aired.length;
+        // Season rewatch counter: the number of COMPLETE season viewings is the min
+        // watchCount across ALL aired episodes — a fully unwatched episode counts 0,
+        // so the badge drops as soon as the season is no longer complete (shown from
+        // the 2nd complete viewing).
+        const seasonWatchCount = aired.length
+          ? Math.min(...aired.map((e: any) => (e.watched ? (e.watchCount ?? 0) : 0)))
+          : 0;
         const shownEpisodes = expandedAll[s.id] ? s.episodes : s.episodes.slice(0, INITIAL_EPISODES);
         const hiddenCount = s.episodes.length - shownEpisodes.length;
         return (
@@ -275,7 +289,14 @@ function EpisodesTab({ showId }: { showId: string }) {
                 <T variant="h2">{s.title}</T>
                 {aired.length > 0 ? (
                   <>
-                    <T variant="caption" muted>{t('showDetail:watchedSlashAired', { watched, total: aired.length })}</T>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <T variant="caption" muted>{t('showDetail:watchedSlashAired', { watched, total: aired.length })}</T>
+                      {seasonWatchCount >= 2 ? (
+                        <T variant="caption" style={{ color: tokens.primary }}>
+                          {t('showDetail:rewatchCount', { count: seasonWatchCount })}
+                        </T>
+                      ) : null}
+                    </View>
                     <View style={{ marginTop: 6, width: 120 }}>
                       <ProgressBar value={watched / aired.length} color={tokens.watched} />
                     </View>
@@ -285,15 +306,42 @@ function EpisodesTab({ showId }: { showId: string }) {
                 )}
               </View>
               {aired.length > 0 ? (
-                <Pressable
-                  hitSlop={8}
-                  onPress={() => markSeason.mutate({ id: s.id, on: watched < aired.length })}
-                  style={{ paddingHorizontal: spacing.sm }}
-                >
-                  <T variant="caption" style={{ color: watched < aired.length ? tokens.primary : tokens.textMuted }}>
-                    {watched < aired.length ? t('showDetail:markAll') : t('showDetail:reset')}
-                  </T>
-                </Pressable>
+                fullyWatched ? (
+                  <Pressable
+                    hitSlop={8}
+                    onPress={() => {
+                      const confirmUnwatchSeason = () =>
+                        showConfirm({
+                          title: t('showDetail:unwatchSeasonConfirmTitle'),
+                          description: t('showDetail:unwatchSeasonConfirmDesc', { title: s.title }),
+                          confirmLabel: t('showDetail:unwatchSeason'),
+                          destructive: true,
+                          onConfirm: () => markSeason.mutate({ id: s.id, on: false }),
+                        });
+                      const buttons: { label: string; variant: 'primary' | 'secondary' | 'danger'; onPress: () => void }[] = [
+                        { label: t('showDetail:rewatchAll'), variant: 'primary', onPress: () => rewatchSeason.mutate(s.id) },
+                      ];
+                      if (seasonWatchCount >= 2) {
+                        buttons.push({ label: t('common:unwatchOnce'), variant: 'secondary', onPress: () => unwatchSeasonOnce.mutate(s.id) });
+                      }
+                      buttons.push({ label: t('showDetail:unwatchSeason'), variant: 'danger', onPress: confirmUnwatchSeason });
+                      showDialog({ title: s.title, buttons });
+                    }}
+                    style={{ paddingHorizontal: spacing.sm }}
+                  >
+                    <Ionicons name="ellipsis-horizontal" size={20} color={tokens.textMuted} />
+                  </Pressable>
+                ) : (
+                  <Pressable
+                    hitSlop={8}
+                    onPress={() => markSeason.mutate({ id: s.id, on: true })}
+                    style={{ paddingHorizontal: spacing.sm }}
+                  >
+                    <T variant="caption" style={{ color: tokens.primary }}>
+                      {t('showDetail:markAll')}
+                    </T>
+                  </Pressable>
+                )
               ) : null}
               <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={18} color={tokens.textMuted} style={{ marginLeft: spacing.sm }} />
             </Pressable>
@@ -321,8 +369,10 @@ function EpisodesTab({ showId }: { showId: string }) {
                               onPress={() =>
                                 menu({
                                   watched: e.watched,
+                                  watchCount: e.watchCount ?? 0,
                                   onMarkWatched: () => markEp.mutate({ id: e.id, on: true }),
                                   onRewatch: () => rewatchEp.mutate(e.id),
+                                  onUnwatchOnce: () => unwatchOnceEp.mutate(e.id),
                                   onUnwatch: () => markEp.mutate({ id: e.id, on: false }),
                                 })
                               }

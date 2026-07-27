@@ -49,7 +49,105 @@ describe('DiscoveryService.posterLast', () => {
   });
 });
 
-/** "Hide anime in explore": flag resolution + candidate-pool filtering. */
+/** Forgiving search: originalTitle matching + normalized token-AND tier. */
+describe('DiscoveryService forgiving search', () => {
+  const make = () => {
+    const prisma = {
+      userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
+      mediaItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+    };
+    const hydration = {
+      enqueueTvdbSearch: jest.fn().mockResolvedValue(undefined),
+      enqueueClassifyCandidate: jest.fn().mockResolvedValue(undefined),
+    };
+    const svc = new DiscoveryService(
+      { enabled: false } as any, // tmdb disabled → window exhausts without provider calls
+      { enabled: false } as any, // tvdb disabled → no fallback
+      {} as any,
+      prisma as any,
+      { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue(null) } as any,
+      hydration as any,
+    );
+    return { svc, prisma };
+  };
+
+  it('initialSearch matches the show originalTitle in the exact and contains tiers', async () => {
+    const { svc, prisma } = make();
+    await (svc as any).initialSearch('Two Worlds', { q: 'Two Worlds' });
+    const [exactCall, containsCall] = prisma.mediaItem.findMany.mock.calls.map((c) => c[0]);
+    expect(exactCall.where.OR).toEqual([
+      { title: { equals: 'Two Worlds', mode: 'insensitive' } },
+      { show: { is: { originalTitle: { equals: 'Two Worlds', mode: 'insensitive' } } } },
+    ]);
+    expect(containsCall.where.OR).toEqual([
+      { title: { contains: 'Two Worlds', mode: 'insensitive' } },
+      { show: { is: { originalTitle: { contains: 'Two Worlds', mode: 'insensitive' } } } },
+    ]);
+  });
+
+  it('initialSearch adds a per-token AND tier so partial multi-word terms match ("Two Worlds" → "W-Two Worlds")', async () => {
+    const { svc, prisma } = make();
+    await (svc as any).initialSearch('Two Worlds', { q: 'Two Worlds' });
+    expect(prisma.mediaItem.findMany).toHaveBeenCalledTimes(3);
+    const tokenCall = prisma.mediaItem.findMany.mock.calls[2][0];
+    expect(tokenCall.where.AND).toEqual([
+      {
+        OR: [
+          { title: { contains: 'two', mode: 'insensitive' } },
+          { show: { is: { originalTitle: { contains: 'two', mode: 'insensitive' } } } },
+        ],
+      },
+      {
+        OR: [
+          { title: { contains: 'worlds', mode: 'insensitive' } },
+          { show: { is: { originalTitle: { contains: 'worlds', mode: 'insensitive' } } } },
+        ],
+      },
+    ]);
+  });
+
+  it('initialSearch normalizes punctuation/hyphens before tokenizing ("W-Two Worlds" → w, two, worlds)', async () => {
+    const { svc, prisma } = make();
+    await (svc as any).initialSearch('W-Two  Worlds', { q: 'W-Two  Worlds' });
+    const tokenCall = prisma.mediaItem.findMany.mock.calls[2][0];
+    expect(tokenCall.where.AND.map((c: any) => c.OR[0].title.contains)).toEqual(['w', 'two', 'worlds']);
+  });
+
+  it('initialSearch skips the token tier for single-token terms', async () => {
+    const { svc, prisma } = make();
+    await (svc as any).initialSearch('Arcane', { q: 'Arcane' });
+    expect(prisma.mediaItem.findMany).toHaveBeenCalledTimes(2);
+  });
+
+  it('initialSearch keeps exact/contains hits out of the token tier', async () => {
+    const { svc, prisma } = make();
+    prisma.mediaItem.findMany
+      .mockResolvedValueOnce([{ id: 'exact-1' }])
+      .mockResolvedValueOnce([{ id: 'contains-1' }])
+      .mockResolvedValueOnce([]);
+    const entry = await (svc as any).initialSearch('Two Worlds', { q: 'Two Worlds' });
+    expect(prisma.mediaItem.findMany.mock.calls[2][0].where.id).toEqual({
+      notIn: ['exact-1', 'contains-1'],
+    });
+    expect(entry.ids).toEqual(['exact-1', 'contains-1']);
+  });
+
+  it('searchViaDb matches the show originalTitle alongside title', async () => {
+    const { svc, prisma } = make();
+    jest.spyOn(svc as any, 'fetchListDtos').mockResolvedValue([]);
+    await (svc as any).searchViaDb('two worlds', { q: 'two worlds' });
+    const where = prisma.mediaItem.findMany.mock.calls[0][0].where;
+    expect(where.OR).toEqual([
+      { title: { contains: 'two worlds', mode: 'insensitive' } },
+      { show: { is: { originalTitle: { contains: 'two worlds', mode: 'insensitive' } } } },
+    ]);
+  });
+});
+
+
 describe('DiscoveryService hideAnimeInExplore', () => {
   const make = (profile: { hideAnimeInExplore: boolean } | null) => {
     const prisma = {

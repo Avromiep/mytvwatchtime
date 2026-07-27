@@ -35,6 +35,27 @@ interface SearchCacheEntry {
   exhausted: boolean;
 }
 
+/**
+ * Forgiving-search normalization: NFKD + strip diacritics, punctuation/hyphens →
+ * spaces, collapse whitespace, lowercase. Applied to the raw term so "W-Two" and
+ * "W: Two" tokenize like "w two" — provider APIs and DB ILIKE see word boundaries
+ * instead of glued punctuation.
+ */
+function normalizeSearchTerm(input: string): string {
+  return input
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+/** Distinct normalized tokens of a search term (capped to bound query complexity). */
+function searchTokens(term: string, cap = 6): string[] {
+  return [...new Set(normalizeSearchTerm(term).split(' ').filter(Boolean))].slice(0, cap);
+}
+
 /** Structural filter input accepted by the DB browse paths (both discover DTOs fit). */
 interface ExploreFilterInput {
   genre?: string;
@@ -108,8 +129,9 @@ export class DiscoveryService {
     const lang = currentLanguage();
     const want = Math.max(1, Math.min(q.pageSize ?? 20, 50));
     const page = Math.max(1, q.page ?? 1);
-    // v6: cache entries gained per-id originCountries (anime signal on light rows).
-    const cacheKey = `search:v6:${q.type ?? 'all'}:${term}:${lang}`;
+    // v7: forgiving search — originalTitle column + normalized token-AND tier joined
+    // the local match, and providers receive the punctuation-normalized term.
+    const cacheKey = `search:v7:${q.type ?? 'all'}:${term}:${lang}`;
 
     let entry = await this.redis.get<SearchCacheEntry>(cacheKey);
     if (!entry) {
@@ -174,24 +196,60 @@ export class DiscoveryService {
       ...(wantMovies && !wantShows ? { type: MediaType.MOVIE } : {}),
     };
     const exactRows = await this.prisma.mediaItem.findMany({
-      where: { ...dbWhere, title: { equals: term, mode: 'insensitive' as const } },
+      where: {
+        ...dbWhere,
+        OR: [
+          { title: { equals: term, mode: 'insensitive' as const } },
+          // Original-language title lives on the show relation (shows only).
+          { show: { is: { originalTitle: { equals: term, mode: 'insensitive' as const } } } },
+        ],
+      },
       take: 50, orderBy: { popularity: 'desc' }, select: { id: true },
     });
     const exactIds = exactRows.map((r) => r.id);
     const containsRows = await this.prisma.mediaItem.findMany({
-      where: { ...dbWhere, title: { contains: term, mode: 'insensitive' as const }, id: { notIn: exactIds } },
+      where: {
+        ...dbWhere,
+        OR: [
+          { title: { contains: term, mode: 'insensitive' as const } },
+          { show: { is: { originalTitle: { contains: term, mode: 'insensitive' as const } } } },
+        ],
+        id: { notIn: exactIds },
+      },
       take: 100, orderBy: { popularity: 'desc' }, select: { id: true },
     });
-    const localIds = [...exactIds, ...containsRows.map((r) => r.id)];
+    const containsIds = containsRows.map((r) => r.id);
+    // Token tier (forgiving): every normalized word of the term must appear in the
+    // title or originalTitle — "Two Worlds" matches "W-Two Worlds" regardless of
+    // leading tokens, punctuation, or word order.
+    const tokens = searchTokens(term);
+    const skipIds = [...exactIds, ...containsIds];
+    const tokenRows = tokens.length > 1
+      ? await this.prisma.mediaItem.findMany({
+          where: {
+            ...dbWhere,
+            AND: tokens.map((tok) => ({
+              OR: [
+                { title: { contains: tok, mode: 'insensitive' as const } },
+                { show: { is: { originalTitle: { contains: tok, mode: 'insensitive' as const } } } },
+              ],
+            })),
+            ...(skipIds.length ? { id: { notIn: skipIds } } : {}),
+          },
+          take: 100, orderBy: { popularity: 'desc' }, select: { id: true },
+        })
+      : [];
+    const localIds = [...exactIds, ...containsIds, ...tokenRows.map((r) => r.id)];
 
     let entry: SearchCacheEntry = { ids: localIds, genreIds: {}, tmdbPagesFetched: 0, exhausted: false };
     entry = await this.fetchNextTmdbPage(term, q, entry);
 
     // If NO results from local + TMDB, fall back to TVDB API (synchronous).
     if (entry.ids.length === 0 && this.tvdb?.enabled) {
+      const providerTerm = normalizeSearchTerm(term) || term;
       if (wantShows) {
         try {
-          const r = await this.tvdb.searchShows(term, 1);
+          const r = await this.tvdb.searchShows(providerTerm, 1);
           entry.ids.push(...await Promise.all(
             r.items.filter((i) => i.tvdbId).map((i) => this.meta.lightUpsertShowTvdb(
               { tvdbId: i.tvdbId!, title: i.title, overview: i.overview, posterUrl: i.posterUrl, backdropUrl: null, popularity: 0, year: i.year ?? null },
@@ -201,7 +259,7 @@ export class DiscoveryService {
       }
       if (wantMovies && entry.ids.length === 0) {
         try {
-          const r = await this.tvdb.searchMovies(term, 1);
+          const r = await this.tvdb.searchMovies(providerTerm, 1);
           entry.ids.push(...await Promise.all(
             r.items.filter((i) => i.tvdbId).map((i) => this.meta.lightUpsertMovieTvdb(
               { tvdbId: i.tvdbId!, title: i.title, overview: i.overview, posterUrl: i.posterUrl, backdropUrl: null, popularity: 0, year: i.year ?? null },
@@ -229,10 +287,13 @@ export class DiscoveryService {
     const wantShows = !q.type || q.type === MediaType.SHOW;
     const wantMovies = !q.type || q.type === MediaType.MOVIE;
     const nextPage = entry.tmdbPagesFetched + 1;
+    // Normalized term (hyphens/colons → spaces) — TMDb tokenizes on punctuation, so
+    // "W-Two" glued input would otherwise miss what "W Two" finds.
+    const providerTerm = normalizeSearchTerm(term) || term;
 
     const tasks: Promise<{ kind: 'show' | 'movie'; items: any[] }>[] = [];
-    if (wantShows) tasks.push(this.tmdb.searchShows(term, nextPage).then((r) => ({ kind: 'show' as const, items: r.items })));
-    if (wantMovies) tasks.push(this.tmdb.searchMovies(term, nextPage).then((r) => ({ kind: 'movie' as const, items: r.items })));
+    if (wantShows) tasks.push(this.tmdb.searchShows(providerTerm, nextPage).then((r) => ({ kind: 'show' as const, items: r.items })));
+    if (wantMovies) tasks.push(this.tmdb.searchMovies(providerTerm, nextPage).then((r) => ({ kind: 'movie' as const, items: r.items })));
     const results = await Promise.all(tasks);
 
     let allShort = results.length > 0;
@@ -284,7 +345,10 @@ export class DiscoveryService {
       ? { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } }
       : undefined;
     const where: Prisma.MediaItemWhereInput = {
-      title: { contains: term, mode: 'insensitive' as const },
+      OR: [
+        { title: { contains: term, mode: 'insensitive' as const } },
+        { show: { is: { originalTitle: { contains: term, mode: 'insensitive' as const } } } },
+      ],
       ...(q.type ? { type: q.type } : {}),
       ...(hideAnime ? { contentClassification: { not: 'ANIME' as const } } : {}),
       ...(genreSome || exclude.length
