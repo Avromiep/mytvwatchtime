@@ -52,7 +52,12 @@ export function AppDialog({ entry }: { entry: DialogEntry }) {
   // accounts for the real chrome: safe-area margins, card padding, title, and the
   // button row (which STACKS once there are more than two buttons, and WRAPS to a
   // second row for two long labels).
-  const { height: windowHeight } = useWindowDimensions();
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
+  // Explicit pixel width — `width: '100%'` + `maxWidth` inside the padded backdrop
+  // resolves against the parent's BORDER box on Android (Yoga quirk), and the
+  // negative centering offset is clamped, so the card kept its left margin but
+  // rendered flush against the right screen edge.
+  const cardWidth = Math.min(windowWidth - spacing.lg * 2, 400);
   const buttonsHeight = (buttons.length > 2 ? buttons.length * 54 : buttons.length === 2 ? 2 * 54 : 64) + spacing.lg;
   const contentMaxHeight = Math.max(
     160,
@@ -87,7 +92,13 @@ export function AppDialog({ entry }: { entry: DialogEntry }) {
         <Pressable
           style={[
             styles.card,
-            { marginBottom: insets.bottom + spacing.lg, marginTop: insets.top + spacing.lg, backgroundColor: tokens.surface, borderColor: tokens.border },
+            {
+              width: cardWidth,
+              marginBottom: insets.bottom + spacing.lg,
+              marginTop: insets.top + spacing.lg,
+              backgroundColor: tokens.surface,
+              borderColor: tokens.border,
+            },
           ]}
           onPress={(e) => e.stopPropagation()}
         >
@@ -160,8 +171,6 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   card: {
-    width: '100%',
-    maxWidth: 400,
     borderRadius: radius.xl,
     borderWidth: 1,
     padding: spacing.xl,
@@ -206,11 +215,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     borderRadius: radius.pill,
     minWidth: 96,
+    // Grow to share the row evenly (friendlier than right-hugging buttons); when two
+    // buttons can't both keep the 140px basis they wrap, each taking a full row.
+    flexGrow: 1,
     flexShrink: 1,
+    flexBasis: 140,
     ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
   } as ViewStyle,
   btnFull: {
     width: '100%',
+    flexBasis: 'auto',
   },
   btnBordered: {
     borderWidth: 1,

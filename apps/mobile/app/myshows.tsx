@@ -1,7 +1,8 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { Header } from '../components/Header';
 import { PosterCard, cardYear } from '../components/cards';
 import { EmptyState, Screen, Spinner, T } from '../components/primitives';
@@ -71,6 +72,15 @@ export default function MyShowsScreen() {
     rows.forEach((r, i) => { if (r.type === 'header') stickyIndices.push(i); });
     return { rows, stickyIndices };
   }, [defs, expanded, cols]);
+
+  // Warm the disk cache for posters below the viewport (see movies.tsx note).
+  useEffect(() => {
+    const urls = defs
+      .flatMap((s) => s.items)
+      .map((m) => m.posterUrl)
+      .filter((u): u is string => !!u);
+    if (urls.length) Image.prefetch(urls).catch(() => undefined);
+  }, [defs]);
 
   const renderItem = useCallback(({ item }: { item: FlatRow }) => {
     if (item.type === 'header') {

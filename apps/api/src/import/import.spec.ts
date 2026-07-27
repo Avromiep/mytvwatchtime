@@ -48,6 +48,23 @@ describe('import inference', () => {
     );
   });
 
+  it('profiles match on basename — a folder prefix must not nuke every file', () => {
+    // Regression: a zip created from a folder prefixes every entry (gdpr-data/…); the
+    // prefix contains the skip word "gdpr", which classified ALL files as unknown and
+    // silently skipped the entire watched/watchlist staging (only ratings/emotions/
+    // comments survived via their own basename-aware detectors).
+    expect(detectProfile('gdpr-data/watched_on_episode.csv', ['episode_id', 'tv_show_name'])).toBe(
+      'tvtime_watched_episode',
+    );
+    expect(detectProfile('gdpr-data/tracking-prod-records.csv', ['type'])).toBe('tvtime_tracking');
+    expect(detectProfile('gdpr-data/tracking-prod-records-v2.csv', ['ep_id'])).toBe('tvtime_tracking');
+    expect(detectProfile('gdpr-data/rewatched_episode.csv', ['cpt'])).toBe('tvtime_rewatched_episode');
+    expect(detectProfile('gdpr-data/user_tv_show_data.csv', ['user_id'])).toBe('tvtime_show_data');
+    expect(detectProfile('gdpr-data/followed_tv_show.csv', ['user_id'])).toBe('tvtime_followed');
+    // …while the skip list still works on real basenames
+    expect(detectProfile('gdpr-data/gdpr_requests.csv', ['id'])).toBe('unknown');
+  });
+
   it('normalizes a watched episode row', () => {
     const items = normalizeRow('tvtime_watched_episode', {
       tv_show_name: 'FROM',
@@ -83,6 +100,46 @@ describe('import inference', () => {
       tv_show_name: 'The King of Queens',
       episode_season_number: '1',
       episode_number: '1',
+    });
+    expect(items[0].watchCount).toBe(1);
+  });
+
+  it('v2 watch-episode summary row carries rewatch_count + 1 as the watch tally', () => {
+    // tracking-prod-records-v2.csv: Pokémon S01E01 — the watch-episode summary row
+    // says rewatch_count=3, so the episode was watched 4 times in total.
+    const items = normalizeRow('tvtime_tracking', {
+      series_name: 'Pokémon',
+      season_number: '1',
+      episode_number: '1',
+      key: 'watch-episode-705bbee5-95e3-40bc-994e-630ae8a75f27-592c9fbc-c60c-4d35-86bd-28fae8293ec2',
+      rewatch_count: '3',
+      created_at: '2019-06-08 21:08:37',
+    });
+    expect(items.length).toBe(1);
+    expect(items[0].entityType).toBe('WATCHED_EPISODE');
+    expect(items[0].watchCount).toBe(4);
+  });
+
+  it('v2 rewatch-episode event rows carry their key ordinal + 1 (covers missing summary counts)', () => {
+    // Same episode, third rewatch event row: ordinal 3 → watched 4 times.
+    const items = normalizeRow('tvtime_tracking', {
+      series_name: 'Pokémon',
+      season_number: '1',
+      episode_number: '1',
+      key: 'rewatch-episode-705bbee5-95e3-40bc-994e-630ae8a75f27-592c9fbc-c60c-4d35-86bd-28fae8293ec2-3',
+      created_at: '2025-06-07 17:08:55',
+    });
+    expect(items.length).toBe(1);
+    expect(items[0].watchCount).toBe(4);
+  });
+
+  it('v2 per-episode row without any rewatch signal stays a single watch', () => {
+    const items = normalizeRow('tvtime_tracking', {
+      series_name: 'Pokémon',
+      season_number: '1',
+      episode_number: '5',
+      key: 'watch-episode-705bbee5-95e3-40bc-994e-630ae8a75f27-592c9fbc-c60c-4d35-86bd-28fae8293ec2',
+      created_at: '2019-06-08 21:08:37',
     });
     expect(items[0].watchCount).toBe(1);
   });

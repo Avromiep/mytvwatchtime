@@ -127,7 +127,10 @@ const FOLLOW_KEYS = ['is_followed', 'followed', 'in_watchlist', 'watchlist', 'ac
 const FAV_KEYS = ['is_favorited', 'favorite', 'favorited'];
 
 export function detectProfile(filename: string, headers: string[]): Profile {
-  const f = filename.toLowerCase();
+  // Match on the BASENAME only: zips created from a folder carry a path prefix
+  // (e.g. "gdpr-data/tracking-prod-records.csv"), and a prefix containing a skip
+  // word ("gdpr") otherwise nukes EVERY file in the archive as 'unknown'.
+  const f = (filename.split('/').pop() ?? filename).toLowerCase();
   if (SKIP_PATTERNS.test(f)) return 'unknown';
 
   // TVTime known files
@@ -301,8 +304,20 @@ export function normalizeRow(profile: Profile, row: Record<string, string>): Nor
         // 1. Per-episode rows (have season_number + episode_number) = watched episodes
         // 2. Summary rows (have is_followed/is_for_later, no episode) = watchlist
         if (series && season != null && episode != null) {
-          // v2 per-episode row = this episode was watched
-          items.push(baseItem('WATCHED_EPISODE', row, series, { season, episode, watchedAt }));
+          // v2 per-episode row = this episode was watched. Rewatch tallies live in
+          // TWO places, each incomplete on its own (real exports: 251 episodes whose
+          // event-row ordinals EXCEED the summary's rewatch_count, 3791 whose summary
+          // has no rewatch_count at all):
+          //   - watch-episode-<seriesUuid>-<userUuid> rows carry `rewatch_count`
+          //   - rewatch-episode-<seriesUuid>-<userUuid>-<N> event rows carry ordinal N
+          // Each row reports its own tally (N+1 / rewatch_count+1) and the downstream
+          // max-dedupe keeps the highest — never sum, or v1/v2 overlap double-counts.
+          const key = pick(row, ['key']) ?? '';
+          const ordinalMatch = key.startsWith('rewatch-episode-') ? key.match(/-(\d+)$/) : null;
+          const ordinal = ordinalMatch ? Number(ordinalMatch[1]) : 0;
+          const rewatchCount = toInt(pick(row, ['rewatch_count'])) ?? 0;
+          const watchCount = Math.max(1, rewatchCount + 1, ordinal + 1);
+          items.push(baseItem('WATCHED_EPISODE', row, series, { season, episode, watchedAt, watchCount }));
         } else if (series && (followed || forLater)) {
           items.push(baseItem('WATCHLIST_SHOW', row, series));
         }

@@ -1,6 +1,7 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { MediaType } from '@tvwatch/shared';
 import { Header } from '../../components/Header';
 import { PosterCard } from '../../components/cards';
@@ -110,6 +111,17 @@ export default function MoviesScreen() {
     rows.forEach((r, i) => { if (r.type === 'header') stickyIndices.push(i); });
     return { rows, stickyIndices };
   }, [sections, expanded, cols]);
+
+  // Warm the disk cache for posters BELOW the viewport while the auto-paged queries
+  // append — otherwise each newly mounted row triggers a network fetch + decode on
+  // first scroll-past (the visible freeze/pop-in).
+  useEffect(() => {
+    const urls = sections
+      .flatMap((s) => s.items)
+      .map((m) => m.posterUrl)
+      .filter((u): u is string => !!u);
+    if (urls.length) Image.prefetch(urls).catch(() => undefined);
+  }, [sections]);
 
   const noData =
     watchlist.items.length === 0 && watched.items.length === 0 && favorites.items.length === 0;

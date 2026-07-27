@@ -92,12 +92,13 @@ export function EpisodeHistoryCarousel({ showId }: { showId: string }) {
   // can be a stale cache snapshot, and watch actions move the target forward.
   // Once the user scrolls/taps away from the landed position, never yank again.
   //
-  // The scroll stays PENDING until the actual scroll offset proves it landed:
-  // firing scrollToOffset while only initialNumToRender cards exist clamps the
-  // offset to the partial content (this pinned the landing to ~index 7 on first
-  // load), and scrollToIndex/viewPosition computes off-center offsets on web
-  // (this split the landing between S1E01 and S1E02 for never-watched shows).
-  // Every content-size growth retries the scroll; onScroll confirms success.
+  // The INITIAL landing is free: exact card geometry (getItemLayout) lets
+  // initialScrollIndex mount the list already at the target — no post-paint scroll,
+  // so there is nothing to see move. Re-lands (fresh data / watch actions moving
+  // the target) are single non-animated scrolls that stay PENDING until the real
+  // offset confirms: firing scrollToOffset while only initialNumToRender cards
+  // exist clamps the offset to the partial content, so every content-size growth
+  // retries and onScroll confirms success.
   const lastLanded = useRef<number | null>(null);
   const pendingLand = useRef<number | null>(null);
   const activeIndexRef = useRef(0);
@@ -116,6 +117,9 @@ export function EpisodeHistoryCarousel({ showId }: { showId: string }) {
     if (lastLanded.current !== null && activeIndex !== lastLanded.current) return;
     lastLanded.current = landingIndex;
     setActiveIndex(landingIndex);
+    // On first mount initialScrollIndex already put us at the target, so this is a
+    // no-op scroll (invisible) — but it doubles as a correction if a platform ever
+    // mishandles initialScrollIndex. On re-lands it performs the actual move.
     pendingLand.current = landingIndex;
     const timer = setTimeout(tryLand, 0);
     return () => clearTimeout(timer);
@@ -253,6 +257,8 @@ export function EpisodeHistoryCarousel({ showId }: { showId: string }) {
         snapToOffsets={snapOffsets}
         decelerationRate="fast"
         disableIntervalMomentum
+        initialScrollIndex={landingIndex}
+        getItemLayout={(_, i) => ({ length: interval, offset: interval * i, index: i })}
         contentContainerStyle={{ paddingHorizontal: sidePadding }}
         onContentSizeChange={tryLand}
         onScroll={(e) => {
