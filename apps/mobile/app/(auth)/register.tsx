@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
-import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
 import * as AppleAuthentication from 'expo-apple-authentication';
@@ -60,7 +59,9 @@ export default function RegisterScreen() {
         await setSelfHosted(true, serverUrl);
       }
       await registerEmail({ email, username, password });
-      router.replace('/(tabs)/shows');
+      // No explicit navigation: the Gate routes brand-new accounts to the
+      // onboarding intro (session now carries onboardingStatus) and everyone
+      // else to the tabs — one router, no race.
     } catch (e: any) {
       showError({ title: t('auth:signupFailed'), description: e.message ?? t('common:tryAgain') });
     } finally {

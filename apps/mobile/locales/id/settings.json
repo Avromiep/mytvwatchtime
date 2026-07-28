@@ -34,7 +34,7 @@
   "privacyPolicyRow": "Kebijakan Privasi",
   "termsOfUseRow": "Ketentuan Penggunaan",
   "joinDiscord": "Gabung ke Discord kami",
-  "quickSetup": "Penyiapan cepat",
+  "quickSetup": "Siapkan perpustakaanmu",
   "contactSupport": "Hubungi dukungan",
   "website": "Situs web",
   "iosTestFlight": "Gabung TestFlight iOS",
@@ -61,5 +61,6 @@
   },
   "poweredBy": "Didukung oleh",
   "metadataAttribution": "Metadata disediakan oleh TMDB dan TheTVDB.",
-  "tvdbSubscribe": "Pertimbangkan untuk berlangganan TheTVDB"
+  "tvdbSubscribe": "Pertimbangkan untuk berlangganan TheTVDB",
+  "quickSetupDesc": "Tambahkan judul yang sudah ditonton, perbarui progres serial, atau bangun daftar tontonanmu."
 }

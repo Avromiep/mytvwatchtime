@@ -849,7 +849,9 @@ export class DiscoveryService {
     let ids = await this.redis.get<string[]>(key);
     if (!ids) {
       ids = await this.rankForYouIds(userId, genre?.trim() || undefined, hideAnime, filters);
-      await this.redis.set(key, ids, 300);
+      // Empty rankings are NOT cached: a brand-new user's first open would
+      // otherwise poison the section for 5 min after their first adds.
+      if (ids.length) await this.redis.set(key, ids, 300);
     }
     const items = await this.fetchListDtos(ids.slice((page - 1) * pageSize, page * pageSize), userId, pageSize);
     return { items, page, hasMore: ids.length > page * pageSize };

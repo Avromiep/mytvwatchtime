@@ -34,7 +34,7 @@
   "privacyPolicyRow": "Gizlilik Politikası",
   "termsOfUseRow": "Kullanım Koşulları",
   "joinDiscord": "Discord sunucumuza katıl",
-  "quickSetup": "Hızlı kurulum",
+  "quickSetup": "Kütüphaneni kur",
   "contactSupport": "Destekle iletişime geç",
   "website": "Web sitesi",
   "iosTestFlight": "iOS TestFlight'a katıl",
@@ -61,5 +61,6 @@
   },
   "poweredBy": "Sağlayıcı",
   "metadataAttribution": "Meta veriler TMDB ve TheTVDB tarafından sağlanmaktadır.",
-  "tvdbSubscribe": "TheTVDB'ye abone olmayı düşünün"
+  "tvdbSubscribe": "TheTVDB'ye abone olmayı düşünün",
+  "quickSetupDesc": "İzlediğin içerikleri ekle, dizi ilerlemeni güncelle veya izleme listeni oluştur."
 }

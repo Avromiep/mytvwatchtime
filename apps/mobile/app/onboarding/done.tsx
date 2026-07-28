@@ -9,9 +9,15 @@ import { useConfetti } from '../../components/Confetti';
 import { useAuth } from '../../context/AuthContext';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useUpdateOnboardingState } from '../../api/hooks';
-import { logEvent, logFirstEvent } from '../../lib/analytics';
+import { logFirstEvent } from '../../lib/analytics';
 import { spacing } from '../../theme/theme';
 
+/**
+ * Step 6 — success. Summarizes EVERYTHING that was added (non-zero rows only),
+ * in three variants: full success, partial success (some titles failed — the
+ * draft was trimmed to exactly those, so "try again" re-applies them), and the
+ * import completion state.
+ */
 export default function OnboardingDone() {
   const { t } = useTranslation(['onboarding', 'common']);
   const { tokens } = useAppearance();
@@ -20,11 +26,11 @@ export default function OnboardingDone() {
   const { confettiEl, fire } = useConfetti();
   const params = useLocalSearchParams<{
     source?: string;
-    shows?: string;
     episodes?: string;
     movies?: string;
     watchlist?: string;
-    unresolved?: string;
+    partial?: string;
+    failed?: string;
   }>();
 
   const fired = useRef(false);
@@ -38,10 +44,7 @@ export default function OnboardingDone() {
       update
         .mutateAsync({ status: 'COMPLETED', version: ONBOARDING_VERSION })
         .then(() => refreshUser())
-        .then(() => {
-          logFirstEvent('onboarding_completed', user?.id);
-          logEvent('onboarding_import_completed');
-        })
+        .then(() => logFirstEvent('onboarding_completed', user?.id))
         .catch(() => undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -50,22 +53,38 @@ export default function OnboardingDone() {
   const episodes = Number(params.episodes ?? 0);
   const movies = Number(params.movies ?? 0);
   const watchlist = Number(params.watchlist ?? 0);
-  const unresolved = Number(params.unresolved ?? 0);
   const fromImport = params.source === 'import';
+  const partial = params.partial === '1';
+
+  const title = fromImport
+    ? t('onboarding:importDoneTitle')
+    : partial
+      ? t('onboarding:partialTitle')
+      : t('onboarding:doneTitle');
+  const body = fromImport
+    ? t('onboarding:importDoneBody')
+    : partial
+      ? t('onboarding:partialBody')
+      : t('onboarding:doneBody');
 
   return (
     <Screen>
       {confettiEl}
       <View style={{ flex: 1, justifyContent: 'center', padding: spacing.lg, gap: spacing.lg }}>
         <View style={{ alignItems: 'center', gap: spacing.sm }}>
-          <Ionicons name="checkmark-circle" size={64} color={tokens.watched} />
+          <Ionicons
+            name={partial ? 'alert-circle' : 'checkmark-circle'}
+            size={64}
+            color={partial ? tokens.warning : tokens.watched}
+          />
           <T variant="title" style={{ textAlign: 'center' }}>
-            {t('onboarding:doneTitle')}
+            {title}
           </T>
           <T variant="body" muted style={{ textAlign: 'center' }}>
-            {t('onboarding:doneDesc')}
+            {body}
           </T>
         </View>
+
         {!fromImport && (episodes > 0 || movies > 0 || watchlist > 0) ? (
           <Card style={{ gap: spacing.xs }}>
             {episodes > 0 ? (
@@ -77,17 +96,24 @@ export default function OnboardingDone() {
             {watchlist > 0 ? (
               <T variant="body">{t('onboarding:doneWatchlist', { count: watchlist })}</T>
             ) : null}
-            {unresolved > 0 ? (
-              <T variant="caption" muted>
-                {t('onboarding:doneUnresolved', { count: unresolved })}
-              </T>
-            ) : null}
           </Card>
         ) : null}
-        <Button
-          title={t('onboarding:doneCta')}
-          onPress={() => router.replace('/(tabs)/shows')}
-        />
+
+        {partial ? (
+          <View style={{ gap: spacing.sm }}>
+            <Button
+              title={t('onboarding:partialRetry')}
+              onPress={() => router.replace('/onboarding/review' as any)}
+            />
+            <Button
+              title={t('onboarding:partialContinue')}
+              variant="ghost"
+              onPress={() => router.replace('/(tabs)/shows')}
+            />
+          </View>
+        ) : (
+          <Button title={t('onboarding:doneCta')} onPress={() => router.replace('/(tabs)/shows')} />
+        )}
       </View>
     </Screen>
   );

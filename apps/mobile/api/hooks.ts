@@ -795,6 +795,8 @@ export const useMarkEpisodeWatched = () => {
       qc.invalidateQueries({ queryKey: qk.episode(vars.id) });
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['show'] });
+      // First watches seed the for-you ranking — refresh the Explore carousel.
+      qc.invalidateQueries({ queryKey: qk.discover() });
       invalidateLeaderboardSoon(qc);
       void refreshWidgets();
     },
@@ -1389,6 +1391,8 @@ export const useToggleFavorite = () => {
       qc.invalidateQueries({ queryKey: ['favorites'] });
       qc.invalidateQueries({ queryKey: ['show'] });
       qc.invalidateQueries({ queryKey: ['movie'] });
+      // Favorites drive for-you affinity.
+      qc.invalidateQueries({ queryKey: qk.discover() });
     },
   });
 };
@@ -1524,6 +1528,8 @@ export const useApplyOnboarding = () => {
       // single-entity marks) — no stats invalidation here.
       qc.invalidateQueries({ queryKey: qk.watchNext });
       qc.invalidateQueries({ queryKey: qk.upcoming });
+      // "Top shows for you" gets its first taste signal from the apply.
+      qc.invalidateQueries({ queryKey: qk.discover() });
       qc.invalidateQueries({ queryKey: ['show'] });
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['movie'] });

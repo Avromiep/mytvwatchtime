@@ -397,6 +397,11 @@ export class AuthService {
         isPrivate: user.profile?.isPrivate ?? false,
         role: user.role,
         mustChangePassword: user.mustChangePassword,
+        // Onboarding state must ride on the login/register session too — without
+        // it the mobile Gate treats a brand-new account as "onboarding done"
+        // (its stale-cache guard) and skips the quick-setup flow.
+        onboardingStatus: user.onboardingStatus,
+        onboardingVersion: user.onboardingVersion,
       } as any,
     };
   }

@@ -35,7 +35,8 @@ export default function AuthSessionScreen() {
     const provider = (params.state || '').includes('facebook') ? 'FACEBOOK' : 'GOOGLE';
 
     loginSocial(provider, code, OAUTH_REDIRECT)
-      .then(() => router.replace('/(tabs)/shows'))
+      // The Gate routes from here: brand-new social accounts go to the
+      // onboarding intro, everyone else to the tabs.
       .catch((e: any) => {
         showError({ title: t('auth:loginFailedGeneric'), description: e?.message ?? t('common:pleaseTryAgain') });
         router.replace('/(auth)/login');

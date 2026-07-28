@@ -18,7 +18,7 @@ import { SUPPORTED_LOCALES, type LanguagePreference, type ThemePreference } from
 import { useMe, useUpdateProfile, useUploadAvatar, useUploadCover } from '../api/hooks';
 import { api, setBaseUrl, SITE_URL } from '../api/client';
 import { radius, spacing } from '../theme/theme';
-import { showError, showConfirm } from '../lib/dialog';
+import { showError, showConfirm, showDialog, dismissAllDialogs } from '../lib/dialog';
 import { showToast } from '../lib/toast';
 import { logEvent } from '../lib/analytics';
 
@@ -71,6 +71,59 @@ export default function SettingsScreen() {
       { username, displayName, bio, avatarUrl, coverUrl },
       { onSuccess: () => showToast(t('settings:toast.saved')) },
     );
+
+  /** Single-select popup (FilterPicker-style): tap applies and dismisses. */
+  const openSingleSelect = ({
+    title,
+    options,
+    selected,
+    onSelect,
+  }: {
+    title: string;
+    options: { value: string; label: string }[];
+    selected: string;
+    onSelect: (value: string) => void;
+  }) => {
+    showDialog({
+      title,
+      content: (
+        <ScrollView style={{ maxHeight: 420 }}>
+          <View style={{ gap: spacing.sm }}>
+            {options.map((o) => (
+              <Pressable
+                key={o.value}
+                onPress={() => {
+                  onSelect(o.value);
+                  dismissAllDialogs();
+                }}
+                style={({ pressed }) => [
+                  styles.optionRow,
+                  {
+                    backgroundColor: tokens.surfaceElevated,
+                    borderRadius: radius.md,
+                    padding: spacing.sm,
+                    opacity: pressed ? 0.85 : 1,
+                  },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={o.label}
+              >
+                <T variant="body" style={{ flex: 1 }} numberOfLines={1}>
+                  {o.label}
+                </T>
+                <Ionicons
+                  name={selected === o.value ? 'checkmark-circle' : 'ellipse-outline'}
+                  size={20}
+                  color={selected === o.value ? tokens.primary : tokens.textMuted}
+                />
+              </Pressable>
+            ))}
+          </View>
+        </ScrollView>
+      ),
+      buttons: [{ label: t('common:cancel'), variant: 'ghost' }],
+    });
+  };
 
   const togglePrivate = (next: boolean) =>
     update.mutate(
@@ -218,18 +271,54 @@ export default function SettingsScreen() {
         <Card>
           <SectionHeader title={t('settings:appearance.title')} />
           <T variant="caption" muted style={{ marginBottom: spacing.sm }}>{t('settings:appearance.description')}</T>
-          <OptionRow label={t('settings:appearance.system')} selected={themePreference === 'system'} onPress={() => { setThemePreference('system'); showToast(t('settings:toast.themeUpdated')); }} icon="phone-portrait-outline" />
-          <OptionRow label={t('settings:appearance.light')} selected={themePreference === 'light'} onPress={() => { setThemePreference('light'); showToast(t('settings:toast.themeUpdated')); }} icon="sunny-outline" />
-          <OptionRow label={t('settings:appearance.dark')} selected={themePreference === 'dark'} onPress={() => { setThemePreference('dark'); showToast(t('settings:toast.themeUpdated')); }} icon="moon-outline" />
+          <SelectRow
+            icon="moon-outline"
+            label={t('settings:appearance.title')}
+            valueLabel={t(`settings:appearance.${themePreference}`)}
+            onPress={() =>
+              openSingleSelect({
+                title: t('settings:appearance.title'),
+                options: [
+                  { value: 'system', label: t('settings:appearance.system') },
+                  { value: 'light', label: t('settings:appearance.light') },
+                  { value: 'dark', label: t('settings:appearance.dark') },
+                ],
+                selected: themePreference,
+                onSelect: (v) => {
+                  setThemePreference(v as ThemePreference);
+                  showToast(t('settings:toast.themeUpdated'));
+                },
+              })
+            }
+          />
         </Card>
 
         <Card>
           <SectionHeader title={t('settings:language.title')} />
           <T variant="caption" muted style={{ marginBottom: spacing.sm }}>{t('settings:language.description')}</T>
-          <OptionRow label={t('settings:language.system')} selected={languagePreference === 'system'} onPress={() => { setLanguagePreference('system'); showToast(t('settings:toast.languageUpdated')); }} icon="language-outline" />
-          {SUPPORTED_LOCALES.map((l) => (
-            <OptionRow key={l.code} label={l.nativeName} selected={languagePreference === l.code} onPress={() => { setLanguagePreference(l.code as LanguagePreference); showToast(t('settings:toast.languageUpdated')); }} />
-          ))}
+          <SelectRow
+            icon="language-outline"
+            label={t('settings:language.title')}
+            valueLabel={
+              languagePreference === 'system'
+                ? t('settings:language.system')
+                : (SUPPORTED_LOCALES.find((l) => l.code === languagePreference)?.nativeName ?? languagePreference)
+            }
+            onPress={() =>
+              openSingleSelect({
+                title: t('settings:language.title'),
+                options: [
+                  { value: 'system', label: t('settings:language.system') },
+                  ...SUPPORTED_LOCALES.map((l) => ({ value: l.code, label: l.nativeName })),
+                ],
+                selected: languagePreference,
+                onSelect: (v) => {
+                  setLanguagePreference(v as LanguagePreference);
+                  showToast(t('settings:toast.languageUpdated'));
+                },
+              })
+            }
+          />
           {resolvedLocale === 'ar' ? (
             <T variant="micro" muted style={{ marginTop: spacing.xs }}>{t('settings:language.rtlRestartNotice')}</T>
           ) : null}
@@ -247,9 +336,9 @@ export default function SettingsScreen() {
               }} style={{ marginTop: spacing.sm }} />
             </View>
           ) : null}
-          <Row icon="flash-outline" label={t('settings:quickSetup')} onPress={() => {
+          <Row icon="flash-outline" label={t('settings:quickSetup')} subtitle={t('settings:quickSetupDesc')} onPress={() => {
             logEvent('onboarding_reopened');
-            router.push('/onboarding/select' as any);
+            router.push('/onboarding' as any);
           }} />
           <Row icon="chatbubbles-outline" label={t('settings:contactSupport')} onPress={() => router.push('/contact' as any)} />
           <Row icon="shield-checkmark-outline" label={t('settings:privacyPolicyRow')} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/privacy`)} />
@@ -297,24 +386,30 @@ export default function SettingsScreen() {
   );
 }
 
-function Row({ icon, label, onPress }: { icon: any; label: string; onPress?: () => void }) {
+function Row({ icon, label, subtitle, onPress }: { icon: any; label: string; subtitle?: string; onPress?: () => void }) {
   const { tokens } = useAppearance();
   return (
     <Pressable onPress={onPress} style={[styles.row, { borderTopColor: tokens.divider }]}>
       <Ionicons name={icon} size={20} color={tokens.textPrimary} />
-      <T variant="body" style={{ flex: 1, marginLeft: spacing.md }}>{label}</T>
+      <View style={{ flex: 1, marginLeft: spacing.md }}>
+        <T variant="body">{label}</T>
+        {subtitle ? <T variant="micro" muted>{subtitle}</T> : null}
+      </View>
       <Ionicons name="chevron-forward" size={18} color={tokens.textMuted} />
     </Pressable>
   );
 }
 
-function OptionRow({ label, selected, onPress, icon }: { label: string; selected: boolean; onPress: () => void; icon?: any }) {
+/** Settings row that shows ONLY the current selection and opens a popup picker
+ *  (same interaction as the explore FilterPicker) instead of listing every option. */
+function SelectRow({ icon, label, valueLabel, onPress }: { icon: any; label: string; valueLabel: string; onPress?: () => void }) {
   const { tokens } = useAppearance();
   return (
-    <Pressable onPress={onPress} style={styles.optionRow}>
-      {icon ? <Ionicons name={icon} size={18} color={tokens.textMuted} style={{ marginRight: spacing.sm }} /> : null}
-      <T variant="body" style={{ flex: 1 }}>{label}</T>
-      {selected ? <Ionicons name="checkmark-circle" size={20} color={tokens.primary} /> : null}
+    <Pressable onPress={onPress} style={[styles.row, { borderTopColor: tokens.divider }]} accessibilityRole="button">
+      <Ionicons name={icon} size={20} color={tokens.textPrimary} />
+      <T variant="body" style={{ flex: 1, marginLeft: spacing.md }}>{label}</T>
+      <T variant="caption" muted numberOfLines={1} style={{ maxWidth: '50%' }}>{valueLabel}</T>
+      <Ionicons name="chevron-forward" size={18} color={tokens.textMuted} style={{ marginLeft: spacing.xs }} />
     </Pressable>
   );
 }

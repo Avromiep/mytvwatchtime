@@ -63,9 +63,11 @@ export class OnboardingService {
   /**
    * Bulk-apply onboarding selections. Behaves exactly like the user marked every
    * title manually: watchedAt = now, one watchHistory row per newly watched
-   * episode/movie, one event per show/movie/watchlist add. Idempotent — only
-   * unwatched→watched transitions write anything, so replaying the same payload
-   * is a no-op. Per-title failures are isolated and reported in `unresolved`.
+   * episode/movie, one event per show/movie/watchlist add. Watched titles are
+   * also watchlisted (tracked-library convention — removing from the watchlist
+   * is how the app marks "dropped"). Idempotent — only unwatched→watched
+   * transitions write anything, so replaying the same payload is a no-op.
+   * Per-title failures are isolated and reported in `unresolved`.
    */
   async apply(userId: string, dto: ApplyOnboardingDto): Promise<OnboardingApplyResultDto> {
     const shows = dedupe(dto.shows ?? []);
@@ -80,11 +82,10 @@ export class OnboardingService {
     };
 
     // Watchlist adds are merge-only: pre-read existing items so addedCount is only
-    // incremented for genuinely new rows (keeps apply replay a no-op).
-    const watchlistIds = [
-      ...shows.filter((s) => s.action === 'WATCHLIST').map((s) => s.mediaId),
-      ...movies.filter((m) => m.action === 'WATCHLIST').map((m) => m.mediaId),
-    ];
+    // incremented for genuinely new rows (keeps apply replay a no-op). Watched
+    // titles are watchlisted too (tracked-library convention), so the pre-read
+    // covers every selected id, not just explicit WATCHLIST picks.
+    const watchlistIds = [...shows.map((s) => s.mediaId), ...movies.map((m) => m.mediaId)];
     const existingWatchlist = watchlistIds.length
       ? await this.prisma.watchlistItem.findMany({
           where: { userId, mediaId: { in: watchlistIds } },
@@ -250,6 +251,9 @@ export class OnboardingService {
     // than bumpShowCount deltas — correct for arbitrary partial progress and
     // aired-only totals. Watching un-drops the show (manual-marking parity).
     await this.rebuildShowStatus(userId, media.id, now);
+    // Library convention: a watched show is a tracked show, so it also lands in
+    // the watchlist (merge-only — never removes, never double-counts).
+    await this.addToWatchlist(userId, media.id, MediaType.SHOW, inWatchlist, result);
     result.applied.showsProcessed++;
   }
 
@@ -298,6 +302,9 @@ export class OnboardingService {
       this.events.emit('watch.movie', { userId, mediaId: media.id });
       result.applied.moviesWatched++;
     }
+    // Same library convention as shows: watched movies are tracked, so they are
+    // watchlisted too (merge-only).
+    await this.addToWatchlist(userId, media.id, MediaType.MOVIE, inWatchlist, result);
   }
 
   private async addToWatchlist(
@@ -393,6 +400,8 @@ export class OnboardingService {
       this.redis.delByPattern(`watchnext:${userId}:*`),
       this.redis.delByPattern(`upcoming:${userId}:*`),
       this.redis.delByPattern(`showsprogress:${userId}:*`),
+      // The apply writes the user's first taste signal — recompute for-you.
+      this.redis.delByPattern(`foryou:v1:${userId}:*`),
       this.redis.del(`watchnext:${userId}`),
       this.redis.del(`upcoming:${userId}`),
     ]);

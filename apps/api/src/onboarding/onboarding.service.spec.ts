@@ -124,7 +124,7 @@ describe('OnboardingService', () => {
     const { svc, prisma, events } = make({ media: showMedia, seasons });
     const out = await svc.apply('u1', { shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }], movies: [] });
 
-    expect(out.applied).toEqual({ showsProcessed: 1, episodesMarked: 3, moviesWatched: 0, watchlistAdded: 0 });
+    expect(out.applied).toEqual({ showsProcessed: 1, episodesMarked: 3, moviesWatched: 0, watchlistAdded: 1 });
     expect(out.unresolved).toEqual([]);
     // Only aired, non-special episodes are eligible.
     expect(prisma.season.findMany).toHaveBeenCalledWith(
@@ -143,7 +143,7 @@ describe('OnboardingService', () => {
         expect.objectContaining({ episodeId: 'e3', seasonNumber: 2, episodeNumber: 1 }),
       ]),
     });
-    expect(events.emit).toHaveBeenCalledTimes(1);
+    expect(events.emit).toHaveBeenCalledTimes(2); // watch.episode + watchlist.added
     expect(events.emit).toHaveBeenCalledWith('watch.episode', { userId: 'u1', mediaId: 'media-1' });
     expect(prisma.userShowStatus.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ update: expect.objectContaining({ watchedCount: 2, totalCount: 2, dropped: false }) }),
@@ -272,12 +272,58 @@ describe('OnboardingService', () => {
   });
 
   it('movie WATCHED on an already-watched movie is a no-op', async () => {
-    const { svc, prisma, events } = make({ media: movieMedia, movieStatus: { watched: true } });
+    const { svc, prisma, events } = make({
+      media: movieMedia,
+      movieStatus: { watched: true },
+      watchlistItems: [{ mediaId: 'movie-1' }],
+    });
     const out = await svc.apply('u1', { shows: [], movies: [{ mediaId: 'movie-1', action: 'WATCHED' }] });
 
     expect(out.applied.moviesWatched).toBe(0);
     expect(prisma.watchHistory.create).not.toHaveBeenCalled();
     expect(events.emit).not.toHaveBeenCalled();
+  });
+
+  // ---------------- Watched ⇒ also watchlisted ----------------
+  it('CAUGHT_UP also watchlists the show (tracked-library convention)', async () => {
+    const { svc, prisma, events } = make({ media: showMedia, seasons });
+    const out = await svc.apply('u1', { shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }], movies: [] });
+
+    expect(out.applied.watchlistAdded).toBe(1);
+    expect(prisma.watchlistItem.upsert).toHaveBeenCalledWith({
+      where: { userId_mediaId: { userId: 'u1', mediaId: 'media-1' } },
+      create: { userId: 'u1', mediaId: 'media-1' },
+      update: {},
+    });
+    expect(events.emit).toHaveBeenCalledWith('watchlist.added', {
+      userId: 'u1',
+      mediaId: 'media-1',
+      mediaType: 'SHOW',
+    });
+  });
+
+  it('movie WATCHED also watchlists the movie', async () => {
+    const { svc, prisma } = make({ media: movieMedia });
+    const out = await svc.apply('u1', { shows: [], movies: [{ mediaId: 'movie-1', action: 'WATCHED' }] });
+
+    expect(out.applied.watchlistAdded).toBe(1);
+    expect(prisma.watchlistItem.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ create: { userId: 'u1', mediaId: 'movie-1' } }),
+    );
+  });
+
+  it('replayed apply does not re-add or re-count watchlist rows for watched titles', async () => {
+    const { svc, prisma, events } = make({
+      media: showMedia,
+      seasons,
+      watchlistItems: [{ mediaId: 'media-1' }], // already tracked (e.g. first apply ran)
+    });
+    const out = await svc.apply('u1', { shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }], movies: [] });
+
+    expect(out.applied.watchlistAdded).toBe(0);
+    expect(prisma.watchlistItem.upsert).not.toHaveBeenCalled();
+    expect(prisma.mediaItem.update).not.toHaveBeenCalled();
+    expect(events.emit).not.toHaveBeenCalledWith('watchlist.added', expect.anything());
   });
 
   it('reports NOT_FOUND for unknown media and continues with the rest', async () => {

@@ -8,45 +8,57 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { MediaCardDto, MediaType, ONBOARDING_VERSION } from '@tvwatch/shared';
-import { Header } from '../../components/Header';
-import { Button, Chip, Screen, Spinner, T, EmptyState } from '../../components/primitives';
-import { SelectablePosterCard, PosterSelectState } from '../../components/onboarding/SelectablePosterCard';
-import { useDiscoverSections, useSearch, useUpdateOnboardingState } from '../../api/hooks';
+import { MediaCardDto, MediaType } from '@tvwatch/shared';
+import { Header } from '../Header';
+import { Button, Chip, Screen, Spinner, T, EmptyState } from '../primitives';
+import { SelectablePosterCard, PosterSelectState } from './SelectablePosterCard';
+import { useDiscoverSections, useSearch } from '../../api/hooks';
 import { useAuth } from '../../context/AuthContext';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useOnboardingDraft } from '../../lib/onboarding/useOnboardingDraft';
-import {
-  OnboardingMode,
-  needsProgressReview,
-  selectionCounts,
-} from '../../lib/onboarding/draft';
-import { logEvent, logFirstEvent } from '../../lib/analytics';
-import { showError } from '../../lib/dialog';
+import { useSkipSetup } from '../../lib/onboarding/useSkipSetup';
+import { OnboardingDraft, selectionCounts } from '../../lib/onboarding/draft';
+import { logEvent } from '../../lib/analytics';
+import { showToast } from '../../lib/toast';
 import { radius, spacing } from '../../theme/theme';
 
+export type PickerMode = 'WATCHED' | 'WATCHLIST';
 type Tab = 'shows' | 'movies';
 
-export default function OnboardingSelect() {
+/**
+ * Shared single-purpose title picker: the watched screen selects watched titles
+ * (green), the watchlist screen selects watchlist titles (orange + bookmark).
+ * One draft powers both, so Shows/Movies tab switches and back-navigation keep
+ * every selection. The two screens never convert each other's picks silently:
+ * the watchlist screen refuses watched picks with a toast.
+ */
+export function TitlePicker({
+  mode,
+  initialTab = 'shows',
+  onContinue,
+}: {
+  mode: PickerMode;
+  initialTab?: Tab;
+  /** Receives the LIVE draft (the caller must not hold a second draft instance). */
+  onContinue: (draft: OnboardingDraft) => void;
+}) {
   const { t } = useTranslation(['onboarding', 'common']);
   const { tokens } = useAppearance();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const { user, refreshUser } = useAuth();
-  const update = useUpdateOnboardingState();
-  const { draft, ready, act } = useOnboardingDraft(user?.id);
+  const { user } = useAuth();
+  const { draft, ready, act, flush } = useOnboardingDraft(user?.id);
+  const { skip, pending: skipPending } = useSkipSetup();
 
-  const [tab, setTab] = useState<Tab>('shows');
-  const [mode, setMode] = useState<OnboardingMode>('WATCHED');
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
 
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedQ(q.trim()), 400);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setDebouncedQ(q.trim()), 400);
+    return () => clearTimeout(timer);
   }, [q]);
 
   const searching = debouncedQ.length > 1;
@@ -78,16 +90,23 @@ export default function OnboardingSelect() {
   for (let i = 0; i < items.length; i += cols) rows.push(items.slice(i, i + cols));
 
   const counts = selectionCounts(draft);
+  const modeCount =
+    mode === 'WATCHED'
+      ? counts.showsWatched + counts.moviesWatched
+      : counts.showsWatchlisted + counts.moviesWatchlisted;
 
   const stateFor = (id: string, type: MediaType): PosterSelectState => {
     const entry = type === MediaType.SHOW ? draft.shows[id] : draft.movies[id];
     if (!entry) return 'NONE';
-    return entry.action === 'WATCHLIST' ? 'WATCHLIST' : 'WATCHED';
+    const watched = entry.action !== 'WATCHLIST';
+    // The watched screen only reflects watched picks (no bookmark icon here);
+    // the watchlist screen shows watched picks green so they read as taken.
+    if (mode === 'WATCHED') return watched ? 'WATCHED' : 'NONE';
+    return watched ? 'WATCHED' : 'WATCHLIST';
   };
 
   const trackedHintFor = (item: MediaCardDto): string | null => {
-    const alreadySelected = stateFor(item.id, item.type) !== 'NONE';
-    if (alreadySelected) return null;
+    if (stateFor(item.id, item.type) !== 'NONE') return null;
     if (item.inWatchlist) return t('onboarding:inWatchlist');
     if (item.type === MediaType.MOVIE && item.watched) return t('onboarding:alreadyWatched');
     if (item.type === MediaType.SHOW && (item.userProgress ?? 0) > 0)
@@ -95,36 +114,28 @@ export default function OnboardingSelect() {
     return null;
   };
 
+  const metaFor = (item: MediaCardDto) => ({
+    title: item.title,
+    poster: item.images?.poster ?? item.images?.backdrop ?? null,
+    year: item.type === MediaType.SHOW ? (item.yearStart ?? null) : (item.releaseYear ?? null),
+    type: item.type,
+  });
+
   const toggle = (item: MediaCardDto) => {
-    const wasSelected = stateFor(item.id, item.type) !== 'NONE';
-    act({
-      type: 'toggle',
-      id: item.id,
-      mediaType: item.type,
-      mode,
-      meta: {
-        title: item.title,
-        poster: item.images?.poster ?? item.images?.backdrop ?? null,
-        year: item.type === MediaType.SHOW ? (item.yearStart ?? null) : (item.releaseYear ?? null),
-        type: item.type,
-      },
-    });
-    if (!wasSelected) logEvent('onboarding_title_selected');
-  };
-
-  const onSkip = async () => {
-    logFirstEvent('onboarding_skipped', user?.id);
-    try {
-      await update.mutateAsync({ status: 'SKIPPED', version: ONBOARDING_VERSION });
-      await refreshUser();
-      router.replace('/(tabs)/shows');
-    } catch {
-      showError({ description: t('onboarding:skipFailed') });
+    const entry = item.type === MediaType.SHOW ? draft.shows[item.id] : draft.movies[item.id];
+    if (mode === 'WATCHED') {
+      act({ type: 'toggleWatched', id: item.id, mediaType: item.type, meta: metaFor(item) });
+      // Log only genuine new selections (including watchlist→watched conversions).
+      if (!entry || entry.action === 'WATCHLIST') logEvent('onboarding_watched_title_selected');
+      return;
     }
-  };
-
-  const onReview = () => {
-    router.push((needsProgressReview(draft) ? '/onboarding/progress' : '/onboarding/review') as any);
+    if (entry && entry.action !== 'WATCHLIST') {
+      // Watched wins: never silently convert — small non-blocking message.
+      showToast(t('onboarding:alreadyWatchedToast'));
+      return;
+    }
+    act({ type: 'toggleWatchlist', id: item.id, mediaType: item.type, meta: metaFor(item) });
+    if (!entry) logEvent('onboarding_watchlist_title_selected');
   };
 
   const loading = searching ? search.isLoading : sections.isLoading;
@@ -133,19 +144,27 @@ export default function OnboardingSelect() {
   return (
     <Screen>
       <Header
-        title={t('onboarding:selectTitle')}
+        title={t(mode === 'WATCHED' ? 'onboarding:watchedTitle' : 'onboarding:watchlistTitle')}
+        showBack
         right={
-          <Pressable onPress={onSkip} hitSlop={10} accessibilityRole="button">
-            {update.isPending ? (
+          <Pressable
+            onPress={() => skip(counts.total > 0)}
+            hitSlop={10}
+            accessibilityRole="button"
+          >
+            {skipPending ? (
               <Spinner />
             ) : (
               <T variant="caption" style={{ color: tokens.primary }}>
-                {t('onboarding:skipForNow')}
+                {t('onboarding:skipSetup')}
               </T>
             )}
           </Pressable>
         }
       />
+      <T variant="body" muted style={styles.body}>
+        {t(mode === 'WATCHED' ? 'onboarding:watchedBody' : 'onboarding:watchlistBody')}
+      </T>
 
       {/* Search */}
       <View style={styles.searchWrap}>
@@ -175,47 +194,31 @@ export default function OnboardingSelect() {
         </View>
       </View>
 
-      {/* Shows / Movies tabs + mode selector */}
+      {/* Shows / Movies tabs (selections survive the switch — one shared draft) */}
       <View style={styles.controls}>
-        <View style={{ flexDirection: 'row' }}>
-          <Chip
-            label={t('onboarding:tabShows')}
-            active={tab === 'shows'}
-            onPress={() => setTab('shows')}
-          />
-          <Chip
-            label={t('onboarding:tabMovies')}
-            active={tab === 'movies'}
-            onPress={() => setTab('movies')}
-          />
-        </View>
-        <View style={{ flexDirection: 'row' }}>
-          <Chip
-            label={t('onboarding:modeWatched')}
-            active={mode === 'WATCHED'}
-            color={mode === 'WATCHED' ? tokens.watched : undefined}
-            onPress={() => setMode('WATCHED')}
-          />
-          <Chip
-            label={t('onboarding:modeWatchlist')}
-            active={mode === 'WATCHLIST'}
-            color={mode === 'WATCHLIST' ? tokens.warning : undefined}
-            onPress={() => setMode('WATCHLIST')}
-          />
-        </View>
+        <Chip
+          label={t('onboarding:tabShows')}
+          active={tab === 'shows'}
+          onPress={() => setTab('shows')}
+        />
+        <Chip
+          label={t('onboarding:tabMovies')}
+          active={tab === 'movies'}
+          onPress={() => setTab('movies')}
+        />
       </View>
-      <T variant="micro" muted style={styles.modeHint}>
-        {mode === 'WATCHED' ? t('onboarding:modeWatchedHint') : t('onboarding:modeWatchlistHint')}
+      <T variant="micro" muted style={styles.sectionLabel}>
+        {t(searching ? 'onboarding:searchResults' : 'onboarding:popularNow')}
       </T>
 
       {/* Grid */}
       {!ready || loading ? (
-        <Spinner />
+        <PosterSkeleton cols={cols} cellW={cellW} gap={gridGap} />
       ) : errored ? (
         <EmptyState
           icon="cloud-offline-outline"
           title={t('onboarding:loadErrorTitle')}
-          subtitle={t('onboarding:loadErrorDesc')}
+          subtitle={t('onboarding:loadErrorBody')}
           cta={t('common:tryAgain')}
           onCta={() => (searching ? search.refetch() : sections.refetch())}
         />
@@ -224,7 +227,7 @@ export default function OnboardingSelect() {
           data={rows}
           key={`grid-${cols}-${tab}`}
           contentContainerStyle={{
-            padding: spacing.lg,
+            paddingHorizontal: spacing.lg,
             paddingBottom: 96 + insets.bottom,
           }}
           keyExtractor={(row) => row[0]?.id ?? 'row'}
@@ -232,10 +235,15 @@ export default function OnboardingSelect() {
           maxToRenderPerBatch={8}
           windowSize={7}
           ListEmptyComponent={
-            <EmptyState
-              icon="search-outline"
-              title={searching ? t('onboarding:noResults') : t('onboarding:noSuggestions')}
-            />
+            searching ? (
+              <EmptyState
+                icon="search-outline"
+                title={t('onboarding:noResultsTitle')}
+                subtitle={t('onboarding:noResultsBody')}
+              />
+            ) : (
+              <EmptyState icon="film-outline" title={t('onboarding:noSuggestions')} />
+            )
           }
           onEndReached={() => {
             if (searching && search.hasNextPage && !search.isFetchingNextPage)
@@ -285,39 +293,66 @@ export default function OnboardingSelect() {
         />
       )}
 
-      {/* Sticky review action */}
-      {counts.total > 0 ? (
-        <View
-          style={[
-            styles.stickyBar,
-            {
-              backgroundColor: tokens.cardBackground,
-              borderTopColor: tokens.divider,
-              paddingBottom: insets.bottom + spacing.md,
-            },
-          ]}
-        >
-          <View style={{ flex: 1 }}>
-            <T variant="caption">
-              {t('onboarding:selectionSummary', {
-                watched: counts.showsWatched + counts.moviesWatched,
-                watchlist: counts.showsWatchlisted + counts.moviesWatchlisted,
-              })}
-            </T>
-          </View>
-          <Button
-            title={t('onboarding:reviewSelections', { count: counts.total })}
-            onPress={onReview}
-            style={{ flexShrink: 1 }}
-          />
-        </View>
-      ) : null}
+      {/* Sticky footer — always visible; primary action adapts to the selection */}
+      <View
+        style={[
+          styles.stickyBar,
+          {
+            backgroundColor: tokens.cardBackground,
+            borderTopColor: tokens.divider,
+            paddingBottom: insets.bottom + spacing.md,
+          },
+        ]}
+      >
+        <Button
+          title={
+            modeCount > 0
+              ? t(mode === 'WATCHED' ? 'onboarding:continueWatched' : 'onboarding:continueSaved', {
+                  count: modeCount,
+                })
+              : t(mode === 'WATCHED' ? 'onboarding:skipWatched' : 'onboarding:skipWatchlist')
+          }
+          onPress={() => {
+            flush(); // next screen hydrates from AsyncStorage — persist first
+            onContinue(draft);
+          }}
+          style={{ flex: 1 }}
+        />
+      </View>
     </Screen>
   );
 }
 
+/** Poster-grid skeleton while suggestions/search load — no blank screens. */
+function PosterSkeleton({ cols, cellW, gap }: { cols: number; cellW: number; gap: number }) {
+  const { tokens } = useAppearance();
+  const rows = 4;
+  return (
+    <View style={{ paddingHorizontal: spacing.lg }}>
+      {Array.from({ length: rows }).map((_, r) => (
+        <View key={r} style={{ flexDirection: 'row' }}>
+          {Array.from({ length: cols }).map((_, c) => (
+            <View
+              key={c}
+              style={{
+                width: cellW,
+                height: Math.round(cellW * 1.5),
+                marginRight: gap,
+                marginBottom: gap,
+                borderRadius: radius.md,
+                backgroundColor: tokens.surfaceElevated,
+              }}
+            />
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  searchWrap: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
+  body: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xs },
+  searchWrap: { paddingHorizontal: spacing.lg, paddingTop: spacing.xs },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -330,14 +365,11 @@ const styles = StyleSheet.create({
   searchInput: { flex: 1, paddingVertical: spacing.sm },
   controls: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
-    flexWrap: 'wrap',
     gap: spacing.xs,
   },
-  modeHint: { paddingHorizontal: spacing.lg, paddingTop: spacing.xs },
+  sectionLabel: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.xs },
   stickyBar: {
     position: 'absolute',
     left: 0,

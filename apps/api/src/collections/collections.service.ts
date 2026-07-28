@@ -27,6 +27,9 @@ export class CollectionsService {
       this.redis.delByPattern(`watchnext:${userId}:*`),
       this.redis.delByPattern(`upcoming:${userId}:*`),
       this.redis.delByPattern(`showsprogress:${userId}:*`),
+      // Watchlist membership feeds the for-you exclusion set; favorites feed
+      // its affinity — both must recompute on change.
+      this.redis.delByPattern(`foryou:v1:${userId}:*`),
       this.redis.del(`watchnext:${userId}`),
       this.redis.del(`upcoming:${userId}`),
     ]);
@@ -131,11 +134,13 @@ export class CollectionsService {
       update: {},
     });
     this.events.emit('favorite.added', { userId, mediaId, mediaType: media.type });
+    await this.invalidateUserLibraryCaches(userId);
     return { favorite: true };
   }
 
   async removeFavorite(userId: string, mediaId: string) {
     await this.prisma.favorite.deleteMany({ where: { userId, mediaId } });
+    await this.invalidateUserLibraryCaches(userId);
     return { favorite: false };
   }
 

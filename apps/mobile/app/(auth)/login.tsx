@@ -46,7 +46,8 @@ export default function LoginScreen() {
         await setSelfHosted(true, serverUrl);
       }
       await loginEmail({ email, password });
-      router.replace('/(tabs)/shows');
+      // No explicit navigation: the Gate routes users with pending onboarding
+      // to the intro and everyone else to the tabs — one router, no race.
     } catch (e: any) {
       showError({ title: t('auth:loginFailed'), description: e.message ?? t('common:tryAgain') });
     } finally {

@@ -34,7 +34,7 @@
   "privacyPolicyRow": "Informativa sulla privacy",
   "termsOfUseRow": "Termini di utilizzo",
   "joinDiscord": "Unisciti al nostro Discord",
-  "quickSetup": "Configurazione rapida",
+  "quickSetup": "Configura la tua libreria",
   "contactSupport": "Contatta l'assistenza",
   "website": "Sito web",
   "iosTestFlight": "Partecipa a TestFlight iOS",
@@ -61,5 +61,6 @@
   },
   "poweredBy": "Offerto da",
   "metadataAttribution": "Metadati forniti da TMDB e TheTVDB.",
-  "tvdbSubscribe": "Valuta un abbonamento a TheTVDB"
+  "tvdbSubscribe": "Valuta un abbonamento a TheTVDB",
+  "quickSetupDesc": "Aggiungi titoli visti, aggiorna i progressi delle serie o crea la tua watchlist."
 }

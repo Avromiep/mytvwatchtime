@@ -18,6 +18,10 @@ export function useOnboardingDraft(userId: string | undefined) {
   const [draft, dispatch] = useReducer(draftReducer, undefined, emptyDraft);
   const [ready, setReady] = useState(false);
   const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const readyRef = useRef(ready);
+  readyRef.current = ready;
 
   // Load the persisted draft once per user.
   useEffect(() => {
@@ -55,10 +59,30 @@ export function useOnboardingDraft(userId: string | undefined) {
   }, [draft, userId, ready]);
 
   const act = useCallback((a: DraftAction) => dispatch(a), []);
+  /**
+   * Write the pending debounced state NOW. Screens push-navigate while staying
+   * mounted, and the next screen hydrates its own instance from AsyncStorage —
+   * without a flush, a change made <300ms before navigation is invisible to
+   * the next screen and gets overwritten by its first persist.
+   */
+  const flush = useCallback(
+    (next?: OnboardingDraft) => {
+      if (persistTimer.current) {
+        clearTimeout(persistTimer.current);
+        persistTimer.current = null;
+      }
+      if (userId && readyRef.current) {
+        AsyncStorage.setItem(keyFor(userId), JSON.stringify(next ?? draftRef.current)).catch(
+          () => undefined,
+        );
+      }
+    },
+    [userId],
+  );
   const clear = useCallback(() => {
     dispatch({ type: 'clear' });
     if (userId) AsyncStorage.removeItem(keyFor(userId)).catch(() => undefined);
   }, [userId]);
 
-  return { draft, ready, act, clear };
+  return { draft, ready, act, clear, flush };
 }

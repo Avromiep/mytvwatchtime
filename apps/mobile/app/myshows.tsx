@@ -23,6 +23,8 @@ interface FlatRow {
   section?: SectionKey;
   message?: string;
   cards?: StatusItem[];
+  /** First cards row of a section — gets breathing room under the header separator. */
+  underHeader?: boolean;
 }
 
 /** Hoisted so the memoized PosterCard sees a stable style reference. */
@@ -64,7 +66,7 @@ export default function MyShowsScreen() {
         } else {
           for (let i = 0; i < s.items.length; i += cols) {
             const slice = s.items.slice(i, i + cols);
-            rows.push({ type: 'cards', key: `r_${s.key}_${slice[0]?.id ?? i}_${i}`, cards: slice });
+            rows.push({ type: 'cards', key: `r_${s.key}_${slice[0]?.id ?? i}_${i}`, cards: slice, underHeader: i === 0 });
           }
         }
       }
@@ -115,7 +117,7 @@ export default function MyShowsScreen() {
     const cards = item.cards!;
     const fillCount = cols - cards.length;
     return (
-      <View style={styles.cardRow}>
+      <View style={[styles.cardRow, item.underHeader ? { marginTop: gap } : null]}>
         {cards.map((it) => (
           <View key={it.id} style={{ width: cellW, marginRight: gap, marginBottom: gap }}>
             <PosterCard id={it.id} kind="shows" title={it.title} poster={it.posterUrl} progress={it.progress} rating={it.rating} year={cardYear(it)} width={cellW} style={GRID_CARD_STYLE} />

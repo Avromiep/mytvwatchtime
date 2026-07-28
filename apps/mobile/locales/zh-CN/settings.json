@@ -34,7 +34,7 @@
   "privacyPolicyRow": "隐私政策",
   "termsOfUseRow": "使用条款",
   "joinDiscord": "加入我们的 Discord",
-  "quickSetup": "快速设置",
+  "quickSetup": "设置你的媒体库",
   "contactSupport": "联系客服",
   "website": "网站",
   "iosTestFlight": "加入 iOS TestFlight",
@@ -61,5 +61,6 @@
   },
   "poweredBy": "由以下提供支持",
   "metadataAttribution": "元数据由 TMDB 和 TheTVDB 提供。",
-  "tvdbSubscribe": "考虑订阅 TheTVDB"
+  "tvdbSubscribe": "考虑订阅 TheTVDB",
+  "quickSetupDesc": "添加已看过的影片、更新剧集进度或创建你的想看清单。"
 }

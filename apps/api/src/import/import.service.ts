@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, ListSource } from '@prisma/client';
@@ -6,6 +6,7 @@ import { COMMENT_SPOILER_THRESHOLD, MediaType } from '@tvwatch/shared';
 import { shadowEmail, shadowUsername } from './lib/shadow-user';
 import { DELETED_USER_EMAIL } from '../users/lib/deleted-user';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { SettingService } from '../common/setting.service';
 import { CommentImageProcessor } from '../comment-images/comment-image.processor';
 import { IMPORT_LIMITS } from './lib/limits';
@@ -62,6 +63,9 @@ export class ImportService {
     private readonly matcher: ImportMatcher,
     private readonly commentImages: CommentImageProcessor,
     private readonly hydration: HydrationQueue,
+    // Optional: spec factories construct the service positionally without it;
+    // the cache purge below is best-effort and must never fail an import.
+    @Optional() private readonly redis?: RedisService,
   ) {}
 
   // ---------------- upload ----------------
@@ -612,6 +616,20 @@ export class ImportService {
         data: { status: 'COMPLETED', completedAt: new Date(), progress: 100 },
       });
       await this.rebuildShowStatuses(userId, items);
+      // The import rewrote the user's whole library: bust the per-user
+      // watch-next/upcoming/progress caches AND the for-you ranking (same
+      // pattern set as TrackingService.invalidateUserCache), otherwise the
+      // pre-import (often empty) sections linger until the 5-min TTL.
+      if (this.redis) {
+        await Promise.all([
+          this.redis.delByPattern(`watchnext:${userId}:*`),
+          this.redis.delByPattern(`upcoming:${userId}:*`),
+          this.redis.delByPattern(`showsprogress:${userId}:*`),
+          this.redis.delByPattern(`foryou:v1:${userId}:*`),
+          this.redis.del(`watchnext:${userId}`),
+          this.redis.del(`upcoming:${userId}`),
+        ]).catch(() => undefined);
+      }
       this.events.emit('import.applied', { userId });
     } catch (e) {
       this.logger.error(`Apply failed for import ${importId}: ${(e as Error).message}`);

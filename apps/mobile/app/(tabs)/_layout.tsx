@@ -10,9 +10,14 @@ import { usePushNotifications } from '../../hooks/usePushNotifications';
 import { useWebPush } from '../../hooks/useWebPush';
 import { tokenStorage } from '../../api/storage';
 import { showDialog } from '../../lib/dialog';
+import { isOnboardingDone } from '../../lib/onboarding/draft';
 
 const DISCORD_URL = 'https://discord.gg/g9JBPUeqQV';
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+// One popup per app session, no matter how often the effect re-runs (user object
+// changes several times during boot/onboarding, and each run used to schedule its
+// own 3s timer — the "close it 3 times" bug).
+let discordPopupScheduled = false;
 
 export default function TabsLayout() {
   const { user } = useAuth();
@@ -31,18 +36,27 @@ export default function TabsLayout() {
 
   useEffect(() => {
     if (!user) return;
+    // Never compete with the quick-setup onboarding: a user who hasn't finished
+    // (or skipped) it should see onboarding first, not a Discord prompt.
+    if (!isOnboardingDone(user.onboardingStatus, user.onboardingVersion)) return;
+    if (discordPopupScheduled) return;
+    // Claim the slot synchronously — concurrent effect runs would both pass the
+    // async storage checks below before either scheduled its timer.
+    discordPopupScheduled = true;
 
     // Periodic Discord popup (the old first-time import popup was replaced by the
     // quick-setup onboarding flow).
     (async () => {
       const neverShow = await tokenStorage.getDiscordNeverShow();
-      if (neverShow) return;
       const lastShown = await tokenStorage.getDiscordLastShown();
       const now = Date.now();
-      if (lastShown && now - lastShown < THREE_DAYS_MS) return;
+      if (neverShow || (lastShown && now - lastShown < THREE_DAYS_MS)) {
+        discordPopupScheduled = false; // not due — a later eligible run may schedule
+        return;
+      }
 
       setTimeout(async () => {
-        await tokenStorage.setDiscordLastShown(now);
+        await tokenStorage.setDiscordLastShown(Date.now());
         showDialog({
           title: t('common:discordTitle'),
           description: t('common:discordDesc'),

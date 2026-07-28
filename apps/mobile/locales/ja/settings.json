@@ -33,7 +33,7 @@
   "iosTestFlight": "iOS TestFlightに参加",
   "githubReleases": "Androidをダウンロード",
   "joinDiscord": "Discordに参加",
-  "quickSetup": "クイックセットアップ",
+  "quickSetup": "ライブラリをセットアップ",
   "contactSupport": "サポートに連絡",
   "toast": {
     "saved": "保存しました",
@@ -47,5 +47,6 @@
   "deleteAccountDesc": "アカウントと個人データは完全に削除されます。コメントは「削除されたユーザー」として引き続き表示されます。",
   "poweredBy": "提供",
   "metadataAttribution": "メタデータは TMDB と TheTVDB から提供されています。",
-  "tvdbSubscribe": "TheTVDB のサブスクリプションをご検討ください"
+  "tvdbSubscribe": "TheTVDB のサブスクリプションをご検討ください",
+  "quickSetupDesc": "視聴済みの作品を追加したり、番組の進捗を更新したり、ウォッチリストを作成したりできます。"
 }

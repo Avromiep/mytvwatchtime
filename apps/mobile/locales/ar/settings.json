@@ -34,7 +34,7 @@
   "privacyPolicyRow": "سياسة الخصوصية",
   "termsOfUseRow": "شروط الاستخدام",
   "joinDiscord": "انضم إلى Discord الخاص بنا",
-  "quickSetup": "الإعداد السريع",
+  "quickSetup": "جهّز مكتبتك",
   "contactSupport": "تواصل مع الدعم",
   "website": "الموقع الإلكتروني",
   "iosTestFlight": "الانضمام إلى TestFlight على iOS",
@@ -61,5 +61,6 @@
   },
   "poweredBy": "مدعوم من",
   "metadataAttribution": "البيانات الوصفية مقدمة من TMDB وTheTVDB.",
-  "tvdbSubscribe": "فكّر في الاشتراك في TheTVDB"
+  "tvdbSubscribe": "فكّر في الاشتراك في TheTVDB",
+  "quickSetupDesc": "أضف العناوين التي شاهدتها، أو حدّث تقدمك في المسلسلات، أو أنشئ قائمة المشاهدة."
 }

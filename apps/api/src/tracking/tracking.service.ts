@@ -23,6 +23,9 @@ export class TrackingService {
       this.redis.delByPattern(`watchnext:${userId}:*`),
       this.redis.delByPattern(`upcoming:${userId}:*`),
       this.redis.delByPattern(`showsprogress:${userId}:*`),
+      // "Top shows for you" ranking (genres/keywords affinity from history) —
+      // recompute on every watch change.
+      this.redis.delByPattern(`foryou:v1:${userId}:*`),
       this.redis.del(`watchnext:${userId}`),
       this.redis.del(`upcoming:${userId}`),
     ]);

@@ -34,7 +34,7 @@
   "privacyPolicyRow": "개인정보 처리방침",
   "termsOfUseRow": "이용약관",
   "joinDiscord": "Discord 참여",
-  "quickSetup": "빠른 설정",
+  "quickSetup": "내 라이브러리 설정",
   "contactSupport": "지원팀 문의",
   "website": "웹사이트",
   "iosTestFlight": "iOS TestFlight 참여",
@@ -61,5 +61,6 @@
   },
   "poweredBy": "제공",
   "metadataAttribution": "메타데이터는 TMDB 및 TheTVDB에서 제공합니다.",
-  "tvdbSubscribe": "TheTVDB 구독을 고려해 보세요"
+  "tvdbSubscribe": "TheTVDB 구독을 고려해 보세요",
+  "quickSetupDesc": "시청한 작품을 추가하고, 프로그램 진행 상황을 업데이트하고, 시청 목록을 만들어 보세요."
 }

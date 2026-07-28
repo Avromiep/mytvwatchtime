@@ -176,6 +176,15 @@ describe('DiscoveryService hideAnimeInExplore', () => {
       .mockResolvedValueOnce([]); // excluded ids
   };
 
+  /** One rankable candidate so forYou produces a non-empty (cacheable) ranking. */
+  const CANDIDATE = {
+    id: 'cand-1',
+    rating: 8,
+    popularity: 10,
+    genres: [{ genre: { name: 'Drama' } }],
+    show: { keywords: [], yearStart: new Date().getFullYear() },
+  };
+
   it('resolveHideAnime reads the profile flag (false when absent/anonymous)', async () => {
     const { svc, prisma } = make({ hideAnimeInExplore: true });
     await expect((svc as any).resolveHideAnime('u1')).resolves.toBe(true);
@@ -214,6 +223,7 @@ describe('DiscoveryService hideAnimeInExplore', () => {
   it('forYou resolves the flag from the profile and scopes the cache key by it', async () => {
     const { svc, prisma, redis } = make({ hideAnimeInExplore: true });
     mockRankingQueries(prisma);
+    prisma.mediaItem.findMany.mockResolvedValue([CANDIDATE]);
     jest.spyOn(svc as any, 'fetchListDtos').mockResolvedValue([]);
     await svc.forYou('u1', 1, 10);
     const key = redis.set.mock.calls[0][0] as string;
@@ -225,11 +235,22 @@ describe('DiscoveryService hideAnimeInExplore', () => {
   it('forYou keeps the unfiltered cache key when the flag is off', async () => {
     const { svc, prisma, redis } = make({ hideAnimeInExplore: false });
     mockRankingQueries(prisma);
+    prisma.mediaItem.findMany.mockResolvedValue([CANDIDATE]);
     jest.spyOn(svc as any, 'fetchListDtos').mockResolvedValue([]);
     await svc.forYou('u1', 1, 10);
     const key = redis.set.mock.calls[0][0] as string;
     expect(key).toContain('foryou:v1:u1:');
     expect(key).not.toContain('noanime');
+  });
+
+  it('forYou does NOT cache an empty ranking (new-user first-open must not poison the section)', async () => {
+    const { svc, prisma, redis } = make(null);
+    // No taste signal at all: history/favorite genres both empty → ranking [].
+    prisma.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    jest.spyOn(svc as any, 'fetchListDtos').mockResolvedValue([]);
+    const res = await svc.forYou('u1', 1, 10);
+    expect(res.items).toEqual([]);
+    expect(redis.set).not.toHaveBeenCalled();
   });
 });
 
@@ -435,6 +456,16 @@ describe('DiscoveryService explore filters (DB paths)', () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
+    // One rankable candidate → non-empty ranking → the cache set happens.
+    prisma.mediaItem.findMany.mockResolvedValue([
+      {
+        id: 'cand-1',
+        rating: 8,
+        popularity: 10,
+        genres: [{ genre: { name: 'Drama' } }],
+        show: { keywords: [], yearStart: new Date().getFullYear() },
+      },
+    ]);
     await svc.forYou('u1', 1, 10, undefined, { excludeGenres: 'horror', country: 'JP' });
     const key = redis.set.mock.calls[0][0] as string;
     expect(key).toContain('foryou:v1:u1:');

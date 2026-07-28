@@ -9,7 +9,8 @@ export default function OnboardingLayout() {
       screenOptions={{ headerShown: false, contentStyle: { backgroundColor: tokens.background } }}
     >
       <Stack.Screen name="index" />
-      <Stack.Screen name="select" />
+      <Stack.Screen name="select-watched" />
+      <Stack.Screen name="select-watchlist" />
       <Stack.Screen name="progress" />
       <Stack.Screen name="review" />
       <Stack.Screen name="done" options={{ gestureEnabled: false }} />
