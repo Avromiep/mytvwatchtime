@@ -182,6 +182,9 @@ export default function MoviesScreen() {
         data={rows}
         keyExtractor={(item) => item.key}
         stickyHeaderIndices={stickyIndices}
+        // Android: clipped subviews make sticky headers vanish mid-scroll and come
+        // back without their touch target — keep them mounted.
+        removeClippedSubviews={false}
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 40 }}
         renderItem={renderItem}
         initialNumToRender={12}

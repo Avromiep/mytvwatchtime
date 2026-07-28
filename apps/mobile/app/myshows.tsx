@@ -42,7 +42,7 @@ export default function MyShowsScreen() {
 
   const containerW = width - 32; // spacing.lg * 2
   const gap = 8;
-  const cols = Math.max(2, Math.floor((containerW + gap) / (110 + gap)));
+  const cols = Math.max(3, Math.floor((containerW + gap) / (110 + gap))); // 3 per row, same as Movies tab
   const cellW = Math.floor((containerW - gap * (cols - 1)) / cols);
 
   const defs: { key: SectionKey; title: string; empty: string; items: StatusItem[] }[] = useMemo(
@@ -63,7 +63,8 @@ export default function MyShowsScreen() {
           rows.push({ type: 'empty', key: `e_${s.key}`, message: s.empty });
         } else {
           for (let i = 0; i < s.items.length; i += cols) {
-            rows.push({ type: 'cards', key: `r_${s.key}_${i}`, cards: s.items.slice(i, i + cols) });
+            const slice = s.items.slice(i, i + cols);
+            rows.push({ type: 'cards', key: `r_${s.key}_${slice[0]?.id ?? i}_${i}`, cards: slice });
           }
         }
       }
@@ -136,6 +137,9 @@ export default function MyShowsScreen() {
         data={rows}
         keyExtractor={(item) => item.key}
         stickyHeaderIndices={stickyIndices}
+        // Android: clipped subviews make sticky headers vanish mid-scroll and come
+        // back without their touch target — keep them mounted.
+        removeClippedSubviews={false}
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 40 }}
         renderItem={renderItem}
         initialNumToRender={12}

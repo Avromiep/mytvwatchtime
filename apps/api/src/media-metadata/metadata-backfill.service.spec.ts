@@ -36,6 +36,7 @@ function mockPrisma() {
   };
   p.$queryRaw.mockImplementation((parts: any) => {
     const sql = Array.isArray(parts) ? parts.join(' ') : String(parts ?? '');
+    if (sql.includes('hydrateNotFoundAt')) return Promise.resolve([]); // parked prefetch
     if (!sql.includes('metadataProvenance') && sql.includes('episode_external_ids')) {
       return Promise.resolve([{ c: BigInt(p.__staleRows) }]);
     }
@@ -80,6 +81,8 @@ describe('MetadataBackfillService — backfill anime routing (isAnimeMedia)', ()
         count: jest.fn(async () => 0),
       },
       episode: { count: jest.fn(async () => 0) },
+      $queryRaw: jest.fn(async () => []), // parked prefetch
+      $executeRaw: jest.fn(async () => 0),
     };
     const service = new MetadataBackfillService(
       prisma,
@@ -713,6 +716,30 @@ describe('MetadataBackfillService', () => {
       expect(meta.ensureShowFull).toHaveBeenCalledWith(11);
       expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
     });
+
+    it('parks stubs whose provider id is dead (404) and excludes parked rows from candidates', async () => {
+      prisma.mediaItem.findMany.mockResolvedValue([
+        {
+          id: 'm9',
+          title: 'House',
+          type: 'SHOW',
+          externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }],
+          genres: [],
+        },
+      ]);
+      prisma.__setStaleRows(0);
+      meta.ensureShowFull.mockRejectedValueOnce(new ProviderError('not_found', 'tmdb 404', 404));
+      const res = await service.backfillBatch(10);
+      expect(res).toMatchObject({ succeeded: 0, failed: 0, parked: 1 });
+      expect(prisma.$executeRaw).toHaveBeenCalled();
+      // Candidate selection excludes rows parked in the last 90 days.
+      const where = prisma.mediaItem.findMany.mock.calls[0][0].where;
+      expect(where).toHaveProperty('id.notIn');
+      const prefetchSql = (prisma.$queryRaw as jest.Mock).mock.calls
+        .map((c) => (Array.isArray(c[0]) ? c[0].join(' ') : String(c[0] ?? '')))
+        .find((s) => s.includes('hydrateNotFoundAt'));
+      expect(prefetchSql).toBeTruthy();
+    });
   });
 
   describe('syncTmdbChanges', () => {
@@ -795,6 +822,19 @@ describe('MetadataBackfillService', () => {
       const res = await service.backfillCharacterIds();
       expect(meta.ensureShowFullTvdb).toHaveBeenCalledTimes(1);
       expect(res.rateLimited).toBe(1);
+    });
+
+    it('parks shows whose TVDB series id is dead (404) for 90 days', async () => {
+      prisma.$queryRaw.mockResolvedValue([
+        { id: 'm1', title: 'The Office', tvdb_id: '73255' },
+        { id: 'm2', title: 'Broadchurch', tvdb_id: '73996' },
+      ]);
+      meta.ensureShowFullTvdb.mockRejectedValueOnce(
+        new ProviderError('not_found', 'tvdb 404', 404),
+      );
+      const res = await service.backfillCharacterIds();
+      expect(res).toMatchObject({ succeeded: 1, failed: 0, rateLimited: 0, parked: 1 });
+      expect(prisma.$executeRaw).toHaveBeenCalled();
     });
 
     it('does nothing when TVDB is not configured', async () => {
@@ -943,6 +983,7 @@ describe('MetadataBackfillService — recommendations backfill', () => {
         update: jest.fn(async () => ({})),
       },
       $queryRaw: jest.fn(async () => opts.candidates ?? []),
+      $executeRaw: jest.fn(async () => 0),
     };
     const redis: any = { get: jest.fn(async () => null) };
     const tmdbProvider: any = {
@@ -1003,7 +1044,13 @@ describe('MetadataBackfillService — recommendations backfill', () => {
       where: { id: 'm1' },
       data: { recommendations: recs, recommendationsSyncedAt: expect.any(Date) },
     });
-    expect(res).toEqual({ processed: 1, succeeded: 1, failed: 0, sample: ['The Office'] });
+    expect(res).toEqual({
+      processed: 1,
+      succeeded: 1,
+      failed: 0,
+      parked: 0,
+      sample: ['The Office'],
+    });
   });
 
   it('movies use the movie endpoint; empty provider results still stamp the row', async () => {
@@ -1043,6 +1090,48 @@ describe('MetadataBackfillService — recommendations backfill', () => {
     const res = await service.repairRecommendations(100);
     expect(res.processed).toBe(0);
     expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('parks dead TMDB ids (404 / cached 404) for 90 days instead of failing every run', async () => {
+    const { service, prisma, tmdbProvider } = make({
+      candidates: [candidate()],
+      providerImpl: async () => {
+        throw new ProviderError('not_found', 'tmdb cached 404', 404);
+      },
+    });
+
+    const res = await service.repairRecommendations(100);
+
+    expect(res).toMatchObject({ processed: 1, succeeded: 0, failed: 0, parked: 1 });
+    // Parked via a provenance stamp — no recommendations snapshot write.
+    expect(prisma.mediaItem.update).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).toHaveBeenCalled();
+    const [parts, key] = (prisma.$executeRaw as jest.Mock).mock.calls[0];
+    expect(parts.join(' ')).toContain('metadata_provenance');
+    expect(key).toBe('recsCheckedAt');
+  });
+
+  it('candidate SQL excludes rows parked in the last 90 days', async () => {
+    const { service, prisma } = make({ candidates: [] });
+    await service.repairRecommendations(100);
+    const [parts] = (prisma.$queryRaw as jest.Mock).mock.calls[0];
+    const sql = parts.join(' ');
+    expect(sql).toContain('recsCheckedAt');
+    expect(sql).toContain("INTERVAL '90 days'");
+  });
+
+  it('non-404 errors still fail without parking', async () => {
+    const { service, prisma } = make({
+      candidates: [candidate()],
+      providerImpl: async () => {
+        throw new ProviderError('upstream', 'tmdb 500', 500);
+      },
+    });
+
+    const res = await service.repairRecommendations(100);
+
+    expect(res).toMatchObject({ processed: 1, succeeded: 0, failed: 1, parked: 0 });
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
 });
 

@@ -166,6 +166,7 @@ export function PosterImage({
       contentFit="cover"
       transition={transition}
       cachePolicy="memory-disk"
+      recyclingKey={uri ?? 'fallback'}
     />
   );
 }

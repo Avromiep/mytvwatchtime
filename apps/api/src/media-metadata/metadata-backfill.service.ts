@@ -333,7 +333,8 @@ export class MetadataBackfillService {
                 (SELECT count(*) FROM media_cast mc WHERE mc.media_id = m.id) = 20
                 AND m.metadata_provenance->>'castWidenedAt' IS NULL
               )
-            )`,
+            )
+            AND COALESCE(m.metadata_provenance->>'charIdsCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'`,
       // User-data type mismatch: movie statuses/history written onto SHOW rows (never
       // legitimate — purged by the type-mismatch repair).
       this.prisma.$queryRaw<{ c: bigint }[]>`
@@ -389,7 +390,8 @@ export class MetadataBackfillService {
                  OR p.value LIKE 'http://artworks.thetvdb.com/banners/http://artworks.thetvdb.com/banners/%'
             )
           )
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB')`,
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB')
+          AND COALESCE(m.metadata_provenance->>'bannerCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'`,
       // Actionable rating backlog: no rating stored, has a provider id to resolve
       // one from, and not already checked (and found unrated at the source) in the
       // last 90 days. Mostly TVDB-hydrated rows — TVDB has no public 0–10 rating,
@@ -406,11 +408,13 @@ export class MetadataBackfillService {
         SELECT count(*)::bigint AS c FROM media_items m
         WHERE COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '1970-01-01')::timestamptz >= NOW() - INTERVAL '30 days'`,
       // TMDB-linked rows whose recommendations snapshot was never synced (null stamp).
-      // Filled by the recommendations backfill (one light /recommendations call per row).
+      // Filled by the recommendations backfill (one light /recommendations call per
+      // row); rows with a dead TMDB id are parked (recsCheckedAt) for 90 days.
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
         WHERE m.recommendations_synced_at IS NULL
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB')`,
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB')
+          AND COALESCE(m.metadata_provenance->>'recsCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'`,
       // TMDB-linked MOVIE rows with no production country (powers the explore country
       // filter). Filled by the movie-countries backfill; 90-day recheck like ratings.
       this.prisma.$queryRaw<{ c: bigint }[]>`
@@ -468,10 +472,10 @@ export class MetadataBackfillService {
   async backfillBatch(
     count?: number,
     maxRps?: number,
-  ): Promise<{ processed: number; succeeded: number; failed: number; sample: string[] }> {
+  ): Promise<{ processed: number; succeeded: number; failed: number; parked: number; sample: string[] }> {
     if (this.backfillRunning) {
       this.logger.log('Backfill already running — skipping');
-      return { processed: 0, succeeded: 0, failed: 0, sample: [] };
+      return { processed: 0, succeeded: 0, failed: 0, parked: 0, sample: [] };
     }
     this.backfillRunning = true;
     const limit = Math.max(1, Math.min(count ?? this.defaultBatchSize, 100000));
@@ -481,8 +485,16 @@ export class MetadataBackfillService {
         `Backfill throttled to ~${maxRps} items/min (${delayMs}ms delay between items)`,
       );
     try {
+      // Rows whose only external ids are dead (provider 404 on hydration) are parked
+      // in metadata_provenance.hydrateNotFoundAt for 90 days — exclude them here so
+      // they neither re-fail every run nor consume the batch limit.
+      const parkedRows = await this.prisma.$queryRaw<{ id: string }[]>`
+        SELECT id FROM media_items
+        WHERE metadata_provenance->>'hydrateNotFoundAt' >= ${new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString()}`;
+      const parkedIds = parkedRows.map((p) => p.id);
       const candidates = await this.prisma.mediaItem.findMany({
         where: {
+          id: { notIn: parkedIds },
           OR: [
             { metadataRefreshedAt: null }, // never hydrated (stub)
             { type: 'SHOW', show: { seasons: { none: {} } } }, // show with zero seasons
@@ -501,6 +513,7 @@ export class MetadataBackfillService {
 
       let succeeded = 0;
       let failed = 0;
+      let parked = 0;
       const sample: string[] = [];
       for (let i = 0; i < candidates.length; i++) {
         const m = candidates[i];
@@ -515,6 +528,13 @@ export class MetadataBackfillService {
           succeeded++;
           if (sample.length < 5) sample.push(m.title);
         } catch (e) {
+          if (this.isNotFoundError(e)) {
+            // Dead/wrong provider id — this stub can never hydrate. Park 90 days.
+            await this.stampRepairChecked(m.id, 'hydrateNotFoundAt');
+            parked++;
+            this.logger.debug(`backfill parked ${m.title}: ${(e as Error).message}`);
+            continue;
+          }
           failed++;
           this.logger.debug(`backfill failed for ${m.title}: ${(e as Error).message}`);
         }
@@ -530,9 +550,9 @@ export class MetadataBackfillService {
         }
       }
       this.logger.log(
-        `Metadata backfill batch: ${succeeded}/${candidates.length} succeeded, ${failed} failed`,
+        `Metadata backfill batch: ${succeeded}/${candidates.length} succeeded, ${failed} failed, ${parked} parked (404)`,
       );
-      return { processed: candidates.length, succeeded, failed, sample };
+      return { processed: candidates.length, succeeded, failed, parked, sample };
     } finally {
       this.backfillRunning = false;
     }
@@ -1903,9 +1923,17 @@ export class MetadataBackfillService {
     succeeded: number;
     failed: number;
     rateLimited: number;
+    parked: number;
     sample: string[];
   }> {
-    const empty = { processed: 0, succeeded: 0, failed: 0, rateLimited: 0, sample: [] as string[] };
+    const empty = {
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      rateLimited: 0,
+      parked: 0,
+      sample: [] as string[],
+    };
     if (this.charIdFixRunning) {
       this.logger.log('Character-id backfill already running — skipping');
       return empty;
@@ -1946,6 +1974,7 @@ export class MetadataBackfillService {
           )
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB'
                         AND e.provider_entity_kind = 'SERIES')
+          AND COALESCE(m.metadata_provenance->>'charIdsCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'
         ORDER BY m.popularity DESC
         LIMIT ${Math.max(1, Math.min(limit ?? 500, 100000))}
       `;
@@ -1955,6 +1984,7 @@ export class MetadataBackfillService {
       let succeeded = 0;
       let failed = 0;
       let rateLimited = 0;
+      let parked = 0;
       const sample: string[] = [];
       for (let i = 0; i < candidates.length; i++) {
         const m = candidates[i];
@@ -1994,6 +2024,15 @@ export class MetadataBackfillService {
             );
             break;
           }
+          if (this.isNotFoundError(e)) {
+            // Dead TVDB series id — the rehydration can never succeed. Park 90 days.
+            await this.stampRepairChecked(m.id, 'charIdsCheckedAt');
+            parked++;
+            this.logger.debug(
+              `character-id backfill parked ${m.title}: ${(e as Error).message}`,
+            );
+            continue;
+          }
           failed++;
           this.logger.debug(`character-id backfill failed for ${m.title}: ${(e as Error).message}`);
         }
@@ -2011,9 +2050,9 @@ export class MetadataBackfillService {
         finishedAt: new Date(),
       });
       this.logger.log(
-        `Character-id backfill: ${succeeded}/${candidates.length} rehydrated, ${failed} failed, ${rateLimited} rate-limited`,
+        `Character-id backfill: ${succeeded}/${candidates.length} rehydrated, ${failed} failed, ${rateLimited} rate-limited, ${parked} parked (404)`,
       );
-      return { processed: candidates.length, succeeded, failed, rateLimited, sample };
+      return { processed: candidates.length, succeeded, failed, rateLimited, parked, sample };
     } finally {
       this.charIdFixRunning = false;
     }
@@ -2028,6 +2067,20 @@ export class MetadataBackfillService {
       SET metadata_provenance = jsonb_set(
             COALESCE(metadata_provenance, '{}'::jsonb),
             '{ratingCheckedAt}', to_jsonb(NOW()::text))
+      WHERE id = ${mediaId}`;
+  }
+
+  /**
+   * Park a per-item repair failure: remember the definitive provider 404 so the
+   * job's candidate SQL skips the row for 90 days instead of re-hitting a dead
+   * external id on every cron run (ISO strings compare correctly lexicographically
+   * and cast cleanly to timestamptz). Mirrors the ratingCheckedAt convention.
+   */
+  private async stampRepairChecked(mediaId: string, key: string): Promise<void> {
+    await this.prisma.$executeRaw`
+      UPDATE media_items
+      SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
+            || jsonb_build_object(${key}::text, ${new Date().toISOString()}::text)
       WHERE id = ${mediaId}`;
   }
 
@@ -3095,9 +3148,10 @@ export class MetadataBackfillService {
     processed: number;
     succeeded: number;
     failed: number;
+    parked: number;
     sample: string[];
   }> {
-    const empty = { processed: 0, succeeded: 0, failed: 0, sample: [] as string[] };
+    const empty = { processed: 0, succeeded: 0, failed: 0, parked: 0, sample: [] as string[] };
     if (this.bannerFixRunning) {
       this.logger.log('Banner-poster repair already running — skipping');
       return empty;
@@ -3140,12 +3194,14 @@ export class MetadataBackfillService {
             )
           )
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB')
+          AND COALESCE(m.metadata_provenance->>'bannerCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'
         ORDER BY m.popularity DESC, m.id
         LIMIT ${take}`;
       this.trackRepair('banner-posters', { total: candidates.length });
 
       let succeeded = 0;
       let failed = 0;
+      let parked = 0;
       const sample: string[] = [];
       for (let i = 0; i < candidates.length; i++) {
         const m = candidates[i];
@@ -3193,6 +3249,15 @@ export class MetadataBackfillService {
             );
             break;
           }
+          if (this.isNotFoundError(e)) {
+            // Dead TVDB id — the rehydration can never fix this row. Park 90 days.
+            await this.stampRepairChecked(m.id, 'bannerCheckedAt');
+            parked++;
+            this.logger.debug(
+              `Banner-poster repair parked "${m.title}" (${m.id}): ${(e as Error).message}`,
+            );
+            continue;
+          }
           failed++;
           if (failed <= 10)
             this.logger.warn(
@@ -3206,15 +3271,15 @@ export class MetadataBackfillService {
       }
       this.trackRepair('banner-posters', {
         running: false,
-        processed: succeeded + failed,
+        processed: succeeded + failed + parked,
         succeeded,
         failed,
         finishedAt: new Date(),
       });
       this.logger.log(
-        `Banner-poster repair: ${succeeded}/${candidates.length} re-hydrated from TVDB with corrected artworks, ${failed} failed`,
+        `Banner-poster repair: ${succeeded}/${candidates.length} re-hydrated from TVDB with corrected artworks, ${failed} failed, ${parked} parked (404)`,
       );
-      return { processed: succeeded + failed, succeeded, failed, sample };
+      return { processed: succeeded + failed + parked, succeeded, failed, parked, sample };
     } finally {
       this.bannerFixRunning = false;
     }
@@ -3224,15 +3289,18 @@ export class MetadataBackfillService {
    * Sync the TMDB /recommendations snapshot for rows that never got one
    * (recommendations_synced_at IS NULL). One LIGHT call per row (no appends, no
    * rehydration) + a direct write of recommendations + the stamp. Most-popular first;
-   * stops early on TMDB rate limits. User data untouched.
+   * stops early on TMDB rate limits. Rows whose TMDB id is dead (404 / cached 404)
+   * are parked in metadata_provenance.recsCheckedAt for 90 days so the nightly job
+   * drains instead of re-hitting them forever. User data untouched.
    */
   async repairRecommendations(limit?: number): Promise<{
     processed: number;
     succeeded: number;
     failed: number;
+    parked: number;
     sample: string[];
   }> {
-    const empty = { processed: 0, succeeded: 0, failed: 0, sample: [] as string[] };
+    const empty = { processed: 0, succeeded: 0, failed: 0, parked: 0, sample: [] as string[] };
     if (!this.tmdbProvider.enabled) {
       this.logger.warn('TMDB not configured — skipping recommendations backfill');
       return empty;
@@ -3262,12 +3330,14 @@ export class MetadataBackfillService {
         FROM media_items m
         WHERE m.recommendations_synced_at IS NULL
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB')
+          AND COALESCE(m.metadata_provenance->>'recsCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'
         ORDER BY m.popularity DESC, m.id
         LIMIT ${take}`;
       this.trackRepair('recommendations', { total: candidates.length });
 
       let succeeded = 0;
       let failed = 0;
+      let parked = 0;
       const sample: string[] = [];
       for (let i = 0; i < candidates.length; i++) {
         const m = candidates[i];
@@ -3297,6 +3367,16 @@ export class MetadataBackfillService {
             );
             break;
           }
+          if (this.isNotFoundError(e)) {
+            // Dead/wrong TMDB id (real or negative-cached 404): retrying every run
+            // only churns the batch — park for 90 days, like the rating backfill.
+            await this.stampRepairChecked(m.id, 'recsCheckedAt');
+            parked++;
+            this.logger.debug(
+              `Recommendations backfill parked "${m.title}" (${m.id}): ${(e as Error).message}`,
+            );
+            continue;
+          }
           failed++;
           if (failed <= 10)
             this.logger.warn(
@@ -3310,15 +3390,15 @@ export class MetadataBackfillService {
       }
       this.trackRepair('recommendations', {
         running: false,
-        processed: succeeded + failed,
+        processed: succeeded + failed + parked,
         succeeded,
         failed,
         finishedAt: new Date(),
       });
       this.logger.log(
-        `Recommendations backfill: ${succeeded}/${candidates.length} synced from TMDB, ${failed} failed`,
+        `Recommendations backfill: ${succeeded}/${candidates.length} synced from TMDB, ${failed} failed, ${parked} parked (404)`,
       );
-      return { processed: succeeded + failed, succeeded, failed, sample };
+      return { processed: succeeded + failed + parked, succeeded, failed, parked, sample };
     } finally {
       this.recommendationsFixRunning = false;
     }
@@ -3331,9 +3411,10 @@ export class MetadataBackfillService {
     processed: number;
     succeeded: number;
     failed: number;
+    parked: number;
     sample: string[];
   }> {
-    const empty = { processed: 0, succeeded: 0, failed: 0, sample: [] as string[] };
+    const empty = { processed: 0, succeeded: 0, failed: 0, parked: 0, sample: [] as string[] };
     if (!this.tmdbProvider.enabled) {
       this.logger.warn('TMDB not configured — skipping movie country backfill');
       return empty;
@@ -3370,6 +3451,7 @@ export class MetadataBackfillService {
 
       let succeeded = 0;
       let failed = 0;
+      let parked = 0;
       const sample: string[] = [];
       for (let i = 0; i < candidates.length; i++) {
         const m = candidates[i];
@@ -3388,17 +3470,19 @@ export class MetadataBackfillService {
           }
           // Stamp every processed row (found or not — TMDB has no country for it) so the
           // stat drains and rows are re-checked only after 90 days, like the rating backfill.
-          await this.prisma.$executeRaw`
-            UPDATE media_items
-            SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
-                  || jsonb_build_object('countryCheckedAt', ${new Date().toISOString()}::text)
-            WHERE id = ${m.id}`;
+          await this.stampRepairChecked(m.id, 'countryCheckedAt');
         } catch (e) {
           if (this.isRateLimitError(e)) {
             this.logger.warn(
               `Movie country backfill: TMDB rate limit at ${i + 1}/${candidates.length} — stopping early`,
             );
             break;
+          }
+          if (this.isNotFoundError(e)) {
+            // Dead/wrong TMDB movie id — park for 90 days like the rows above.
+            await this.stampRepairChecked(m.id, 'countryCheckedAt');
+            parked++;
+            continue;
           }
           failed++;
           if (failed <= 10)
@@ -3409,15 +3493,15 @@ export class MetadataBackfillService {
       }
       this.trackRepair('movie-countries', {
         running: false,
-        processed: succeeded + failed,
+        processed: succeeded + failed + parked,
         succeeded,
         failed,
         finishedAt: new Date(),
       });
       this.logger.log(
-        `Movie country backfill: ${succeeded}/${candidates.length} resolved from TMDB, ${failed} failed`,
+        `Movie country backfill: ${succeeded}/${candidates.length} resolved from TMDB, ${failed} failed, ${parked} parked (404)`,
       );
-      return { processed: succeeded + failed, succeeded, failed, sample };
+      return { processed: succeeded + failed + parked, succeeded, failed, parked, sample };
     } finally {
       this.movieCountriesFixRunning = false;
     }
