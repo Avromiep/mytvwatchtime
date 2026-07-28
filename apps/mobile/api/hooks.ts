@@ -48,6 +48,10 @@ import type {
   WatchNextResponseDto,
   ExternalReviewDto,
   FeedPageDto,
+  OnboardingApplyDto,
+  OnboardingApplyResultDto,
+  OnboardingStateDto,
+  UpdateOnboardingStateDto,
   ProviderAlertDto,
   ProviderOfferType,
   WatchProviderCatalogEntryDto,
@@ -1497,6 +1501,40 @@ export const useFeatureFlags = () =>
     queryFn: () => api.get<Record<string, boolean>>('/feature-flags'),
     staleTime: 5 * 60 * 1000, // 5 min cache
   });
+
+// ---------------- Quick-setup onboarding ----------------
+export const useUpdateOnboardingState = () =>
+  useMutation({
+    mutationFn: (dto: UpdateOnboardingStateDto) =>
+      api.patch<OnboardingStateDto>('/me/onboarding', dto as any),
+  });
+
+/**
+ * Bulk-apply quick-setup selections (one request for the whole draft). The server
+ * marks onboarding COMPLETED on success, so callers should refreshUser() and clear
+ * the local draft. Replay-safe: re-applying the same payload is a no-op server-side.
+ */
+export const useApplyOnboarding = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (dto: OnboardingApplyDto) =>
+      api.post<OnboardingApplyResultDto>('/me/onboarding/apply', dto as any),
+    onSuccess: () => {
+      // Stats screens rely on the server stale-flag + polling (same convention as
+      // single-entity marks) — no stats invalidation here.
+      qc.invalidateQueries({ queryKey: qk.watchNext });
+      qc.invalidateQueries({ queryKey: qk.upcoming });
+      qc.invalidateQueries({ queryKey: ['show'] });
+      qc.invalidateQueries({ queryKey: ['showEpisodes'] });
+      qc.invalidateQueries({ queryKey: ['movie'] });
+      qc.invalidateQueries({ queryKey: ['watchlist'] });
+      qc.invalidateQueries({ queryKey: ['history'] });
+      qc.invalidateQueries({ queryKey: qk.me });
+      qc.invalidateQueries({ queryKey: qk.feed });
+      refreshWidgets();
+    },
+  });
+};
 
 // ---------------- Announcements ----------------
 export const useActiveAnnouncement = () =>

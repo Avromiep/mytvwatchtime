@@ -16,8 +16,9 @@ import lists from './lists.json';
 import social from './social.json';
 import groups from './groups.json';
 import feed from './feed.json';
+import onboarding from './onboarding.json';
 export default {
   common, auth, navigation, settings, shows, movies, explore,
   profile, notifications, import: importNs, stats, showDetail, episode,
-  comments, lists, social, groups, feed,
+  comments, lists, social, groups, feed, onboarding,
 };

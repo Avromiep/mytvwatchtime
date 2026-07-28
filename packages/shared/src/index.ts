@@ -16,3 +16,4 @@ export * from './format';
 export * from './vote-math';
 export * from './metadata-merge';
 export * from './announcements';
+export * from './onboarding';

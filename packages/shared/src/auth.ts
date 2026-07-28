@@ -104,6 +104,8 @@ export interface CurrentUserDto extends PublicUserDto {
   isPrivate: boolean;
   hideAnimeInExplore: boolean;
   mustChangePassword?: boolean;
+  onboardingStatus?: import('./onboarding').OnboardingStatus;
+  onboardingVersion?: number | null;
   role?: string;
   themePreference?: ThemePreference;
   languagePreference?: LanguagePreference;

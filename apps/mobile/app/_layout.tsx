@@ -16,6 +16,7 @@ import { DialogProvider } from '../components/DialogProvider';
 import { ToastHost } from '../components/ToastHost';
 import { useNotificationNavigation } from '../hooks/useNotificationNavigation';
 import { initAnalytics } from '../lib/analytics';
+import { isOnboardingDone } from '../lib/onboarding/draft';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync();
@@ -37,6 +38,14 @@ function Gate() {
   const segmentsRef = useRef(segments);
   segmentsRef.current = segments;
   const needsPasswordChange = !!user?.mustChangePassword;
+  // Server onboarding fields ride on /me; the stored user doubles as the local
+  // cache so cold starts don't flicker (hybrid server + device state). Users cached
+  // by an older app version lack the fields — treat them as done until /me refreshes
+  // rather than flashing onboarding at long-time users.
+  const onboardingDone =
+    user?.onboardingStatus === undefined
+      ? true
+      : isOnboardingDone(user?.onboardingStatus, user?.onboardingVersion);
 
   // Navigate on push-notification tap (whitelisted action or legacy deep link).
   useNotificationNavigation();
@@ -57,10 +66,15 @@ function Gate() {
       router.replace('/(auth)/login');
     } else if (user && needsPasswordChange && segs[1] !== 'change-password') {
       router.replace('/(auth)/change-password');
-    } else if (user && !needsPasswordChange && inAuthGroup) {
+    } else if (user && !needsPasswordChange && !onboardingDone && (segs[0] as string) !== 'onboarding') {
+      // Quick-setup onboarding: exactly once per user/version, right after auth.
+      router.replace('/onboarding' as any);
+    } else if (user && !needsPasswordChange && onboardingDone && inAuthGroup) {
       router.replace('/(tabs)/shows');
     }
-  }, [user, loading]);
+    // Note: onboarding routes are never redirected AWAY from — completed/skipped
+    // users may deliberately reopen Quick setup from Settings.
+  }, [user, loading, onboardingDone]);
 
   useEffect(() => {
     if (!loading && Platform.OS !== 'web') SplashScreen.hideAsync();
@@ -76,6 +90,7 @@ function Gate() {
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: tokens.background } }}>
       <Stack.Screen name="(auth)" />
       <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="onboarding" />
       <Stack.Screen name="show/[id]" options={{ presentation: 'modal' }} />
       <Stack.Screen name="movie/[id]" options={{ presentation: 'modal' }} />
       <Stack.Screen name="episode/[id]" options={{ presentation: 'modal' }} />

@@ -247,6 +247,10 @@ export default function SettingsScreen() {
               }} style={{ marginTop: spacing.sm }} />
             </View>
           ) : null}
+          <Row icon="flash-outline" label={t('settings:quickSetup')} onPress={() => {
+            logEvent('onboarding_reopened');
+            router.push('/onboarding/select' as any);
+          }} />
           <Row icon="chatbubbles-outline" label={t('settings:contactSupport')} onPress={() => router.push('/contact' as any)} />
           <Row icon="shield-checkmark-outline" label={t('settings:privacyPolicyRow')} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/privacy`)} />
           <Row icon="document-text-outline" label={t('settings:termsOfUseRow')} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/terms`)} />

@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Redirect, Tabs, router } from 'expo-router';
+import { Redirect, Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as WebBrowser from 'expo-web-browser';
@@ -32,28 +32,8 @@ export default function TabsLayout() {
   useEffect(() => {
     if (!user) return;
 
-    // 1. First-time import popup
-    (async () => {
-      const shown = await tokenStorage.getImportPopupShown();
-      if (!shown) {
-        await tokenStorage.setImportPopupShown();
-        await tokenStorage.setDiscordLastShown(Date.now());
-        showDialog({
-          title: t('common:welcomeTitle'),
-          description: t('common:welcomeDesc'),
-          buttons: [
-            { label: t('common:maybeLater'), variant: 'secondary' },
-            {
-              label: t('common:goToImport'),
-              variant: 'primary',
-              onPress: () => router.push('/import'),
-            },
-          ],
-        });
-      }
-    })();
-
-    // 2. Periodic Discord popup
+    // Periodic Discord popup (the old first-time import popup was replaced by the
+    // quick-setup onboarding flow).
     (async () => {
       const neverShow = await tokenStorage.getDiscordNeverShow();
       if (neverShow) return;

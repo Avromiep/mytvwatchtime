@@ -310,6 +310,8 @@ export function mapCurrentUser(user: AnyRecord): CurrentUserDto {
     hideAnimeInExplore: user.profile?.hideAnimeInExplore ?? false,
     role: user.role,
     mustChangePassword: user.mustChangePassword ?? false,
+    onboardingStatus: user.onboardingStatus ?? 'NOT_STARTED',
+    onboardingVersion: user.onboardingVersion ?? null,
     themePreference: dbThemeToDto(user.profile?.themePreference),
     languagePreference: dbLangToDto(user.profile?.languagePreference),
   };

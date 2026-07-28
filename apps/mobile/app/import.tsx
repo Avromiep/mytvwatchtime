@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useRouter, useNavigation } from 'expo-router';
+import { useRouter, useNavigation, useLocalSearchParams } from 'expo-router';
 import {
   ActivityIndicator,
   FlatList,
@@ -47,6 +47,10 @@ export default function ImportScreen() {
   const { t } = useTranslation(['import', 'common']);
   const router = useRouter();
   const qc = useQueryClient();
+  // Opened from quick-setup onboarding (/import?returnTo=onboarding): after a
+  // completed import, return to the onboarding completion screen instead of
+  // dropping back onto the upload form.
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
   const [importId, setImportId] = useState<string | null>(null);
   const [activeItem, setActiveItem] = useState<any | null>(null);
   const upload = useUploadImport();
@@ -303,6 +307,9 @@ export default function ImportScreen() {
               onPress={() => {
                 qc.invalidateQueries();
                 setImportId(null);
+                if (returnTo === 'onboarding') {
+                  router.replace('/onboarding/done?source=import' as any);
+                }
               }}
               style={{ marginTop: spacing.md }}
             />

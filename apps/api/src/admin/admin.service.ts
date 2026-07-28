@@ -771,6 +771,7 @@ export class AdminService {
       { key: 'imports_enabled', value: true },
       { key: 'push_notifications', value: true },
       { key: 'recommendations', value: true },
+      { key: 'onboarding_enabled', value: true },
     ];
     for (const d of defaults) {
       if (!flags.find((f) => f.key === d.key)) {
