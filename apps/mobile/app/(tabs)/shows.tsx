@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Platform, RefreshControl, StyleSheet, View } from 'react-native';
+import { FlatList, Platform, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { Header, IconButton } from '../../components/Header';
 import { EpisodeCard, UpcomingCard } from '../../components/cards';
-import { Chip, EmptyState, Screen, SectionHeader, Spinner } from '../../components/primitives';
+import { Chip, EmptyState, Screen, SectionHeader, Spinner, T } from '../../components/primitives';
 import { InfoBanner } from '../../components/InfoBanner';
 import {
   useMarkEpisodeWatched,
@@ -13,6 +14,7 @@ import {
   useUpcoming,
   useUpcomingPast,
   useWatchNext,
+  useWatchNextBucket,
   useWatchNextHistory,
   useActiveAnnouncement,
   useUnreadNotificationCount,
@@ -56,11 +58,13 @@ const VALID_ICONS = new Set([
 const CARD_H = 122; // EpisodeCard: header 20 + gap xs + still 74 + padding sm×2 + marginBottom sm
 const UPCOMING_H = 108; // UpcomingCard: poster 84 + padding sm×2 + marginBottom sm
 const HEADER_H = 44; // SectionHeader (h1 18px + paddingVertical sm×2, bottom-aligned)
+const MORE_H = 44; // "See more" section-footer button (caption row + marginBottom sm)
 
 type WatchRow =
   | { type: 'spacer'; key: string; h: number }
   | { type: 'header'; key: string; bucket: string; h: number }
-  | { type: 'card'; key: string; item: any; h: number };
+  | { type: 'card'; key: string; item: any; h: number }
+  | { type: 'more'; key: string; bucket: 'START_WATCHING' | 'NOT_RECENTLY'; h: number };
 
 type UpcomingRow =
   | { type: 'spacer'; key: string; h: number }
@@ -154,12 +158,17 @@ function WatchList() {
     setRefreshing(true);
     // Reset fetched older-history pages — their cursors chain from the pre-refresh slice.
     queryClient.removeQueries({ queryKey: ['watchNext', 'history'] });
+    // Reset the "See more" bucket pages — offsets chain from the pre-refresh slice.
+    queryClient.removeQueries({ queryKey: ['watchNext', 'bucket'] });
     await refetch();
     setRefreshing(false);
   }, [refetch, queryClient]);
   const mark = useMarkEpisodeWatched();
   const rewatch = useRewatchEpisode();
   const unwatchOnce = useUnwatchEpisodeOnce();
+  // "See more" pagers for the two server-capped rails (first 10 ship in `data`).
+  const notRecentlyQ = useWatchNextBucket('NOT_RECENTLY');
+  const startWatchingQ = useWatchNextBucket('START_WATCHING');
 
   // Cursor for the scroll-up history pages: the OLDEST item of the initial slice
   // (data order is newest-first). historyId is the watch_history row id tiebreaker —
@@ -197,20 +206,39 @@ function WatchList() {
         seenEpisode.add(k);
         return true;
       });
-    // Paused shows: next episodes from tracking-paused shows, own rail under
-    // "Haven't watched for a while" (separate endpoint — watch-next excludes them).
+    // Paused shows: next episodes from tracking-paused shows, own rail at the
+    // bottom (separate endpoint — watch-next excludes them).
     const pausedItems = (pausedQuery.data?.items ?? []).filter((it) => {
       const k = it.episode.id;
       if (seenEpisode.has(k)) return false;
       seenEpisode.add(k);
       return true;
     });
+    // "See more" pages for the capped rails (deduped like the main slice).
+    const extraByBucket: Record<string, any[]> = {
+      [WatchNextBucket.NOT_RECENTLY]: [],
+      [WatchNextBucket.START_WATCHING]: [],
+    };
+    for (const [bucket, q] of [
+      [WatchNextBucket.NOT_RECENTLY, notRecentlyQ],
+      [WatchNextBucket.START_WATCHING, startWatchingQ],
+    ] as const) {
+      extraByBucket[bucket] = (q.data?.pages ?? [])
+        .flatMap((p) => p.items)
+        .filter((it) => {
+          const k = it.episode.id;
+          if (seenEpisode.has(k)) return false;
+          seenEpisode.add(k);
+          return true;
+        });
+    }
     // History is always visible (scroll up to see it), auto-scroll lands on Watch Next
     const buckets = [
       WatchNextBucket.HISTORY,
       WatchNextBucket.WATCH_NEXT,
-      WatchNextBucket.START_WATCHING,
+      // "Haven't watched for a while" renders before "Start watching".
       WatchNextBucket.NOT_RECENTLY,
+      WatchNextBucket.START_WATCHING,
       WatchNextBucket.PAUSED,
     ];
     const out: WatchRow[] = [{ type: 'spacer', key: 'top', h: spacing.lg }];
@@ -219,6 +247,7 @@ function WatchList() {
       const group = bucket === WatchNextBucket.PAUSED
         ? pausedItems
         : items.filter((i) => i.bucket === bucket);
+      const extra = extraByBucket[bucket] ?? [];
       if (group.length === 0 && !(bucket === WatchNextBucket.HISTORY && older.length > 0)) continue;
       // History: oldest on top, latest at the bottom (right above Watch Next). Older
       // pages are all older than the initial slice, so ascending order is older-pages
@@ -234,7 +263,7 @@ function WatchList() {
         h: HEADER_H + (isFirstSection ? 0 : spacing.lg),
       });
       isFirstSection = false;
-      for (const it of ordered) {
+      for (const it of [...ordered, ...extra]) {
         // Non-History cards are keyed by showId so an optimistic mark-watched swap
         // (episode E → nextEpisode) updates the same component in place instead of
         // remounting. History rows keep the episode key (a show can appear multiple
@@ -246,14 +275,35 @@ function WatchList() {
           h: CARD_H,
         });
       }
+      // "See more" footer: until a page is fetched, the server's uncapped rail total
+      // decides; afterwards the pager's hasNextPage does.
+      if (bucket === WatchNextBucket.NOT_RECENTLY || bucket === WatchNextBucket.START_WATCHING) {
+        const q = bucket === WatchNextBucket.NOT_RECENTLY ? notRecentlyQ : startWatchingQ;
+        const total =
+          bucket === WatchNextBucket.NOT_RECENTLY
+            ? (data?.bucketTotals?.notRecently ?? 0)
+            : (data?.bucketTotals?.startWatching ?? 0);
+        const hasMore =
+          (q.data?.pages.length ?? 0) > 0 ? !!q.hasNextPage : total > group.length;
+        if (hasMore) out.push({ type: 'more', key: `m_${bucket}`, bucket, h: MORE_H });
+      }
     }
     return out;
-  }, [data?.items, pastQuery.data?.pages, pausedQuery.data?.items]);
+  }, [data?.items, data?.bucketTotals, pastQuery.data?.pages, pausedQuery.data?.items, notRecentlyQ.data?.pages, notRecentlyQ.hasNextPage, startWatchingQ.data?.pages, startWatchingQ.hasNextPage]);
 
-  const watchNextIndex = useMemo(
-    () => rows.findIndex((r) => r.type === 'header' && r.bucket === WatchNextBucket.WATCH_NEXT),
-    [rows],
-  );
+  // Land on Watch Next; when it has no items, fall back to "Haven't watched for a
+  // while", then "Start watching" (first rail that exists wins).
+  const landingIndex = useMemo(() => {
+    for (const b of [
+      WatchNextBucket.WATCH_NEXT,
+      WatchNextBucket.NOT_RECENTLY,
+      WatchNextBucket.START_WATCHING,
+    ]) {
+      const i = rows.findIndex((r) => r.type === 'header' && r.bucket === b);
+      if (i > 0) return i;
+    }
+    return -1;
+  }, [rows]);
 
   const getItemLayout = useCallback(
     (_: any, index: number) => {
@@ -273,14 +323,14 @@ function WatchList() {
   const listRef = useRef<FlatList<WatchRow>>(null);
   const landed = useRef(false);
   useEffect(() => {
-    if (landed.current || watchNextIndex <= 0) return;
+    if (landed.current || landingIndex <= 0) return;
     landed.current = true;
     const timer = setTimeout(
-      () => listRef.current?.scrollToIndex({ index: watchNextIndex, animated: false }),
+      () => listRef.current?.scrollToIndex({ index: landingIndex, animated: false }),
       0,
     );
     return () => clearTimeout(timer);
-  }, [watchNextIndex]);
+  }, [landingIndex]);
 
   // Infinite top scroll (older watch history). Mirrors the Upcoming tab's scroll-up:
   // level-triggered top detection (edge triggers are flaky on web) + cooldown +
@@ -337,6 +387,7 @@ function WatchList() {
           </View>
         );
       }
+      if (row.type === 'more') return <SeeMoreRow bucket={row.bucket} h={row.h} />;
       const it = row.item;
       return (
         <View style={{ height: CARD_H }}>
@@ -399,6 +450,40 @@ function WatchList() {
         // rows above the visible area.
         maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       />
+    </View>
+  );
+}
+
+/** Feed-style "See more" section footer: loads the next 10 items of the rail
+ *  until the server's uncapped total is exhausted. */
+function SeeMoreRow({ bucket, h }: { bucket: 'START_WATCHING' | 'NOT_RECENTLY'; h: number }) {
+  const { tokens } = useAppearance();
+  const { t } = useTranslation(['shows']);
+  const q = useWatchNextBucket(bucket);
+  return (
+    <View style={{ height: h, justifyContent: 'center' }}>
+      <Pressable
+        onPress={() => {
+          if (!q.isFetchingNextPage) q.fetchNextPage();
+        }}
+        style={({ pressed }) => [
+          styles.moreBtn,
+          { backgroundColor: tokens.surface },
+          pressed && { backgroundColor: tokens.surfaceAlt },
+        ]}
+        accessibilityRole="button"
+      >
+        {q.isFetchingNextPage ? (
+          <Spinner />
+        ) : (
+          <>
+            <T variant="caption" style={{ color: tokens.primary, fontWeight: '700' }}>
+              {t('shows:seeMore')}
+            </T>
+            <Ionicons name="chevron-down" size={14} color={tokens.primary} style={{ marginLeft: 4 }} />
+          </>
+        )}
+      </Pressable>
     </View>
   );
 }
@@ -662,6 +747,18 @@ function Upcoming() {
 
 const styles = StyleSheet.create({
   tabs: { flexDirection: 'row', paddingHorizontal: spacing.lg, paddingBottom: spacing.sm },
+  // "See more" section footer (mirrors the Explore feed's per-user expand button).
+  moreBtn: {
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 999,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    minWidth: 120,
+    minHeight: 30,
+  },
   // Scroll-up page spinner: absolute overlay so it never shifts row layout (a layout
   // row at the top pushed the whole list down mid-fetch → visible flicker).
   topLoader: {

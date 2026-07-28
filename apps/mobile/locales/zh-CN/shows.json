@@ -29,5 +29,6 @@
   "pastYearsAgo_other": "{{count}}年前",
   "pastYearsMonthsAgo_one": "{{years}}年{{count}}个月前",
   "pastYearsMonthsAgo_other": "{{years}}年{{count}}个月前",
-  "paused": "已暂停"
+  "paused": "已暂停",
+  "seeMore": "查看更多"
 }

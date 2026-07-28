@@ -16,7 +16,9 @@
     "notStarted": "Not started yet",
     "notStartedEmpty": "Add shows to your watchlist.",
     "finished": "Finished",
-    "finishedEmpty": "You haven't finished any shows yet."
+    "finishedEmpty": "You haven't finished any shows yet.",
+    "paused": "Paused",
+    "pausedEmpty": "No paused shows."
   },
   "leaderboardPrivacyHint": "You can set your profile to private in Settings if you don't want to appear in the public leaderboard.",
   "leaderboardEmpty": "No watch data yet.",

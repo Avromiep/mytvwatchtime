@@ -38,5 +38,6 @@
   "pastYearsMonthsAgo_few": "قبل {{years}} عام و{{count}} أشهر",
   "pastYearsMonthsAgo_many": "قبل {{years}} عام و{{count}} شهرًا",
   "pastYearsMonthsAgo_other": "قبل {{years}} عام و{{count}} شهر",
-  "paused": "متوقفة مؤقتًا"
+  "paused": "متوقفة مؤقتًا",
+  "seeMore": "عرض المزيد"
 }

@@ -2,7 +2,7 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { MediaType } from '@tvwatch/shared';
-import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
+import { IsEnum, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -48,6 +48,25 @@ class PastCursorQueryDto {
   limit?: number;
 }
 
+class WatchNextBucketQueryDto {
+  @IsString()
+  @IsNotEmpty()
+  @IsIn(['START_WATCHING', 'NOT_RECENTLY'])
+  bucket!: 'START_WATCHING' | 'NOT_RECENTLY';
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  offset?: number = 0;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  limit?: number = 10;
+}
+
 @ApiTags('library')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
@@ -58,6 +77,11 @@ export class LibraryController {
   @Get('watch-next')
   watchNext(@CurrentUser('id') userId: string) {
     return this.library.watchNext(userId);
+  }
+
+  @Get('watch-next/bucket')
+  watchNextBucket(@CurrentUser('id') userId: string, @Query() q: WatchNextBucketQueryDto) {
+    return this.library.watchNextBucket(userId, q.bucket, q.offset ?? 0, q.limit ?? 10);
   }
 
   @Get('watch-next/paused')

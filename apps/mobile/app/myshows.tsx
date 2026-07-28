@@ -13,7 +13,7 @@ import { spacing } from '../theme/theme';
 import { useTranslation } from 'react-i18next';
 
 interface StatusItem { id: string; title: string; posterUrl?: string | null; progress: number; rating?: number | null }
-type SectionKey = 'watching' | 'notStarted' | 'finished';
+type SectionKey = 'watching' | 'notStarted' | 'finished' | 'paused';
 
 interface FlatRow {
   type: 'header' | 'empty' | 'cards';
@@ -36,11 +36,23 @@ export default function MyShowsScreen() {
   const { t } = useTranslation(['social', 'common']);
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['showsByStatus'],
-    queryFn: () => api.get<{ watching: StatusItem[]; notStarted: StatusItem[]; finished: StatusItem[] }>('/me/shows/progress'),
+    queryFn: () => api.get<{ watching: StatusItem[]; notStarted: StatusItem[]; finished: StatusItem[]; paused: StatusItem[] }>('/me/shows/progress'),
   });
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
-  const [expanded, setExpanded] = useState<Record<SectionKey, boolean>>({ watching: true, notStarted: true, finished: true });
+  // Expanded defaults are data-driven: sections with fewer than 9 items start
+  // open, larger ones start collapsed. Set once — user toggles win afterwards.
+  const [expanded, setExpanded] = useState<Record<SectionKey, boolean> | null>(null);
+  useEffect(() => {
+    if (expanded || !data) return;
+    setExpanded({
+      // The first section always starts open; the rest follow the <9 rule.
+      watching: true,
+      notStarted: (data.notStarted?.length ?? 0) < 9,
+      finished: (data.finished?.length ?? 0) < 9,
+      paused: (data.paused?.length ?? 0) < 9,
+    });
+  }, [data, expanded]);
 
   const containerW = width - 32; // spacing.lg * 2
   const gap = 8;
@@ -52,6 +64,7 @@ export default function MyShowsScreen() {
       { key: 'watching', title: t('social:myShows.toWatch'), empty: t('social:myShows.toWatchEmpty'), items: data?.watching ?? [] },
       { key: 'notStarted', title: t('social:myShows.notStarted'), empty: t('social:myShows.notStartedEmpty'), items: data?.notStarted ?? [] },
       { key: 'finished', title: t('social:myShows.finished'), empty: t('social:myShows.finishedEmpty'), items: data?.finished ?? [] },
+      { key: 'paused', title: t('social:myShows.paused'), empty: t('social:myShows.pausedEmpty'), items: data?.paused ?? [] },
     ],
     [t, data],
   );
@@ -60,7 +73,7 @@ export default function MyShowsScreen() {
     const rows: FlatRow[] = [];
     for (const s of defs) {
       rows.push({ type: 'header', key: `h_${s.key}`, title: s.title, count: s.items.length, section: s.key });
-      if (expanded[s.key]) {
+      if (expanded?.[s.key]) {
         if (s.items.length === 0) {
           rows.push({ type: 'empty', key: `e_${s.key}`, message: s.empty });
         } else {
@@ -88,11 +101,11 @@ export default function MyShowsScreen() {
   const renderItem = useCallback(({ item }: { item: FlatRow }) => {
     if (item.type === 'header') {
       const sec = item.section!;
-      const open = expanded[sec];
+      const open = expanded?.[sec] ?? false;
       return (
         <Pressable
           style={[styles.header, { backgroundColor: tokens.background, borderBottomColor: tokens.divider }]}
-          onPress={() => setExpanded((e) => ({ ...e, [sec]: !e[sec] }))}
+          onPress={() => setExpanded((e) => (e ? { ...e, [sec]: !e[sec] } : e))}
         >
           <View style={{ flex: 1 }}>
             <View style={styles.headerLeft}>

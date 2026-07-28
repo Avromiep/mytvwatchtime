@@ -16,7 +16,9 @@
     "notStarted": "Henüz başlamadı",
     "notStartedEmpty": "İzleme listene dizi ekle.",
     "finished": "Bitti",
-    "finishedEmpty": "Henüz hiçbir diziyi bitirmedin."
+    "finishedEmpty": "Henüz hiçbir diziyi bitirmedin.",
+    "paused": "Duraklatıldı",
+    "pausedEmpty": "Duraklatılmış dizi yok."
   },
   "leaderboardPrivacyHint": "Herkese açık liderlik tablosunda görünmek istemiyorsan Ayarlar’dan profilini özel yapabilirsin.",
   "leaderboardEmpty": "Henüz izleme verisi yok.",

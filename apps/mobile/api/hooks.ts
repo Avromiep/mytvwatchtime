@@ -46,6 +46,7 @@ import type {
   CharacterVoteSectionDto,
   WatchNextItemDto,
   WatchNextResponseDto,
+  WatchNextBucketPageDto,
   ExternalReviewDto,
   FeedPageDto,
   OnboardingApplyDto,
@@ -113,6 +114,22 @@ export const usePausedWatchNext = () =>
   useQuery({
     queryKey: ['watchNext', 'paused'] as const,
     queryFn: () => api.get<{ items: WatchNextItemDto[] }>('/me/watch-next/paused'),
+  });
+/**
+ * "See more" paging for the capped watch-list rails (START_WATCHING / NOT_RECENTLY):
+ * the first 10 ship inside the main watch-next payload, so pages start at offset 10.
+ */
+export const useWatchNextBucket = (bucket: 'START_WATCHING' | 'NOT_RECENTLY') =>
+  useInfiniteQuery({
+    queryKey: ['watchNext', 'bucket', bucket] as const,
+    queryFn: ({ pageParam }) =>
+      api.get<WatchNextBucketPageDto>('/me/watch-next/bucket', {
+        bucket,
+        offset: pageParam,
+        limit: 10,
+      }),
+    initialPageParam: 10,
+    getNextPageParam: (last) => (last.hasMore ? last.nextOffset : undefined),
   });
 export const useUpcoming = () =>
   useQuery({

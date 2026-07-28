@@ -28,6 +28,17 @@ export interface WatchNextResponseDto {
   /** True when the user's watch history holds more episodes than the initial slice —
    *  gates the first scroll-up fetch (older pages chain off the returned cursor). */
   historyHasMore?: boolean;
+  /** Uncapped rail sizes — totals drive the per-section "See more" buttons
+   *  (extra items page via GET /me/watch-next/bucket). */
+  bucketTotals?: { notRecently: number; startWatching: number };
+}
+
+/** One offset page of a capped watch-list rail (See more). */
+export interface WatchNextBucketPageDto {
+  items: WatchNextItemDto[];
+  total: number;
+  hasMore: boolean;
+  nextOffset: number;
 }
 
 /** Cursor into the scroll-up watch history of the watch list. */

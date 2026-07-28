@@ -16,7 +16,9 @@
     "notStarted": "Ainda não iniciadas",
     "notStartedEmpty": "Adicione séries à sua lista para assistir.",
     "finished": "Concluídas",
-    "finishedEmpty": "Você ainda não terminou nenhuma série."
+    "finishedEmpty": "Você ainda não terminou nenhuma série.",
+    "paused": "Pausadas",
+    "pausedEmpty": "Nenhuma série pausada."
   },
   "leaderboardPrivacyHint": "Você pode definir seu perfil como privado em Configurações se não quiser aparecer na classificação pública.",
   "leaderboardEmpty": "Ainda não há dados de visualização.",

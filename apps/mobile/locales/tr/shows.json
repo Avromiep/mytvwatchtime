@@ -29,5 +29,6 @@
   "pastYearsAgo_other": "{{count}} yıl önce",
   "pastYearsMonthsAgo_one": "{{years}} yıl ve {{count}} ay önce",
   "pastYearsMonthsAgo_other": "{{years}} yıl ve {{count}} ay önce",
-  "paused": "Duraklatıldı"
+  "paused": "Duraklatıldı",
+  "seeMore": "Daha fazla"
 }

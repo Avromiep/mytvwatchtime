@@ -29,5 +29,6 @@
   "pastYearsAgo_other": "{{count}} tahun yang lalu",
   "pastYearsMonthsAgo_one": "{{years}} tahun {{count}} bulan yang lalu",
   "pastYearsMonthsAgo_other": "{{years}} tahun {{count}} bulan yang lalu",
-  "paused": "Dijeda"
+  "paused": "Dijeda",
+  "seeMore": "Lihat lainnya"
 }

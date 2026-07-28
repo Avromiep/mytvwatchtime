@@ -19,6 +19,9 @@ import { pastBucket } from './lib/past-buckets';
 /** Max items returned in the "Haven't watched for a while" (NOT_RECENTLY) rail. */
 const NOT_RECENTLY_LIMIT = 10;
 
+/** Initial "Start watching" (START_WATCHING) slice — the rest pages via /me/watch-next/bucket. */
+const START_WATCHING_LIMIT = 10;
+
 /** Initial HISTORY slice on the watch list — older items page via /me/watch-next/history. */
 const WATCH_NEXT_HISTORY_LIMIT = 10;
 
@@ -89,8 +92,14 @@ export class LibraryService {
     }
   }
 
-  async watchNext(userId: string) {
-    const cacheKey = `watchnext:${userId}:${currentLanguage()}`;
+  /**
+   * Full watch-list computation (uncapped rails), cached per user+lang for 30s.
+   * Both watchNext (capped presentation payload) and watchNextBucket (per-rail
+   * pagination for the "See more" buttons) derive from this one computation.
+   * Key is v2: the cached shape changed from {items} to per-bucket arrays.
+   */
+  private async computeWatchNext(userId: string) {
+    const cacheKey = `watchnext:v2:${userId}:${currentLanguage()}`;
     const cached = await this.redis.get<any>(cacheKey);
     if (cached) return cached;
 
@@ -104,7 +113,9 @@ export class LibraryService {
       take: 500,
     });
 
-    // Watchlist shows that DON'T have a user_show_status yet (never watched)
+    // Watchlist shows that DON'T have a user_show_status yet (never watched).
+    // take 500 (not a presentation cap): this is the START_WATCHING pool — the
+    // rail is capped at 10 in the payload and pages via /me/watch-next/bucket.
     const statusMediaIds = new Set(statuses.map((s) => s.mediaId));
     const [watchlistShows, watchlistIdsRaw] = await Promise.all([
       this.prisma.watchlistItem.findMany({
@@ -115,7 +126,7 @@ export class LibraryService {
         },
         include: { media: { include: { show: true } } },
         orderBy: { createdAt: 'desc' },
-        take: 10,
+        take: 500,
       }),
       // Ids of ALL watchlisted shows: a show that has a status row with watchedCount 0
       // (every episode unmarked after watching, or import artifact) AND is in the
@@ -270,6 +281,7 @@ export class LibraryService {
     }
 
     const watchNext: any[] = [];
+    const startWatching: any[] = [];
     const notRecently: any[] = [];
 
     for (const status of candidates) {
@@ -307,7 +319,7 @@ export class LibraryService {
       const hasFreshContent = nextAirDate && nextAirDate > thirtyDaysAgo;
       if (status.isWatchlistOnly) {
         card.bucket = WatchNextBucket.START_WATCHING;
-        watchNext.push(card);
+        startWatching.push(card);
       } else if (stale && (status.watchedCount ?? 0) > 0 && !hasFreshContent) {
         card.bucket = WatchNextBucket.NOT_RECENTLY;
         notRecently.push(card);
@@ -327,15 +339,68 @@ export class LibraryService {
       if (b.watchedCount !== a.watchedCount) return b.watchedCount - a.watchedCount;
       return (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0);
     });
-    // Cap the "Haven't watched for a while" rail so power users with many stale
-    // tracked shows don't load/render the full set on the Watch list tab.
-    const cappedNotRecently = notRecently.slice(0, NOT_RECENTLY_LIMIT);
 
-    const result = { items: [...history, ...watchNext, ...cappedNotRecently], historyHasMore };
-    result.items = await this.localizeItems(result.items, (i) => i.showId);
-    await this.localizeEpisodeTitles(result.items);
+    // Full (uncapped) rails — the presentation payload caps and watchNextBucket pages.
+    // localizeItems returns NEW item objects (episode localization mutates in place).
+    const [historyL, watchNextL, startWatchingL, notRecentlyL] = await Promise.all([
+      this.localizeItems(history, (i) => i.showId),
+      this.localizeItems(watchNext, (i) => i.showId),
+      this.localizeItems(startWatching, (i) => i.showId),
+      this.localizeItems(notRecently, (i) => i.showId),
+    ]);
+    const result = {
+      history: historyL,
+      historyHasMore,
+      watchNext: watchNextL,
+      startWatching: startWatchingL,
+      notRecently: notRecentlyL,
+    };
+    const allItems = [...historyL, ...watchNextL, ...startWatchingL, ...notRecentlyL];
+    await this.localizeEpisodeTitles(allItems);
     await this.redis.set(cacheKey, result, 30);
     return result;
+  }
+
+  /** Capped presentation payload for the Watch list tab (first page per rail). */
+  async watchNext(userId: string) {
+    const c = await this.computeWatchNext(userId);
+    return {
+      items: [
+        ...c.history,
+        ...c.watchNext,
+        // "Haven't watched for a while" renders before "Start watching".
+        ...c.notRecently.slice(0, NOT_RECENTLY_LIMIT),
+        ...c.startWatching.slice(0, START_WATCHING_LIMIT),
+      ],
+      historyHasMore: c.historyHasMore,
+      // Totals drive the per-section "See more" buttons (10-at-a-time paging).
+      bucketTotals: {
+        notRecently: c.notRecently.length,
+        startWatching: c.startWatching.length,
+      },
+    };
+  }
+
+  /**
+   * Offset pagination over a capped watch-list rail (START_WATCHING / NOT_RECENTLY)
+   * for the section "See more" buttons — reads the same cached computation as
+   * watchNext, so page fetches are cheap within the 30s window.
+   */
+  async watchNextBucket(
+    userId: string,
+    bucket: 'START_WATCHING' | 'NOT_RECENTLY',
+    offset = 0,
+    limit = 10,
+  ) {
+    const c = await this.computeWatchNext(userId);
+    const full = bucket === 'START_WATCHING' ? c.startWatching : c.notRecently;
+    const items = full.slice(offset, offset + limit);
+    return {
+      items,
+      total: full.length,
+      hasMore: offset + items.length < full.length,
+      nextOffset: offset + items.length,
+    };
   }
 
   /**
@@ -789,7 +854,8 @@ export class LibraryService {
 
   async showsByStatus(userId: string) {
     // Same 30s user+lang cache pattern as watchNext/upcoming (busted by tracking writes).
-    const cacheKey = `showsprogress:v2:${userId}:${currentLanguage()}`;
+    // v3: the result gained the `paused` bucket.
+    const cacheKey = `showsprogress:v3:${userId}:${currentLanguage()}`;
     const cached = await this.redis.get<any>(cacheKey);
     if (cached) return cached;
 
@@ -846,29 +912,38 @@ export class LibraryService {
 
     const watching: any[] = [];
     const finished: any[] = [];
+    const paused: any[] = [];
     for (const s of statuses) {
       const w = s.watchedCount ?? 0;
       const airedTotal = airedMap.get(s.mediaId) ?? 0;
       const progress = airedTotal > 0 ? w / airedTotal : 0;
-      const item = { id: s.media.id, title: s.media.title, posterUrl: s.media.posterUrl, rating: s.media.rating ?? null, year: s.media.show?.yearStart ?? null, progress, lastWatchedAt: s.lastWatchedAt };
+      const item = { id: s.media.id, title: s.media.title, posterUrl: s.media.posterUrl, rating: s.media.rating ?? null, year: s.media.show?.yearStart ?? null, progress, lastWatchedAt: s.lastWatchedAt, pausedAt: s.pausedAt };
+      // Tracking-paused shows (not dropped) get their own rail — out of the
+      // To watch/Finished buckets regardless of progress.
+      if (s.pausedAt && !s.dropped) {
+        paused.push(item);
+        continue;
+      }
       if (w > 0 && progress < 1) watching.push(item);
       else if (airedTotal > 0 && w >= airedTotal) finished.push(item);
     }
     watching.sort((a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0));
     finished.sort((a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0));
+    paused.sort((a, b) => (b.pausedAt?.getTime() ?? 0) - (a.pausedAt?.getTime() ?? 0));
 
-    const progressedIds = new Set([...watching.map((i) => i.id), ...finished.map((i) => i.id)]);
+    const progressedIds = new Set([...watching.map((i) => i.id), ...finished.map((i) => i.id), ...paused.map((i) => i.id)]);
     const notStarted = watchlist
       .filter((w) => !progressedIds.has(w.mediaId))
       .map((w) => ({ id: w.media.id, title: w.media.title, posterUrl: w.media.posterUrl, rating: w.media.rating ?? null, year: w.media.show?.yearStart ?? null, progress: 0, addedAt: w.createdAt }));
 
-    const [watchingL, finishedL, notStartedL] = await Promise.all([
+    const [watchingL, finishedL, notStartedL, pausedL] = await Promise.all([
       this.localizeItems(watching, (i) => i.id),
       this.localizeItems(finished, (i) => i.id),
       this.localizeItems(notStarted, (i) => i.id),
+      this.localizeItems(paused, (i) => i.id),
     ]);
 
-    const result = { watching: watchingL, notStarted: notStartedL, finished: finishedL };
+    const result = { watching: watchingL, notStarted: notStartedL, finished: finishedL, paused: pausedL };
     await this.redis.set(cacheKey, result, 30);
     return result;
   }

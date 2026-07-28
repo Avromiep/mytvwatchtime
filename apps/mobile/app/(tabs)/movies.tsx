@@ -45,7 +45,10 @@ export default function MoviesScreen() {
     await Promise.all([watchlist.refetch(), watched.refetch(), favorites.refetch()]);
     setRefreshing(false);
   }, [watchlist, watched, favorites]);
-  const [expanded, setExpanded] = useState<Record<SectionKey, boolean>>({ watchlist: true, watched: false, favorites: true });
+  // Expanded defaults are data-driven (set once the collections finish loading):
+  // sections with fewer than 9 items start open, larger ones start collapsed.
+  // User toggles win afterwards.
+  const [expanded, setExpanded] = useState<Record<SectionKey, boolean> | null>(null);
 
   const containerW = width - 32;
   const gap = 8;
@@ -94,11 +97,26 @@ export default function MoviesScreen() {
     [t, watchlistItems, watchedItems, favoriteItems],
   );
 
+  const collectionsLoaded =
+    !!watchlist.data && !!watched.data && !!favorites.data &&
+    watchlist.fullyLoaded && watched.fullyLoaded && favorites.fullyLoaded;
+  useEffect(() => {
+    if (expanded || !collectionsLoaded) return;
+    setExpanded({
+      // The first section always starts open; the rest follow the <9 rule.
+      watchlist: true,
+      watched: watchedItems.length < 9,
+      favorites: favoriteItems.length < 9,
+    });
+    // The three item lists derive from the same fully-loaded queries — read at set time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded, collectionsLoaded]);
+
   const { rows, stickyIndices } = useMemo(() => {
     const rows: FlatRow[] = [];
     for (const s of sections) {
       rows.push({ type: 'header', key: `h_${s.key}`, title: s.title, count: s.items.length, section: s.key });
-      if (expanded[s.key]) {
+      if (expanded?.[s.key]) {
         if (s.items.length === 0) {
           rows.push({ type: 'empty', key: `e_${s.key}`, message: s.empty });
         } else {
@@ -133,11 +151,11 @@ export default function MoviesScreen() {
   const renderItem = useCallback(({ item }: { item: FlatRow }) => {
     if (item.type === 'header') {
       const sec = item.section!;
-      const open = expanded[sec];
+      const open = expanded?.[sec] ?? false;
       return (
         <Pressable
           style={[styles.header, { backgroundColor: tokens.background, borderBottomColor: tokens.divider }]}
-          onPress={() => setExpanded((e) => ({ ...e, [sec]: !e[sec] }))}
+          onPress={() => setExpanded((e) => (e ? { ...e, [sec]: !e[sec] } : e))}
         >
           <View style={{ flex: 1 }}>
             <View style={styles.headerLeft}>

@@ -29,5 +29,6 @@
   "pastYearsAgo_other": "Hace {{count}} años",
   "pastYearsMonthsAgo_one": "Hace {{years}} año y {{count}} mes",
   "pastYearsMonthsAgo_other": "Hace {{years}} año y {{count}} meses",
-  "paused": "En pausa"
+  "paused": "En pausa",
+  "seeMore": "Ver más"
 }

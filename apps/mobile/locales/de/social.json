@@ -16,7 +16,9 @@
     "notStarted": "Noch nicht begonnen",
     "notStartedEmpty": "Füge Serien zu deiner Merkliste hinzu.",
     "finished": "Abgeschlossen",
-    "finishedEmpty": "Du hast noch keine Serie beendet."
+    "finishedEmpty": "Du hast noch keine Serie beendet.",
+    "paused": "Pausiert",
+    "pausedEmpty": "Keine pausierten Serien."
   },
   "leaderboardPrivacyHint": "Du kannst dein Profil in den Einstellungen auf privat setzen, wenn du nicht in der öffentlichen Bestenliste erscheinen möchtest.",
   "leaderboardEmpty": "Noch keine Wiedergabedaten.",
