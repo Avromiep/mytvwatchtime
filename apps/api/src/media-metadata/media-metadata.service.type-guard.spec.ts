@@ -338,7 +338,7 @@ describe('MediaMetadataService — titleLocale marker', () => {
     expect(calls.mediaItemUpdate[0].data.titleLocale).toBe('en');
   });
 
-  it('TVDB movie hydrated in a non-en context (single localized payload) marks the real locale', async () => {
+  it('TVDB movie hydrated in a non-en context marks en when translations carry an English title', async () => {
     const { tx, calls } = fakeTx(); // no prev → create path
     const prisma = {
       $transaction: async (fn: any) => fn(tx),
@@ -382,7 +382,57 @@ describe('MediaMetadataService — titleLocale marker', () => {
 
     await runInLanguage('it', () => svc.ensureMovieFullTvdb(12345));
 
-    // No separate English payload → the base really IS Italian → marker stays truthful,
+    // translations.en.title is a real English base (aeb1e5a) → the marker is 'en',
+    // not the request locale; the row needs no English-base repair.
+    expect(calls.mediaItemCreate).toHaveLength(1);
+    expect(calls.mediaItemCreate[0].data.titleLocale).toBe('en');
+  });
+
+  it('TVDB movie without an English translation keeps the request locale (repair stays eligible)', async () => {
+    const { tx, calls } = fakeTx(); // no prev → create path
+    const prisma = {
+      $transaction: async (fn: any) => fn(tx),
+      mediaItem: { findUnique: async () => null },
+      externalId: { findFirst: async () => null },
+    };
+    const tvdb = {
+      enabled: true,
+      getMovie: jest.fn(async () => ({
+        type: MediaType.MOVIE,
+        tmdbId: 0,
+        title: 'Sonic Boom',
+        overview: null,
+        posterUrl: null,
+        backdropUrl: null,
+        releaseDate: '2013-06-19',
+        releaseYear: 2013,
+        runtimeMinutes: 104,
+        country: 'IT',
+        language: 'it',
+        rating: 7,
+        popularity: 10,
+        trailerUrl: null,
+        genres: [{ name: 'Animazione' }],
+        externals: [{ provider: ExternalProvider.THE_TVDB, value: '12345' }],
+        keywords: [],
+        cast: [],
+        providers: [],
+        translations: { it: { title: 'Sonic Boom', overview: 'Trama italiana' } },
+      })),
+    };
+    const svc = new MediaMetadataService(
+      prisma as any,
+      {} as any, // tmdb
+      tvdb as any,
+      {} as any, // tvmaze
+      {} as any, // config
+      { enqueueClassifyCandidate: async () => undefined } as any,
+      { get: async () => null, set: async () => undefined, del: async () => undefined } as any,
+    );
+
+    await runInLanguage('it', () => svc.ensureMovieFullTvdb(12345));
+
+    // No English payload at all → the base really IS Italian → marker stays truthful,
     // so the row remains eligible for the English-base repair.
     expect(calls.mediaItemCreate).toHaveLength(1);
     expect(calls.mediaItemCreate[0].data.titleLocale).toBe('it');

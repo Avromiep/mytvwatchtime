@@ -17,6 +17,7 @@
     "test": "pnpm -r run test",
     "db:generate": "pnpm --filter @tvwatch/api prisma generate",
     "db:migrate": "pnpm --filter @tvwatch/api prisma migrate dev",
+    "db:push": "pnpm --filter @tvwatch/api prisma db push dev",
     "db:seed": "pnpm --filter @tvwatch/api prisma db seed",
     "db:studio": "pnpm --filter @tvwatch/api prisma studio"
   },
