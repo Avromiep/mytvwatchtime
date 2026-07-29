@@ -101,5 +101,7 @@
   "a11yToggle": "{{title}} öğesini {{mode}} olarak değiştir",
   "a11yAdjust": "{{title}} için ilerlemeyi ayarla",
   "throughLabel": "S{{season}} E{{episode}}",
-  "noAiredEpisodes": "Bu dizi için henüz yayınlanmış bölüm yok."
+  "noAiredEpisodes": "Bu dizi için henüz yayınlanmış bölüm yok.",
+  "topRatedShows": "En yüksek puanlı diziler",
+  "topRatedMovies": "En yüksek puanlı filmler"
 }

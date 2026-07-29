@@ -101,5 +101,7 @@
   "a11yToggle": "Toggle {{title}} as {{mode}}",
   "a11yAdjust": "Adjust progress for {{title}}",
   "throughLabel": "S{{season}} E{{episode}}",
-  "noAiredEpisodes": "No aired episodes available yet for this show."
+  "noAiredEpisodes": "No aired episodes available yet for this show.",
+  "topRatedShows": "Top rated shows",
+  "topRatedMovies": "Top rated movies"
 }

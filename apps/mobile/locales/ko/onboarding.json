@@ -101,5 +101,7 @@
   "a11yToggle": "{{title}}을(를) {{mode}}(으)로 전환",
   "a11yAdjust": "{{title}}의 진행 상황 조정",
   "throughLabel": "시즌{{season}} {{episode}}화",
-  "noAiredEpisodes": "이 프로그램에는 아직 방영된 화가 없습니다."
+  "noAiredEpisodes": "이 프로그램에는 아직 방영된 화가 없습니다.",
+  "topRatedShows": "최고 평점 TV 프로그램",
+  "topRatedMovies": "최고 평점 영화"
 }

@@ -7,7 +7,10 @@
     "myMovies": "मेरी फ़िल्में",
     "favoriteShows": "पसंदीदा शो",
     "favoriteMovies": "पसंदीदा फ़िल्में",
-    "browse": "ब्राउज़ करें"
+    "browse": "ब्राउज़ करें",
+    "nowPlayingMovies": "अभी सिनेमाघरों में",
+    "topRatedShows": "टॉप रेटेड शो",
+    "topRatedMovies": "टॉप रेटेड फ़िल्में"
   },
   "myShows": {
     "title": "मेरे शो",

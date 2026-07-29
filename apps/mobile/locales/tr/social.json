@@ -7,7 +7,10 @@
     "myMovies": "Filmlerim",
     "favoriteShows": "Favori Diziler",
     "favoriteMovies": "Favori Filmler",
-    "browse": "Göz at"
+    "browse": "Göz at",
+    "nowPlayingMovies": "Vizyondakiler",
+    "topRatedShows": "En Yüksek Puanlı Diziler",
+    "topRatedMovies": "En Yüksek Puanlı Filmler"
   },
   "myShows": {
     "title": "Dizilerim",

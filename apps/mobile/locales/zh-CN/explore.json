@@ -41,5 +41,8 @@
       "CA": "加拿大",
       "AU": "澳大利亚"
     }
-  }
+  },
+  "nowPlayingMovies": "正在上映",
+  "topRatedShows": "高分剧集",
+  "topRatedMovies": "高分电影"
 }

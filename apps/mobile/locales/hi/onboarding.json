@@ -101,5 +101,7 @@
   "a11yToggle": "{{title}} को {{mode}} के रूप में टॉगल करें",
   "a11yAdjust": "{{title}} की प्रगति समायोजित करें",
   "throughLabel": "सी{{season}} ए{{episode}}",
-  "noAiredEpisodes": "इस शो के लिए अभी कोई प्रसारित एपिसोड उपलब्ध नहीं है।"
+  "noAiredEpisodes": "इस शो के लिए अभी कोई प्रसारित एपिसोड उपलब्ध नहीं है।",
+  "topRatedShows": "टॉप रेटेड शो",
+  "topRatedMovies": "टॉप रेटेड फ़िल्में"
 }

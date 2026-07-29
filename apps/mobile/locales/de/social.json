@@ -7,7 +7,10 @@
     "myMovies": "Meine Filme",
     "favoriteShows": "Lieblingsserien",
     "favoriteMovies": "Lieblingsfilme",
-    "browse": "Stöbern"
+    "browse": "Stöbern",
+    "nowPlayingMovies": "Aktuell im Kino",
+    "topRatedShows": "Bestbewertete Serien",
+    "topRatedMovies": "Bestbewertete Filme"
   },
   "myShows": {
     "title": "Meine Serien",

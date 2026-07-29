@@ -50,6 +50,9 @@ export default function MoreScreen() {
     'trending-shows': t('social:more.trendingShows'),
     'trending-movies': t('social:more.trendingMovies'),
     'top-for-you': t('social:more.topShowsForYou'),
+    'top-rated-shows': t('social:more.topRatedShows'),
+    'top-rated-movies': t('social:more.topRatedMovies'),
+    'now-playing-movies': t('social:more.nowPlayingMovies'),
     'watchlist-shows': t('social:more.myShows'),
     'watchlist-movies': t('social:more.myMovies'),
     'favorites-shows': t('social:more.favoriteShows'),
@@ -61,9 +64,18 @@ export default function MoreScreen() {
   const kind: 'shows' | 'movies' = isMovies ? 'movies' : 'shows';
   const isTrending = tab === 'trending-shows' || tab === 'trending-movies';
   const trendingType = tab === 'trending-movies' ? 'movies' : 'shows';
-  // Server-paged sections: trending + "Top shows for you" (both paginate, best-first).
+  // Server-paged sections: trending, curated lists + "Top shows for you" (all paginate).
+  const LIST_PATHS: Record<string, string> = {
+    'top-rated-shows': '/top-rated/shows',
+    'top-rated-movies': '/top-rated/movies',
+    'now-playing-movies': '/now-playing/movies',
+  };
   const pagedPath =
-    tab === 'top-for-you' ? '/discover/for-you' : isTrending ? `/trending/${trendingType}` : null;
+    tab === 'top-for-you'
+      ? '/discover/for-you'
+      : isTrending
+        ? `/trending/${trendingType}`
+        : (LIST_PATHS[tab ?? ''] ?? null);
 
   const cols = useColumns();
   const screenWidth = Dimensions.get('window').width;

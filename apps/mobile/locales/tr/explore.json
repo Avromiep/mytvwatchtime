@@ -41,5 +41,8 @@
       "CA": "Kanada",
       "AU": "Avustralya"
     }
-  }
+  },
+  "nowPlayingMovies": "Vizyondakiler",
+  "topRatedShows": "En Yüksek Puanlı Diziler",
+  "topRatedMovies": "En Yüksek Puanlı Filmler"
 }

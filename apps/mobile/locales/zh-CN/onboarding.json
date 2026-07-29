@@ -101,5 +101,7 @@
   "a11yToggle": "将{{title}}切换为{{mode}}",
   "a11yAdjust": "调整{{title}}的进度",
   "throughLabel": "第{{season}}季 第{{episode}}集",
-  "noAiredEpisodes": "该剧暂无已播出的剧集。"
+  "noAiredEpisodes": "该剧暂无已播出的剧集。",
+  "topRatedShows": "高分剧集",
+  "topRatedMovies": "高分电影"
 }

@@ -198,7 +198,10 @@ function ProgressRow({
           episode: show.throughEpisodeNumber,
         })
       : airedTotal != null
-        ? t('onboarding:allAiredEpisodes', { count: airedTotal })
+        ? t('onboarding:allAiredEpisodes', {
+            count: airedTotal,
+            defaultValue: 'All {{count}} aired episodes',
+          })
         : null;
 
   return (

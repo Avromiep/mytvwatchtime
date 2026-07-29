@@ -101,5 +101,7 @@
   "a11yToggle": "{{title}} als {{mode}} umschalten",
   "a11yAdjust": "Fortschritt für {{title}} anpassen",
   "throughLabel": "S{{season}} E{{episode}}",
-  "noAiredEpisodes": "Für diese Serie sind noch keine ausgestrahlten Folgen verfügbar."
+  "noAiredEpisodes": "Für diese Serie sind noch keine ausgestrahlten Folgen verfügbar.",
+  "topRatedShows": "Bestbewertete Serien",
+  "topRatedMovies": "Bestbewertete Filme"
 }

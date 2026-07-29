@@ -7,7 +7,10 @@
     "myMovies": "My Movies",
     "favoriteShows": "Favorite Shows",
     "favoriteMovies": "Favorite Movies",
-    "browse": "Browse"
+    "browse": "Browse",
+    "nowPlayingMovies": "Now Playing",
+    "topRatedShows": "Top Rated Shows",
+    "topRatedMovies": "Top Rated Movies"
   },
   "myShows": {
     "title": "My Shows",

@@ -101,5 +101,7 @@
   "a11yToggle": "Attiva/disattiva {{title}} come {{mode}}",
   "a11yAdjust": "Regola il progresso di {{title}}",
   "throughLabel": "S{{season}} E{{episode}}",
-  "noAiredEpisodes": "Nessun episodio andato in onda ancora disponibile per questa serie."
+  "noAiredEpisodes": "Nessun episodio andato in onda ancora disponibile per questa serie.",
+  "topRatedShows": "Serie più votate",
+  "topRatedMovies": "Film più votati"
 }

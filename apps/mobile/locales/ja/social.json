@@ -7,7 +7,10 @@
     "myMovies": "マイ映画",
     "favoriteShows": "お気に入り番組",
     "favoriteMovies": "お気に入り映画",
-    "browse": "探す"
+    "browse": "探す",
+    "nowPlayingMovies": "上映中の映画",
+    "topRatedShows": "高評価のテレビ番組",
+    "topRatedMovies": "高評価の映画"
   },
   "myShows": {
     "title": "マイ番組",

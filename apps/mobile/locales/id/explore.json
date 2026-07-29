@@ -41,5 +41,8 @@
       "CA": "Kanada",
       "AU": "Australia"
     }
-  }
+  },
+  "nowPlayingMovies": "Sedang Tayang",
+  "topRatedShows": "Acara TV Rating Teratas",
+  "topRatedMovies": "Film Rating Teratas"
 }

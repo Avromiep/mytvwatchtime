@@ -967,6 +967,8 @@ export class TmdbProvider {
       year: m.release_date ? Number(m.release_date.slice(0, 4)) : null,
       rating: m.vote_average ?? null,
       popularity: m.popularity ?? null,
+      genreIds: m.genre_ids ?? [],
+      originCountries: m.original_language === 'ja' ? ['JP'] : [],
     }));
   }
 
@@ -983,6 +985,8 @@ export class TmdbProvider {
       year: m.release_date ? Number(m.release_date.slice(0, 4)) : null,
       rating: m.vote_average ?? null,
       popularity: m.popularity ?? null,
+      genreIds: m.genre_ids ?? [],
+      originCountries: m.original_language === 'ja' ? ['JP'] : [],
     }));
   }
 
@@ -999,6 +1003,8 @@ export class TmdbProvider {
       year: m.release_date ? Number(m.release_date.slice(0, 4)) : null,
       rating: m.vote_average ?? null,
       popularity: m.popularity ?? null,
+      genreIds: m.genre_ids ?? [],
+      originCountries: m.original_language === 'ja' ? ['JP'] : [],
     }));
   }
 
@@ -1045,6 +1051,8 @@ export class TmdbProvider {
       overview: s.overview || null,
       rating: s.vote_average ?? null,
       popularity: s.popularity ?? null,
+      genreIds: s.genre_ids ?? [],
+      originCountries: s.origin_country ?? [],
     }));
   }
 

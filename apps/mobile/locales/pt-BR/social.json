@@ -7,7 +7,10 @@
     "myMovies": "Meus filmes",
     "favoriteShows": "Séries favoritas",
     "favoriteMovies": "Filmes favoritos",
-    "browse": "Explorar"
+    "browse": "Explorar",
+    "nowPlayingMovies": "Em cartaz",
+    "topRatedShows": "Séries mais bem avaliadas",
+    "topRatedMovies": "Filmes mais bem avaliados"
   },
   "myShows": {
     "title": "Minhas séries",

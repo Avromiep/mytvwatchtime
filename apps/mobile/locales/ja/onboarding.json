@@ -101,5 +101,7 @@
   "a11yToggle": "{{title}}を{{mode}}として切り替え",
   "a11yAdjust": "{{title}}の進捗を調整",
   "throughLabel": "シーズン{{season}} 第{{episode}}話",
-  "noAiredEpisodes": "この番組にはまだ放送済みの話がありません。"
+  "noAiredEpisodes": "この番組にはまだ放送済みの話がありません。",
+  "topRatedShows": "高評価のテレビ番組",
+  "topRatedMovies": "高評価の映画"
 }

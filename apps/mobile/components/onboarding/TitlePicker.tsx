@@ -14,7 +14,7 @@ import { MediaCardDto, MediaType } from '@tvwatch/shared';
 import { Header } from '../Header';
 import { Button, Chip, Screen, Spinner, T, EmptyState } from '../primitives';
 import { SelectablePosterCard, PosterSelectState } from './SelectablePosterCard';
-import { useDiscoverSections, useSearch } from '../../api/hooks';
+import { useTopRatedMoviesBrowse, useTopRatedShowsBrowse, useSearch } from '../../api/hooks';
 import { useAuth } from '../../context/AuthContext';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useOnboardingDraft } from '../../lib/onboarding/useOnboardingDraft';
@@ -64,18 +64,21 @@ export function TitlePicker({
   const searching = debouncedQ.length > 1;
   const searchType = tab === 'shows' ? MediaType.SHOW : MediaType.MOVIE;
   const search = useSearch(debouncedQ, searchType);
-  const sections = useDiscoverSections(user?.id);
+  // Default browse: top-rated catalog, 20/page with infinite scroll. Both tabs'
+  // queries mount up front so switching tabs is instant (cached pages).
+  const topShows = useTopRatedShowsBrowse();
+  const topMovies = useTopRatedMoviesBrowse();
+  const browse = tab === 'shows' ? topShows : topMovies;
 
-  // Initial content: personalized picks + trending for the active tab, deduped.
+  // Browse pages for the active tab, deduped (upstream pages can overlap).
   const browseItems = useMemo(() => {
     const type = tab === 'shows' ? MediaType.SHOW : MediaType.MOVIE;
-    const trending = tab === 'shows' ? sections.data?.trendingShows : sections.data?.trendingMovies;
-    const merged = [...(sections.data?.topForYou ?? []), ...(trending ?? [])].filter(
+    const merged = (browse.data?.pages ?? []).flatMap((p) => p.items ?? []).filter(
       (i) => i.type === type,
     );
     const seen = new Set<string>();
     return merged.filter((i) => (seen.has(i.id) ? false : (seen.add(i.id), true)));
-  }, [sections.data, tab]);
+  }, [browse.data, tab]);
 
   const items: MediaCardDto[] = searching
     ? (search.data?.pages ?? []).flatMap((p) => p.items ?? [])
@@ -84,7 +87,7 @@ export function TitlePicker({
   // Adaptive chunked-row grid (repo grid pattern — no numColumns/flexWrap).
   const containerW = Math.max(0, width - spacing.lg * 2);
   const gridGap = spacing.sm;
-  const cols = Math.max(2, Math.floor((containerW + gridGap) / (110 + gridGap)));
+  const cols = Math.max(3, Math.floor((containerW + gridGap) / (96 + gridGap)));
   const cellW = Math.floor((containerW - gridGap * (cols - 1)) / cols);
   const rows: MediaCardDto[][] = [];
   for (let i = 0; i < items.length; i += cols) rows.push(items.slice(i, i + cols));
@@ -138,8 +141,8 @@ export function TitlePicker({
     if (!entry) logEvent('onboarding_watchlist_title_selected');
   };
 
-  const loading = searching ? search.isLoading : sections.isLoading;
-  const errored = searching ? search.isError : sections.isError;
+  const loading = searching ? search.isLoading : browse.isLoading;
+  const errored = searching ? search.isError : browse.isError;
 
   return (
     <Screen>
@@ -208,7 +211,13 @@ export function TitlePicker({
         />
       </View>
       <T variant="micro" muted style={styles.sectionLabel}>
-        {t(searching ? 'onboarding:searchResults' : 'onboarding:popularNow')}
+        {t(
+          searching
+            ? 'onboarding:searchResults'
+            : tab === 'shows'
+              ? 'onboarding:topRatedShows'
+              : 'onboarding:topRatedMovies',
+        )}
       </T>
 
       {/* Grid */}
@@ -220,7 +229,7 @@ export function TitlePicker({
           title={t('onboarding:loadErrorTitle')}
           subtitle={t('onboarding:loadErrorBody')}
           cta={t('common:tryAgain')}
-          onCta={() => (searching ? search.refetch() : sections.refetch())}
+          onCta={() => (searching ? search.refetch() : browse.refetch())}
         />
       ) : (
         <FlatList
@@ -246,11 +255,18 @@ export function TitlePicker({
             )
           }
           onEndReached={() => {
-            if (searching && search.hasNextPage && !search.isFetchingNextPage)
-              search.fetchNextPage();
+            if (searching) {
+              if (search.hasNextPage && !search.isFetchingNextPage) search.fetchNextPage();
+            } else if (browse.hasNextPage && !browse.isFetchingNextPage) {
+              browse.fetchNextPage();
+            }
           }}
           onEndReachedThreshold={0.6}
-          ListFooterComponent={searching && search.isFetchingNextPage ? <Spinner /> : null}
+          ListFooterComponent={
+            (searching ? search.isFetchingNextPage : browse.isFetchingNextPage) ? (
+              <Spinner />
+            ) : null
+          }
           renderItem={({ item: row }) => {
             const fill = cols - row.length;
             return (

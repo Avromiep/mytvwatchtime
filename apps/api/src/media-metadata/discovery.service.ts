@@ -8,7 +8,7 @@ import { RedisService } from '../common/redis/redis.service';
 import { localized } from '../common/utils/localization.util';
 import { mapMediaCardLite, mapMovie, mapShow } from '../common/utils/mapper.util';
 import { MediaMetadataService } from './media-metadata.service';
-import { TmdbProvider } from './providers/tmdb.provider';
+import { TmdbProvider, NormalizedSearchItem } from './providers/tmdb.provider';
 import { TvdbProvider } from './providers/tvdb.provider';
 import { HydrationQueue } from './hydration/hydration.queue';
 import { DiscoverQueryDto, ExploreFiltersDto, SearchQueryDto } from './dto/discover.dto';
@@ -439,22 +439,23 @@ export class DiscoveryService {
   }
 
   /**
-   * Trending entries with a short cache: resolving a page costs a TMDb call plus one
+   * List entries with a short cache: resolving a page costs a TMDb call plus one
    * lightUpsert per item (each = 1 externalId read + a mediaItem write), so an
    * uncached Discover open did ~80 queries, half of them writes. Entries are
    * user-agnostic and carry the payload's TMDB genre ids so genre filters need no
    * extra provider call; user-specific flags are applied by fetchListDtos afterwards.
+   * Shared by trending and the curated lists (top-rated / now-playing / upcoming).
    */
-  private async cachedTrendingEntries(
+  private async cachedListEntries(
+    cacheNs: string,
     kind: 'show' | 'movie',
     page: number,
+    fetchPage: (page: number) => Promise<NormalizedSearchItem[]>,
   ): Promise<TrendingEntry[]> {
-    const key = `trending:ids:v3:${kind}:${currentLanguage()}:${page}`;
+    const key = `${cacheNs}:${kind}:${currentLanguage()}:${page}`;
     const cached = await this.redis.get<TrendingEntry[]>(key);
     if (cached?.length) return cached;
-    const items = kind === 'show'
-      ? await this.tmdb.trendingShows('week', page)
-      : await this.tmdb.trendingMovies('week', page);
+    const items = await fetchPage(page);
     const entries = await Promise.all(
       items.map(async (i) => ({
         id: await (kind === 'show' ? this.meta.lightUpsertShow(i) : this.meta.lightUpsertMovie(i)),
@@ -466,7 +467,18 @@ export class DiscoveryService {
     return entries;
   }
 
-  async trendingShows(
+  /**
+   * Shared paged-list flow (trending + curated lists): unfiltered pages come from
+   * the short entry cache; genre/exclusion/country filters accumulate a filtered
+   * upstream window; sort=releaseDate re-orders the window newest-first.
+   */
+  private async listPage(
+    opts: {
+      idsNs: string;
+      windowNs: string;
+      kind: 'show' | 'movie';
+      fetchPage: (page: number) => Promise<NormalizedSearchItem[]>;
+    },
     userId?: string,
     page = 1,
     pageSize = 20,
@@ -475,17 +487,30 @@ export class DiscoveryService {
   ) {
     if (!this.tmdb.enabled)
       return {
-        items: await this.topDb(MediaType.SHOW, pageSize, userId, { ...filters, genre }),
+        items: await this.topDb(
+          opts.kind === 'show' ? MediaType.SHOW : MediaType.MOVIE,
+          pageSize,
+          userId,
+          { ...filters, genre },
+        ),
         page,
         hasMore: false,
       };
-    // NOTE: TMDB trending has no server-side sort — with sort=releaseDate the
-    // filtered window / page is re-ordered newest-first locally (sortIdsByReleaseDesc).
     const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
     const releaseSort = filters?.sort === 'releaseDate';
     const g = genre?.trim();
     if (g || this.parseSlugList(filters?.excludeGenres).length > 0 || filters?.country?.trim()) {
-      const win = await this.trendingWindow('show', g, page * pageSize, hideAnime, filters);
+      const entriesFor = (p: number) =>
+        this.cachedListEntries(opts.idsNs, opts.kind, p, opts.fetchPage);
+      const win = await this.listWindow(
+        opts.windowNs,
+        opts.kind,
+        g,
+        page * pageSize,
+        hideAnime,
+        filters,
+        entriesFor,
+      );
       const ids = releaseSort ? await this.sortIdsByReleaseDesc(win.ids) : win.ids;
       const items = await this.fetchListDtos(
         ids.slice((page - 1) * pageSize, page * pageSize),
@@ -494,12 +519,34 @@ export class DiscoveryService {
       );
       return { items, page, hasMore: ids.length > page * pageSize || !win.exhausted };
     }
-    const entries = await this.cachedTrendingEntries('show', page);
+    const entries = await this.cachedListEntries(opts.idsNs, opts.kind, page, opts.fetchPage);
     const visible = hideAnime ? await this.filterAnimeEntries(entries) : entries;
     const ids = visible.map((e) => e.id);
     const ordered = releaseSort ? await this.sortIdsByReleaseDesc(ids) : ids;
     const listItems = await this.fetchListDtos(ordered, userId, pageSize);
     return { items: listItems, page, hasMore: entries.length === 20 };
+  }
+
+  private trendingListOpts(kind: 'show' | 'movie') {
+    return {
+      idsNs: 'trending:ids:v3',
+      windowNs: 'trending:filtered:v1',
+      kind,
+      fetchPage: (p: number) =>
+        kind === 'show' ? this.tmdb.trendingShows('week', p) : this.tmdb.trendingMovies('week', p),
+    };
+  }
+
+  async trendingShows(
+    userId?: string,
+    page = 1,
+    pageSize = 20,
+    genre?: string,
+    filters?: ExploreFiltersDto,
+  ) {
+    // NOTE: TMDB trending has no server-side sort — with sort=releaseDate the
+    // filtered window / page is re-ordered newest-first locally (sortIdsByReleaseDesc).
+    return this.listPage(this.trendingListOpts('show'), userId, page, pageSize, genre, filters);
   }
 
   async trendingMovies(
@@ -509,53 +556,97 @@ export class DiscoveryService {
     genre?: string,
     filters?: ExploreFiltersDto,
   ) {
-    if (!this.tmdb.enabled)
-      return {
-        items: await this.topDb(MediaType.MOVIE, pageSize, userId, { ...filters, genre }),
-        page,
-        hasMore: false,
-      };
-    const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
-    const releaseSort = filters?.sort === 'releaseDate';
-    const g = genre?.trim();
-    if (g || this.parseSlugList(filters?.excludeGenres).length > 0 || filters?.country?.trim()) {
-      const win = await this.trendingWindow('movie', g, page * pageSize, hideAnime, filters);
-      const ids = releaseSort ? await this.sortIdsByReleaseDesc(win.ids) : win.ids;
-      const items = await this.fetchListDtos(
-        ids.slice((page - 1) * pageSize, page * pageSize),
-        userId,
-        pageSize,
-      );
-      return { items, page, hasMore: ids.length > page * pageSize || !win.exhausted };
-    }
-    const entries = await this.cachedTrendingEntries('movie', page);
-    const visible = hideAnime ? await this.filterAnimeEntries(entries) : entries;
-    const ids = visible.map((e) => e.id);
-    const ordered = releaseSort ? await this.sortIdsByReleaseDesc(ids) : ids;
-    const listItems = await this.fetchListDtos(ordered, userId, pageSize);
-    return { items: listItems, page, hasMore: entries.length === 20 };
+    return this.listPage(this.trendingListOpts('movie'), userId, page, pageSize, genre, filters);
+  }
+
+  async topRatedShows(
+    userId?: string,
+    page = 1,
+    pageSize = 20,
+    genre?: string,
+    filters?: ExploreFiltersDto,
+  ) {
+    return this.listPage(
+      {
+        idsNs: 'list:ids:v1:top-rated',
+        windowNs: 'list:filtered:v1:top-rated',
+        kind: 'show',
+        fetchPage: (p) => this.tmdb.topRatedShows(p),
+      },
+      userId,
+      page,
+      pageSize,
+      genre,
+      filters,
+    );
+  }
+
+  async topRatedMovies(
+    userId?: string,
+    page = 1,
+    pageSize = 20,
+    genre?: string,
+    filters?: ExploreFiltersDto,
+  ) {
+    return this.listPage(
+      {
+        idsNs: 'list:ids:v1:top-rated',
+        windowNs: 'list:filtered:v1:top-rated',
+        kind: 'movie',
+        fetchPage: (p) => this.tmdb.topRatedMovies(p),
+      },
+      userId,
+      page,
+      pageSize,
+      genre,
+      filters,
+    );
+  }
+
+  async nowPlayingMovies(
+    userId?: string,
+    page = 1,
+    pageSize = 20,
+    genre?: string,
+    filters?: ExploreFiltersDto,
+  ) {
+    return this.listPage(
+      {
+        idsNs: 'list:ids:v1:now-playing',
+        windowNs: 'list:filtered:v1:now-playing',
+        kind: 'movie',
+        fetchPage: (p) => this.tmdb.nowPlayingMovies(p),
+      },
+      userId,
+      page,
+      pageSize,
+      genre,
+      filters,
+    );
   }
 
   /**
-   * Filtered trending window: a genre chip (or exclusion/country filter) applied to
-   * a single 20-item trending page leaves only a handful of cards (and an
+   * Filtered list window: a genre chip (or exclusion/country filter) applied to
+   * a single 20-item list page leaves only a handful of cards (and an
    * unscrollable see-all — short content never fires onEndReached), so filtered
    * results are accumulated across upstream pages (cap 10) and cached per
-   * (kind, lang, genre, filter fingerprint). The window expands on demand when
-   * deeper pages are requested.
+   * (source, kind, lang, genre, filter fingerprint). The window expands on demand
+   * when deeper pages are requested. Shared by trending and the curated lists.
    */
-  private async trendingWindow(
+  private async listWindow(
+    windowNs: string,
     kind: 'show' | 'movie',
     genre: string | undefined,
     target: number,
     hideAnime = false,
-    filters?: ExploreFiltersDto,
+    filters: ExploreFiltersDto | undefined,
+    entriesFor: (page: number) => Promise<TrendingEntry[]>,
   ): Promise<{ ids: string[]; upstreamPages: number; exhausted: boolean }> {
     // Filter fingerprint: exclusion slugs + country scope the cached window —
     // same pattern as the :noanime|:all segment.
     const exclude = this.parseSlugList(filters?.excludeGenres);
     const country = filters?.country?.trim().toUpperCase();
-    const key = `trending:filtered:v1:${kind}:${currentLanguage()}:${genre?.toLowerCase() || 'all'}:${hideAnime ? 'noanime' : 'all'}:${exclude.join(',') || '-'}:${country || '-'}`;
+    const key = `${windowNs}:${kind}:${currentLanguage()}:${genre?.toLowerCase() || 'all'}:${hideAnime ? 'noanime' : 'all'}:${exclude.join(',') || '-'}:${country || '-'}`;
     const win = (await this.redis.get<{ ids: string[]; upstreamPages: number; exhausted: boolean }>(key))
       ?? { ids: [], upstreamPages: 0, exhausted: false };
     let rounds = 0;
@@ -564,7 +655,7 @@ export class DiscoveryService {
         win.exhausted = true;
         break;
       }
-      const entries = await this.cachedTrendingEntries(kind, win.upstreamPages + 1);
+      const entries = await entriesFor(win.upstreamPages + 1);
       win.upstreamPages += 1;
       rounds += 1;
       if (!entries.length) {
@@ -839,18 +930,37 @@ export class DiscoveryService {
 
   async discoverSections(userId?: string, genre?: string, filters?: ExploreFiltersDto) {
     const g = genre?.trim() || undefined;
-    const [trendingShows, trendingMovies] = await Promise.all([
-      this.tmdb.enabled
-        ? this.trendingShows(userId, 1, 20, g, filters)
-        : { items: await this.topDb(MediaType.SHOW, 20, userId, { ...filters, genre: g }), page: 1, hasMore: false },
-      this.tmdb.enabled
-        ? this.trendingMovies(userId, 1, 20, g, filters)
-        : { items: await this.topDb(MediaType.MOVIE, 20, userId, { ...filters, genre: g }), page: 1, hasMore: false },
-    ]);
-    const topForYou = userId
-      ? (await this.forYou(userId, 1, 10, g, filters)).items
-      : trendingShows.items.slice(0, 10);
-    return { topForYou, trendingShows: trendingShows.items, trendingMovies: trendingMovies.items };
+    // All sections resolve in parallel — the explore landing waits for the SLOWEST
+    // list, not the sum of them. Every section short-circuits to its entry cache
+    // on repeat loads, so a warm open costs zero provider calls.
+    const [trendingShows, trendingMovies, topRatedShows, topRatedMovies, nowPlaying, forYouPage] =
+      await Promise.all([
+        this.tmdb.enabled
+          ? this.trendingShows(userId, 1, 20, g, filters)
+          : { items: await this.topDb(MediaType.SHOW, 20, userId, { ...filters, genre: g }), page: 1, hasMore: false },
+        this.tmdb.enabled
+          ? this.trendingMovies(userId, 1, 20, g, filters)
+          : { items: await this.topDb(MediaType.MOVIE, 20, userId, { ...filters, genre: g }), page: 1, hasMore: false },
+        this.tmdb.enabled
+          ? this.topRatedShows(userId, 1, 20, g, filters)
+          : { items: await this.topDb(MediaType.SHOW, 20, userId, { ...filters, genre: g }), page: 1, hasMore: false },
+        this.tmdb.enabled
+          ? this.topRatedMovies(userId, 1, 20, g, filters)
+          : { items: await this.topDb(MediaType.MOVIE, 20, userId, { ...filters, genre: g }), page: 1, hasMore: false },
+        this.tmdb.enabled
+          ? this.nowPlayingMovies(userId, 1, 20, g, filters)
+          : { items: [], page: 1, hasMore: false },
+        userId ? this.forYou(userId, 1, 10, g, filters) : Promise.resolve(null),
+      ]);
+    const topForYou = forYouPage ? forYouPage.items : trendingShows.items.slice(0, 10);
+    return {
+      topForYou,
+      trendingShows: trendingShows.items,
+      trendingMovies: trendingMovies.items,
+      topRatedShows: topRatedShows.items,
+      topRatedMovies: topRatedMovies.items,
+      nowPlayingMovies: nowPlaying.items,
+    };
   }
 
   /**

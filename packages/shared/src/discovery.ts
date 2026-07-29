@@ -58,4 +58,7 @@ export interface DiscoverSectionsDto {
   topForYou: MediaCardDto[];
   trendingShows: MediaCardDto[];
   trendingMovies: MediaCardDto[];
+  topRatedShows: MediaCardDto[];
+  topRatedMovies: MediaCardDto[];
+  nowPlayingMovies: MediaCardDto[];
 }

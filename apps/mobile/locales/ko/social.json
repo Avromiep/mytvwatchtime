@@ -7,7 +7,10 @@
     "myMovies": "내 영화",
     "favoriteShows": "즐겨찾는 프로그램",
     "favoriteMovies": "즐겨찾는 영화",
-    "browse": "둘러보기"
+    "browse": "둘러보기",
+    "nowPlayingMovies": "상영 중인 영화",
+    "topRatedShows": "최고 평점 TV 프로그램",
+    "topRatedMovies": "최고 평점 영화"
   },
   "myShows": {
     "title": "내 프로그램",

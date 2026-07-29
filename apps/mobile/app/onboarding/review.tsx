@@ -285,7 +285,10 @@ function showProgressLabel(show: DraftShow, t: any): string | undefined {
     });
   }
   if (show.airedCount != null) {
-    return t('onboarding:allAiredEpisodes', { count: show.airedCount });
+    return t('onboarding:allAiredEpisodes', {
+      count: show.airedCount,
+      defaultValue: 'All {{count}} aired episodes',
+    });
   }
   return undefined;
 }

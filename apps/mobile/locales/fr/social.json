@@ -7,7 +7,10 @@
     "myMovies": "Mes films",
     "favoriteShows": "Séries préférées",
     "favoriteMovies": "Films préférés",
-    "browse": "Parcourir"
+    "browse": "Parcourir",
+    "nowPlayingMovies": "Actuellement au cinéma",
+    "topRatedShows": "Séries les mieux notées",
+    "topRatedMovies": "Films les mieux notés"
   },
   "myShows": {
     "title": "Mes séries",

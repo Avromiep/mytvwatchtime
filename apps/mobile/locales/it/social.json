@@ -7,7 +7,10 @@
     "myMovies": "I miei film",
     "favoriteShows": "Serie preferite",
     "favoriteMovies": "Film preferiti",
-    "browse": "Sfoglia"
+    "browse": "Sfoglia",
+    "nowPlayingMovies": "Ora al cinema",
+    "topRatedShows": "Serie più votate",
+    "topRatedMovies": "Film più votati"
   },
   "myShows": {
     "title": "Le mie serie",

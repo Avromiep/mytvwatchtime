@@ -45,6 +45,27 @@ export class MediaController {
     return this.discovery.trendingMovies(userId, q.page ?? 1, 20, q.genre, q);
   }
 
+  @Get('top-rated/shows')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  topRatedShows(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
+    return this.discovery.topRatedShows(userId, q.page ?? 1, 20, q.genre, q);
+  }
+
+  @Get('top-rated/movies')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  topRatedMovies(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
+    return this.discovery.topRatedMovies(userId, q.page ?? 1, 20, q.genre, q);
+  }
+
+  @Get('now-playing/movies')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  nowPlayingMovies(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
+    return this.discovery.nowPlayingMovies(userId, q.page ?? 1, 20, q.genre, q);
+  }
+
   @Get('discover/sections')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()

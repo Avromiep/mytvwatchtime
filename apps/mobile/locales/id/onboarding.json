@@ -101,5 +101,7 @@
   "a11yToggle": "Alihkan {{title}} sebagai {{mode}}",
   "a11yAdjust": "Sesuaikan progres untuk {{title}}",
   "throughLabel": "S{{season}} E{{episode}}",
-  "noAiredEpisodes": "Belum ada episode tayang yang tersedia untuk acara ini."
+  "noAiredEpisodes": "Belum ada episode tayang yang tersedia untuk acara ini.",
+  "topRatedShows": "Acara TV rating teratas",
+  "topRatedMovies": "Film rating teratas"
 }

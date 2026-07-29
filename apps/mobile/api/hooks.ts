@@ -341,6 +341,22 @@ export const useTrendingMoviesPaginated = (page: number) =>
     queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/movies?page=${page}`),
     enabled: page > 0,
   });
+/** Infinite curated TMDB list (onboarding browse grids): 20/page, server-paged. */
+const useMediaListInfinite = (path: string, filters?: ExploreFilters) =>
+  useInfiniteQuery({
+    queryKey: ['mediaList', path, filterKey(filters)],
+    queryFn: ({ pageParam }) =>
+      api.get<{ items: any[]; page: number; hasMore: boolean }>(path, {
+        page: pageParam as number,
+        ...filterParams(filters),
+      }),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last?.hasMore ? last.page + 1 : undefined),
+  });
+export const useTopRatedShowsBrowse = (filters?: ExploreFilters) =>
+  useMediaListInfinite('/top-rated/shows', filters);
+export const useTopRatedMoviesBrowse = (filters?: ExploreFilters) =>
+  useMediaListInfinite('/top-rated/movies', filters);
 export const useWatchlist = (type?: MediaType) =>
   useQuery({
     queryKey: qk.watchlist(type),
@@ -583,7 +599,24 @@ export const useToggleExternalReviewLike = () => {
       args.liked
         ? api.del(`/external-reviews/${args.reviewId}/like`)
         : api.post(`/external-reviews/${args.reviewId}/like`, {}),
-    onSuccess: (_d, vars) => {
+    onMutate: async ({ reviewId, liked }) => {
+      const key = ['externalReview', reviewId] as const;
+      const prev = qc.getQueryData(key);
+      qc.setQueryData(key, (old: any) =>
+        old
+          ? {
+              ...old,
+              likedByMe: !liked,
+              likesCount: Math.max(0, (old.likesCount ?? 0) + (liked ? -1 : 1)),
+            }
+          : old,
+      );
+      return { prev };
+    },
+    onError: (_e, vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(['externalReview', vars.reviewId], ctx.prev);
+    },
+    onSettled: (_d, _e, vars) => {
       qc.invalidateQueries({ queryKey: ['externalReview', vars.reviewId] });
       qc.invalidateQueries({ queryKey: ['comments'] });
     },
@@ -820,14 +853,43 @@ export const useMarkEpisodeWatched = () => {
   });
 };
 
+/** Optimistic per-episode transform for one season inside the ['showEpisodes'] caches. */
+const patchSeasonEpisodes = (
+  qc: ReturnType<typeof useQueryClient>,
+  seasonId: string,
+  fn: (e: any) => any,
+) =>
+  patchPrefix(qc, 'showEpisodes', (data) =>
+    mapItemsDeep(data, (s: any) =>
+      s?.id === seasonId
+        ? { ...s, episodes: (s.episodes ?? []).map((e: any) => fn(e)) }
+        : s,
+    ),
+  );
+
 export const useMarkSeasonWatched = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, on }: { id: string; on: boolean }) =>
       on ? api.post(`/seasons/${id}/watched`, {}) : api.del(`/seasons/${id}/watched`),
+    onMutate: async ({ id, on }) => {
+      const now = Date.now();
+      // Marking watches AIRED episodes only (server semantics); unmarking clears all.
+      const prevShowEpisodes = patchSeasonEpisodes(qc, id, (e) =>
+        on
+          ? e.airDate && new Date(e.airDate).getTime() <= now
+            ? { ...e, watched: true, watchCount: Math.max(1, Number(e.watchCount) || 0) }
+            : e
+          : { ...e, watched: false, watchCount: 0 },
+      );
+      return { prevShowEpisodes };
+    },
+    onError: (_e, _vars, ctx) => restorePrefix(qc, ctx?.prevShowEpisodes),
     onSuccess: (_d, vars) => {
       // A season mark watches episodes in bulk — counts as a first watched episode too.
       if (vars.on) logFirstEvent('first_watched_episode');
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['show'] });
       // A season mark is a bulk watch action — the Shows tab and leaderboard change too.
@@ -844,7 +906,14 @@ export const useRewatchSeason = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post(`/seasons/${id}/rewatch`, {}),
-    onSuccess: () => {
+    onMutate: async (id: string) => {
+      const prevShowEpisodes = patchSeasonEpisodes(qc, id, (e) =>
+        e.watched ? { ...e, watchCount: Math.max(1, (Number(e.watchCount) || 1) + 1) } : e,
+      );
+      return { prevShowEpisodes };
+    },
+    onError: (_e, _id, ctx) => restorePrefix(qc, ctx?.prevShowEpisodes),
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['show'] });
       qc.invalidateQueries({ queryKey: ['watchNext'] });
@@ -979,7 +1048,16 @@ export const useUnwatchSeasonOnce = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post(`/seasons/${id}/unwatch-once`, {}),
-    onSuccess: () => {
+    onMutate: async (id: string) => {
+      const prevShowEpisodes = patchSeasonEpisodes(qc, id, (e) =>
+        (Number(e.watchCount) || 0) > 1
+          ? { ...e, watchCount: Math.max(1, (Number(e.watchCount) || 1) - 1) }
+          : e,
+      );
+      return { prevShowEpisodes };
+    },
+    onError: (_e, _id, ctx) => restorePrefix(qc, ctx?.prevShowEpisodes),
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['show'] });
       qc.invalidateQueries({ queryKey: ['watchNext'] });
@@ -1281,13 +1359,76 @@ export function useShowVotes(showId: string) {
   return { rating };
 }
 
+/**
+ * Item-wise transform across every cached list shape: plain arrays (showEpisodes),
+ * paginated `{ items }`, and infinite `{ pages: [{ items }] }`. Used by the
+ * optimistic mutation patches below.
+ */
+const mapItemsDeep = (data: any, fn: (item: any) => any): any => {
+  if (!data) return data;
+  if (Array.isArray(data)) return data.map(fn);
+  if (Array.isArray(data.items)) return { ...data, items: data.items.map(fn) };
+  if (Array.isArray(data.pages))
+    return {
+      ...data,
+      pages: data.pages.map((p: any) =>
+        Array.isArray(p?.items) ? { ...p, items: p.items.map(fn) } : p,
+      ),
+    };
+  return data;
+};
+
+/** Same traversal with removal. */
+const filterItemsDeep = (data: any, pred: (item: any) => boolean): any => {
+  if (!data) return data;
+  if (Array.isArray(data)) return data.filter(pred);
+  if (Array.isArray(data.items)) return { ...data, items: data.items.filter(pred) };
+  if (Array.isArray(data.pages))
+    return {
+      ...data,
+      pages: data.pages.map((p: any) =>
+        Array.isArray(p?.items) ? { ...p, items: p.items.filter(pred) } : p,
+      ),
+    };
+  return data;
+};
+
+/** Snapshot every cache entry under a prefix so an optimistic patch can roll back. */
+const patchPrefix = (qc: ReturnType<typeof useQueryClient>, prefix: string, fn: (data: any) => any) => {
+  const prev = qc.getQueriesData({ queryKey: [prefix] });
+  prev.forEach(([key, data]: [any, any]) => {
+    if (data !== undefined) qc.setQueryData(key, fn(data));
+  });
+  return prev;
+};
+
+const restorePrefix = (qc: ReturnType<typeof useQueryClient>, prev: [any, any][] | undefined) => {
+  prev?.forEach(([key, data]: [any, any]) => qc.setQueryData(key, data));
+};
+
 export const useToggleMovieWatchlist = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, on }: { id: string; on: boolean }) =>
       on ? api.post(`/movies/${id}/watchlist`, {}) : api.del(`/movies/${id}/watchlist`),
+    onMutate: async ({ id, on }) => {
+      const prevMovie = qc.getQueryData(qk.movie(id));
+      qc.setQueryData(qk.movie(id), (old: any) =>
+        old ? { ...old, inWatchlist: on } : old,
+      );
+      // Removing evicts the card from cached watchlist grids immediately; adding
+      // is left to the refetch (no card payload available here).
+      const prevWatchlist = on ? undefined : patchPrefix(qc, 'watchlist', (d) => filterItemsDeep(d, (it: any) => it.id !== id));
+      return { prevMovie, prevWatchlist };
+    },
+    onError: (_e, vars, ctx) => {
+      if (ctx?.prevMovie) qc.setQueryData(qk.movie(vars.id), ctx.prevMovie);
+      restorePrefix(qc, ctx?.prevWatchlist);
+    },
     onSuccess: (_d, vars) => {
       if (vars.on) logFirstEvent('first_movie_watchlist');
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['watchlist'] });
       qc.invalidateQueries({ queryKey: ['movie'] });
     },
@@ -1386,7 +1527,29 @@ export const useToggleWatchlist = () => {
   return useMutation({
     mutationFn: ({ id, on }: { id: string; on: boolean }) =>
       on ? api.post(`/shows/${id}/watchlist`, {}) : api.del(`/shows/${id}/watchlist`),
-    onSuccess: () => {
+    onMutate: async ({ id, on }) => {
+      const prevShow = qc.getQueryData(qk.show(id));
+      qc.setQueryData(qk.show(id), (old: any) => (old ? { ...old, inWatchlist: on } : old));
+      // Removing evicts the card from watchlist grids + the My Shows "Not started"
+      // bucket (server marks the show dropped). Adding is left to the refetch.
+      const prevWatchlist = on
+        ? undefined
+        : patchPrefix(qc, 'watchlist', (d) => filterItemsDeep(d, (it: any) => it.id !== id));
+      const prevByStatus = on
+        ? undefined
+        : patchPrefix(qc, 'showsByStatus', (d: any) =>
+            d
+              ? { ...d, notStarted: (d.notStarted ?? []).filter((i: any) => i.id !== id) }
+              : d,
+          );
+      return { prevShow, prevWatchlist, prevByStatus };
+    },
+    onError: (_e, vars, ctx) => {
+      if (ctx?.prevShow) qc.setQueryData(qk.show(vars.id), ctx.prevShow);
+      restorePrefix(qc, ctx?.prevWatchlist);
+      restorePrefix(qc, ctx?.prevByStatus);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['watchlist'] });
       qc.invalidateQueries({ queryKey: ['show'] });
       // The Shows tab's "Watch List" and "Upcoming" sections are fed by these
@@ -1406,7 +1569,21 @@ export const useToggleFavorite = () => {
   return useMutation({
     mutationFn: ({ id, on, kind }: { id: string; on: boolean; kind: 'shows' | 'movies' }) =>
       on ? api.post(`/${kind}/${id}/favorite`, {}) : api.del(`/${kind}/${id}/favorite`),
-    onSuccess: () => {
+    onMutate: async ({ id, on, kind }) => {
+      const detailKey = kind === 'shows' ? qk.show(id) : qk.movie(id);
+      const prevDetail = qc.getQueryData(detailKey);
+      qc.setQueryData(detailKey, (old: any) => (old ? { ...old, favorite: on } : old));
+      // Removing evicts the card from cached favorites grids; adding refetches.
+      const prevFavorites = on
+        ? undefined
+        : patchPrefix(qc, 'favorites', (d) => filterItemsDeep(d, (it: any) => it.id !== id));
+      return { prevDetail, detailKey, prevFavorites };
+    },
+    onError: (_e, _vars, ctx) => {
+      if (ctx?.prevDetail) qc.setQueryData(ctx.detailKey, ctx.prevDetail);
+      restorePrefix(qc, ctx?.prevFavorites);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['favorites'] });
       qc.invalidateQueries({ queryKey: ['show'] });
       qc.invalidateQueries({ queryKey: ['movie'] });
@@ -1471,7 +1648,21 @@ export const useMarkNotificationRead = () => {
       all
         ? api.post('/me/notifications/mark-all-read', {})
         : api.patch(`/me/notifications/${id}/read`, {}),
-    onSuccess: () => {
+    onMutate: async ({ id, all }) => {
+      const prevNotifications = patchPrefix(qc, 'notifications', (d) =>
+        mapItemsDeep(d, (n: any) => (all || n.id === id ? { ...n, read: true } : n)),
+      );
+      const prevCount = qc.getQueryData(qk.notificationsUnreadCount);
+      qc.setQueryData(qk.notificationsUnreadCount, (old: any) =>
+        typeof old === 'number' ? (all ? 0 : Math.max(0, old - 1)) : old,
+      );
+      return { prevNotifications, prevCount };
+    },
+    onError: (_e, _vars, ctx) => {
+      restorePrefix(qc, ctx?.prevNotifications);
+      if (ctx?.prevCount !== undefined) qc.setQueryData(qk.notificationsUnreadCount, ctx.prevCount);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['notifications'] });
       qc.invalidateQueries({ queryKey: qk.notificationsUnreadCount });
     },
@@ -1482,7 +1673,19 @@ export const useClearNotifications = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api.del('/me/notifications'),
-    onSuccess: () => {
+    onMutate: async () => {
+      const prevNotifications = patchPrefix(qc, 'notifications', (d) =>
+        filterItemsDeep(d, () => false),
+      );
+      const prevCount = qc.getQueryData(qk.notificationsUnreadCount);
+      qc.setQueryData(qk.notificationsUnreadCount, 0);
+      return { prevNotifications, prevCount };
+    },
+    onError: (_e, _vars, ctx) => {
+      restorePrefix(qc, ctx?.prevNotifications);
+      if (ctx?.prevCount !== undefined) qc.setQueryData(qk.notificationsUnreadCount, ctx.prevCount);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['notifications'] });
       qc.invalidateQueries({ queryKey: qk.notificationsUnreadCount });
     },
@@ -1769,7 +1972,16 @@ export const useToggleListLike = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post(`/lists/${id}/like`),
-    onSuccess: () => {
+    onMutate: async (id: string) => {
+      const prev = patchPrefix(qc, 'list', (d: any) =>
+        d?.id === id
+          ? { ...d, isLiked: !d.isLiked, likeCount: Math.max(0, (d.likeCount ?? 0) + (d.isLiked ? -1 : 1)) }
+          : d,
+      );
+      return { prev };
+    },
+    onError: (_e, _id, ctx) => restorePrefix(qc, ctx?.prev),
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['list'] });
       qc.invalidateQueries({ queryKey: ['myLists'] });
     },
@@ -1780,7 +1992,20 @@ export const useToggleListSub = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post(`/lists/${id}/subscribe`),
-    onSuccess: () => {
+    onMutate: async (id: string) => {
+      const prev = patchPrefix(qc, 'list', (d: any) =>
+        d?.id === id
+          ? {
+              ...d,
+              isSubscribed: !d.isSubscribed,
+              subCount: Math.max(0, (d.subCount ?? 0) + (d.isSubscribed ? -1 : 1)),
+            }
+          : d,
+      );
+      return { prev };
+    },
+    onError: (_e, _id, ctx) => restorePrefix(qc, ctx?.prev),
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['list'] });
       qc.invalidateQueries({ queryKey: ['followedLists'] });
     },
@@ -1794,7 +2019,17 @@ export const useToggleTrackingPause = () => {
       paused
         ? api.post<{ trackingPaused: boolean }>(`/shows/${id}/pause`)
         : api.del<{ trackingPaused: boolean }>(`/shows/${id}/pause`),
-    onSuccess: () => {
+    onMutate: async ({ id, paused }) => {
+      const prevShow = qc.getQueryData(qk.show(id));
+      qc.setQueryData(qk.show(id), (old: any) =>
+        old ? { ...old, trackingPaused: paused } : old,
+      );
+      return { prevShow };
+    },
+    onError: (_e, vars, ctx) => {
+      if (ctx?.prevShow) qc.setQueryData(qk.show(vars.id), ctx.prevShow);
+    },
+    onSettled: () => {
       // Paused shows leave watch-next/upcoming; the show detail carries the flag.
       qc.invalidateQueries({ queryKey: ['show'] });
       qc.invalidateQueries({ queryKey: ['watchNext'] });
@@ -1809,7 +2044,14 @@ export const useToggleListNotify = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post(`/lists/${id}/notify`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['list'] }),
+    onMutate: async (id: string) => {
+      const prev = patchPrefix(qc, 'list', (d: any) =>
+        d?.id === id ? { ...d, notifyOnAdd: !d.notifyOnAdd } : d,
+      );
+      return { prev };
+    },
+    onError: (_e, _id, ctx) => restorePrefix(qc, ctx?.prev),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['list'] }),
   });
 };
 
@@ -1895,7 +2137,31 @@ export const useRemoveListItem = () => {
   return useMutation({
     mutationFn: ({ listId, itemId }: { listId: string; itemId: string }) =>
       api.del(`/lists/${listId}/items/${itemId}`),
-    onSuccess: () => {
+    onMutate: async ({ listId, itemId }) => {
+      // Evict the row from cached item pages; adjust the list's type counter using
+      // the removed item's mediaType when we can find it.
+      let removedType: string | undefined;
+      const prevItems = patchPrefix(qc, 'listItems', (d: any) => {
+        const find = (items: any[]) => items?.find((i: any) => i.id === itemId);
+        removedType =
+          removedType ??
+          (Array.isArray(d?.pages)
+            ? d.pages.map((p: any) => find(p?.items ?? [])).find(Boolean)?.mediaType
+            : find(d?.items ?? [])?.mediaType);
+        return filterItemsDeep(d, (i: any) => i.id !== itemId);
+      });
+      const prevList = patchPrefix(qc, 'list', (d: any) => {
+        if (d?.id !== listId || !removedType) return d;
+        const key = removedType === 'MOVIE' ? 'movieCount' : 'showCount';
+        return { ...d, [key]: Math.max(0, (d[key] ?? 0) - 1) };
+      });
+      return { prevItems, prevList };
+    },
+    onError: (_e, _vars, ctx) => {
+      restorePrefix(qc, ctx?.prevItems);
+      restorePrefix(qc, ctx?.prevList);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['listItems'] });
       qc.invalidateQueries({ queryKey: ['list'] });
     },
@@ -1943,11 +2209,42 @@ export const useUserLists = (username: string) =>
     enabled: !!username,
   });
 
+const patchFollow = (
+  qc: ReturnType<typeof useQueryClient>,
+  userId: string,
+  following: boolean,
+) => {
+  // Public profile pages are keyed by username — match by the user's id inside.
+  const prevProfiles = patchPrefix(qc, 'profile', (d: any) =>
+    d?.id === userId
+      ? {
+          ...d,
+          isFollowing: following,
+          followersCount: Math.max(0, (d.followersCount ?? 0) + (following ? 1 : -1)),
+        }
+      : d,
+  );
+  const prevSearch = patchPrefix(qc, 'userSearch', (d) =>
+    mapItemsDeep(d, (u: any) => (u?.id === userId ? { ...u, isFollowing: following } : u)),
+  );
+  return { prevProfiles, prevSearch };
+};
+
+const rollbackFollow = (
+  qc: ReturnType<typeof useQueryClient>,
+  ctx: { prevProfiles: [any, any][]; prevSearch: [any, any][] } | undefined,
+) => {
+  restorePrefix(qc, ctx?.prevProfiles);
+  restorePrefix(qc, ctx?.prevSearch);
+};
+
 export const useFollowUser = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (userId: string) => api.post(`/users/${userId}/follow`),
-    onSuccess: () => {
+    onMutate: async (userId: string) => patchFollow(qc, userId, true),
+    onError: (_e, _id, ctx) => rollbackFollow(qc, ctx),
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['profile'] });
       qc.invalidateQueries({ queryKey: ['userSearch'] });
       qc.invalidateQueries({ queryKey: ['follows'] });
@@ -1959,7 +2256,9 @@ export const useUnfollowUser = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (userId: string) => api.del(`/users/${userId}/follow`),
-    onSuccess: () => {
+    onMutate: async (userId: string) => patchFollow(qc, userId, false),
+    onError: (_e, _id, ctx) => rollbackFollow(qc, ctx),
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['profile'] });
       qc.invalidateQueries({ queryKey: ['userSearch'] });
       qc.invalidateQueries({ queryKey: ['follows'] });

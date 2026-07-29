@@ -7,7 +7,10 @@
     "myMovies": "أفلامي",
     "favoriteShows": "المسلسلات المفضلة",
     "favoriteMovies": "الأفلام المفضلة",
-    "browse": "تصفح"
+    "browse": "تصفح",
+    "nowPlayingMovies": "يُعرض الآن",
+    "topRatedShows": "أعلى المسلسلات تقييماً",
+    "topRatedMovies": "أعلى الأفلام تقييماً"
   },
   "myShows": {
     "title": "مسلسلاتي",

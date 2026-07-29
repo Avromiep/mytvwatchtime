@@ -162,12 +162,13 @@ export const PosterCard = React.memo(PosterCardImpl, (prev, next) =>
   prev.typeBadge === next.typeBadge,
 );
 
-export function PosterGrid({ data, kind, emptyTitle, emptyCta, minCardWidth = 110 }: { data: any[]; kind: 'shows' | 'movies'; emptyTitle: string; emptyCta?: string; minCardWidth?: number }) {
+export function PosterGrid({ data, kind, emptyTitle, emptyCta, minCardWidth = 96 }: { data: any[]; kind: 'shows' | 'movies'; emptyTitle: string; emptyCta?: string; minCardWidth?: number }) {
   const { width } = useWindowDimensions();
   if (!data || data.length === 0) return <EmptyState title={emptyTitle} cta={emptyCta} icon="layers-outline" />;
   const containerW = width - spacing.lg * 2;
   const gap = spacing.sm;
-  const cols = Math.max(2, Math.floor((containerW + gap) / (minCardWidth + gap)));
+  // Minimum 3 cards per row — 2-wide poster grids look sparse on phones.
+  const cols = Math.max(3, Math.floor((containerW + gap) / (minCardWidth + gap)));
   const cellW = Math.floor((containerW - gap * (cols - 1)) / cols);
   const rows: any[][] = [];
   for (let i = 0; i < data.length; i += cols) rows.push(data.slice(i, i + cols));

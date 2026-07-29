@@ -503,7 +503,7 @@ describe('DiscoveryService trending release-date sort', () => {
       .spyOn(svc as any, 'fetchListDtos')
       .mockImplementation(async (ids: unknown) => ids as any);
     jest
-      .spyOn(svc as any, 'cachedTrendingEntries')
+      .spyOn(svc as any, 'cachedListEntries')
       .mockResolvedValue(Object.keys(years).map((id) => ({ id, g: [], oc: [] })));
     return { svc, prisma };
   };
@@ -529,6 +529,82 @@ describe('DiscoveryService trending release-date sort', () => {
     await svc.discoverSections(undefined, undefined, { sort: 'releaseDate' });
     expect(tmdb.discoverShows).not.toHaveBeenCalled();
     expect(tmdb.discoverMovies).not.toHaveBeenCalled();
+  });
+});
+
+/** Curated TMDB lists (top-rated / now-playing / upcoming) share the listPage flow. */
+describe('DiscoveryService curated lists', () => {
+  const make = () => {
+    const tmdb = {
+      enabled: true,
+      topRatedShows: jest.fn().mockResolvedValue([]),
+      topRatedMovies: jest.fn().mockResolvedValue([]),
+      nowPlayingMovies: jest.fn().mockResolvedValue([]),
+      trendingShows: jest.fn().mockResolvedValue([]),
+      trendingMovies: jest.fn().mockResolvedValue([]),
+    };
+    const prisma = {
+      userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
+      mediaItem: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const svc = new DiscoveryService(
+      tmdb as any,
+      {} as any,
+      {} as any,
+      prisma as any,
+      {} as any,
+      {} as any,
+    );
+    jest
+      .spyOn(svc as any, 'cachedListEntries')
+      .mockResolvedValue([{ id: 'x', g: [], oc: [] }]);
+    jest
+      .spyOn(svc as any, 'fetchListDtos')
+      .mockImplementation(async (ids: unknown) => ids as any);
+    return { svc, tmdb };
+  };
+
+  it('topRatedShows/topRatedMovies route through their provider endpoints', async () => {
+    const { svc, tmdb } = make();
+    expect(await svc.topRatedShows(undefined, 1, 20)).toEqual({ items: ['x'], page: 1, hasMore: false });
+    expect(await svc.topRatedMovies(undefined, 1, 20)).toEqual({ items: ['x'], page: 1, hasMore: false });
+    expect((svc as any).cachedListEntries).toHaveBeenCalledWith(
+      'list:ids:v1:top-rated',
+      'show',
+      1,
+      expect.any(Function),
+    );
+    expect((svc as any).cachedListEntries).toHaveBeenCalledWith(
+      'list:ids:v1:top-rated',
+      'movie',
+      1,
+      expect.any(Function),
+    );
+    expect(tmdb.trendingShows).not.toHaveBeenCalled();
+  });
+
+  it('nowPlayingMovies routes through its provider endpoint', async () => {
+    const { svc } = make();
+    await svc.nowPlayingMovies(undefined, 2, 20);
+    expect((svc as any).cachedListEntries).toHaveBeenCalledWith(
+      'list:ids:v1:now-playing',
+      'movie',
+      2,
+      expect.any(Function),
+    );
+  });
+
+  it('discoverSections returns every section, anonymous topForYou = trending slice', async () => {
+    const { svc } = make();
+    const res = await svc.discoverSections(undefined);
+    expect(res).toEqual({
+      topForYou: ['x'],
+      trendingShows: ['x'],
+      trendingMovies: ['x'],
+      topRatedShows: ['x'],
+      topRatedMovies: ['x'],
+      nowPlayingMovies: ['x'],
+    });
   });
 });
 

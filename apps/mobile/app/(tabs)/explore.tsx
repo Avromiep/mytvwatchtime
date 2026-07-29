@@ -89,7 +89,7 @@ export default function ExploreScreen() {
   // as My Shows). Renders pre-grouped rows per the project grid pattern.
   const containerW = Math.max(0, width - spacing.lg * 2);
   const gridGap = spacing.sm;
-  const cols = Math.max(2, Math.floor((containerW + gridGap) / (110 + gridGap)));
+  const cols = Math.max(3, Math.floor((containerW + gridGap) / (96 + gridGap)));
   const cellW = Math.floor((containerW - gridGap * (cols - 1)) / cols);
 
   const searchItems = useMemo(
@@ -373,12 +373,39 @@ export default function ExploreScreen() {
                 </>
               )}
               {mediaType !== 'shows' && (
+                <>
+                  <Carousel
+                    title={t('explore:trendingMovies')}
+                    data={sections.data?.trendingMovies ?? []}
+                    kind="movies"
+                    action={t('explore:seeAll')}
+                    onAction={() => router.push(moreHref('trending-movies'))}
+                  />
+                  <Carousel
+                    title={t('explore:nowPlayingMovies')}
+                    data={sections.data?.nowPlayingMovies ?? []}
+                    kind="movies"
+                    action={t('explore:seeAll')}
+                    onAction={() => router.push(moreHref('now-playing-movies'))}
+                  />
+                </>
+              )}
+              {mediaType !== 'movies' && (
                 <Carousel
-                  title={t('explore:trendingMovies')}
-                  data={sections.data?.trendingMovies ?? []}
+                  title={t('explore:topRatedShows')}
+                  data={sections.data?.topRatedShows ?? []}
+                  kind="shows"
+                  action={t('explore:seeAll')}
+                  onAction={() => router.push(moreHref('top-rated-shows'))}
+                />
+              )}
+              {mediaType !== 'shows' && (
+                <Carousel
+                  title={t('explore:topRatedMovies')}
+                  data={sections.data?.topRatedMovies ?? []}
                   kind="movies"
                   action={t('explore:seeAll')}
-                  onAction={() => router.push(moreHref('trending-movies'))}
+                  onAction={() => router.push(moreHref('top-rated-movies'))}
                 />
               )}
             </>

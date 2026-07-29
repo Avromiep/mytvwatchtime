@@ -41,5 +41,8 @@
       "CA": "Canadá",
       "AU": "Australia"
     }
-  }
+  },
+  "nowPlayingMovies": "En cines",
+  "topRatedShows": "Series mejor valoradas",
+  "topRatedMovies": "Películas mejor valoradas"
 }

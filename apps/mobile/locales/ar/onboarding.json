@@ -101,5 +101,7 @@
   "a11yToggle": "تبديل {{title}} كـ{{mode}}",
   "a11yAdjust": "ضبط تقدم {{title}}",
   "throughLabel": "م{{season}} ح{{episode}}",
-  "noAiredEpisodes": "لا توجد حلقات معروضة متاحة لهذا المسلسل بعد."
+  "noAiredEpisodes": "لا توجد حلقات معروضة متاحة لهذا المسلسل بعد.",
+  "topRatedShows": "أعلى المسلسلات تقييماً",
+  "topRatedMovies": "أعلى الأفلام تقييماً"
 }
