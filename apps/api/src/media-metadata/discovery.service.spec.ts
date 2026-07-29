@@ -474,6 +474,64 @@ describe('DiscoveryService explore filters (DB paths)', () => {
   });
 });
 
+/** Trending sort: TMDB trending has no server-side sort, so sort=releaseDate
+ *  re-orders the window/page locally (newest first, unknown years last). */
+describe('DiscoveryService trending release-date sort', () => {
+  const make = (years: Record<string, number | null>) => {
+    const tmdb = { enabled: true };
+    const prisma = {
+      userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
+      mediaItem: {
+        findMany: jest.fn().mockResolvedValue(
+          Object.entries(years).map(([id, y]) => ({
+            id,
+            show: { yearStart: y },
+            movie: null,
+          })),
+        ),
+      },
+    };
+    const svc = new DiscoveryService(
+      tmdb as any,
+      {} as any,
+      {} as any,
+      prisma as any,
+      {} as any,
+      {} as any,
+    );
+    jest
+      .spyOn(svc as any, 'fetchListDtos')
+      .mockImplementation(async (ids: unknown) => ids as any);
+    jest
+      .spyOn(svc as any, 'cachedTrendingEntries')
+      .mockResolvedValue(Object.keys(years).map((id) => ({ id, g: [], oc: [] })));
+    return { svc, prisma };
+  };
+
+  it('re-orders the trending page newest-first when sort=releaseDate', async () => {
+    const { svc } = make({ a: 2015, b: 2024, c: null, d: 2020 });
+    const res = await svc.trendingShows(undefined, 1, 20, undefined, { sort: 'releaseDate' });
+    expect(res.items).toEqual(['b', 'd', 'a', 'c']);
+  });
+
+  it('keeps the trending order on the default popularity sort', async () => {
+    const { svc, prisma } = make({ a: 2015, b: 2024, c: null, d: 2020 });
+    const res = await svc.trendingShows(undefined, 1, 20);
+    expect(res.items).toEqual(['a', 'b', 'c', 'd']);
+    expect(prisma.mediaItem.findMany).not.toHaveBeenCalled();
+  });
+
+  it('discoverSections keeps the trending path for every sort (sorting happens inside)', async () => {
+    const { svc } = make({ a: 2015, b: 2024 });
+    const tmdb = (svc as any).tmdb;
+    tmdb.discoverShows = jest.fn();
+    tmdb.discoverMovies = jest.fn();
+    await svc.discoverSections(undefined, undefined, { sort: 'releaseDate' });
+    expect(tmdb.discoverShows).not.toHaveBeenCalled();
+    expect(tmdb.discoverMovies).not.toHaveBeenCalled();
+  });
+});
+
 /** TMDB discover: exclusion/country params + app-level sort mapping. */
 describe('TmdbProvider discover filters', () => {
   const make = () => {

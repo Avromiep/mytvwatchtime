@@ -96,10 +96,13 @@ export class LibraryService {
    * Full watch-list computation (uncapped rails), cached per user+lang for 30s.
    * Both watchNext (capped presentation payload) and watchNextBucket (per-rail
    * pagination for the "See more" buttons) derive from this one computation.
-   * Key is v2: the cached shape changed from {items} to per-bucket arrays.
+   * Key carries a v2 infix AFTER the userId (the cached shape changed from
+   * {items} to per-bucket arrays) — it must stay inside the
+   * `watchnext:{userId}:*` invalidation pattern shared by tracking/collections/
+   * import/onboarding, or removed/paused shows linger until the TTL.
    */
   private async computeWatchNext(userId: string) {
-    const cacheKey = `watchnext:v2:${userId}:${currentLanguage()}`;
+    const cacheKey = `watchnext:${userId}:v2:${currentLanguage()}`;
     const cached = await this.redis.get<any>(cacheKey);
     if (cached) return cached;
 
@@ -854,8 +857,9 @@ export class LibraryService {
 
   async showsByStatus(userId: string) {
     // Same 30s user+lang cache pattern as watchNext/upcoming (busted by tracking writes).
-    // v3: the result gained the `paused` bucket.
-    const cacheKey = `showsprogress:v3:${userId}:${currentLanguage()}`;
+    // v3 infix (the result gained the `paused` bucket) stays AFTER the userId so the
+    // `showsprogress:{userId}:*` invalidation pattern keeps matching.
+    const cacheKey = `showsprogress:${userId}:v3:${currentLanguage()}`;
     const cached = await this.redis.get<any>(cacheKey);
     if (cached) return cached;
 

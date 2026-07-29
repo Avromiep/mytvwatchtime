@@ -40,6 +40,7 @@ function PosterCardImpl({
   year,
   width = 130,
   style,
+  typeBadge = false,
 }: {
   id: string;
   kind: 'shows' | 'movies';
@@ -52,6 +53,8 @@ function PosterCardImpl({
   year?: number | null;
   width?: number;
   style?: StyleProp<ViewStyle>;
+  /** Mixed-type grids (search): small tv/film icon badge on the poster's top-right. */
+  typeBadge?: boolean;
 }) {
   const { tokens } = useAppearance();
   const h = width * 1.5;
@@ -89,6 +92,26 @@ function PosterCardImpl({
               <T variant="micro" style={{ color: tokens.mediaText, marginLeft: 2 }}>
                 {rating.toFixed(1)}
               </T>
+            </View>
+          ) : null}
+
+          {typeBadge ? (
+            <View
+              style={{
+                position: 'absolute',
+                top: 4,
+                right: 4,
+                backgroundColor: tokens.mediaScrim,
+                borderRadius: radius.sm,
+                padding: 3,
+              }}
+              pointerEvents="none"
+            >
+              <Ionicons
+                name={kind === 'shows' ? 'tv-outline' : 'film-outline'}
+                size={11}
+                color={tokens.mediaText}
+              />
             </View>
           ) : null}
 
@@ -135,7 +158,8 @@ export const PosterCard = React.memo(PosterCardImpl, (prev, next) =>
   prev.progress === next.progress &&
   prev.rating === next.rating &&
   prev.year === next.year &&
-  prev.width === next.width,
+  prev.width === next.width &&
+  prev.typeBadge === next.typeBadge,
 );
 
 export function PosterGrid({ data, kind, emptyTitle, emptyCta, minCardWidth = 110 }: { data: any[]; kind: 'shows' | 'movies'; emptyTitle: string; emptyCta?: string; minCardWidth?: number }) {

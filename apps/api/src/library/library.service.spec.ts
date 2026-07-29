@@ -64,6 +64,25 @@ describe('LibraryService watchNext capped rails + bucket pagination', () => {
     expect(page3.hasMore).toBe(false);
     expect(page3.total).toBe(23);
   });
+
+  it('watch-next cache key stays inside the shared `watchnext:{userId}:*` invalidation glob', async () => {
+    // Regression: a `watchnext:v2:{userId}:{lang}` key never matched the
+    // `delByPattern('watchnext:{userId}:*')` calls in tracking/collections/import/
+    // onboarding, so removed/paused shows lingered in the Shows tab until the TTL.
+    const { svc, prisma, redis } = makeSvc();
+    (prisma as any).watchHistory = { findMany: jest.fn().mockResolvedValue([]) };
+    (prisma as any).userEpisodeStatus = { findMany: jest.fn().mockResolvedValue([]) };
+    prisma.userShowStatus.findMany.mockResolvedValue([]);
+    prisma.watchlistItem.findMany.mockResolvedValue([]);
+    prisma.$queryRaw.mockResolvedValue([]);
+
+    await svc.watchNext('u1');
+
+    const key = (redis.set.mock.calls[0]?.[0] ?? '') as string;
+    expect(key.startsWith('watchnext:u1:')).toBe(true);
+    // The glob `watchnext:u1:*` must match: prefix + any suffix.
+    expect(`watchnext:u1:*`.slice(0, -1) + key.slice('watchnext:u1:'.length)).toContain(key);
+  });
 });
 
 describe('LibraryService showsByStatus paused bucket', () => {
@@ -110,7 +129,7 @@ describe('LibraryService showsByStatus paused bucket', () => {
     expect(res.paused.map((i: any) => i.id)).toEqual(['paused2', 'paused1']); // pausedAt desc
     expect(res.notStarted.map((i: any) => i.id)).toEqual(['fresh1']);
     expect(redis.set).toHaveBeenCalledWith(
-      expect.stringContaining('showsprogress:v3:u1:'),
+      expect.stringContaining('showsprogress:u1:v3:'),
       expect.anything(),
       30,
     );

@@ -320,6 +320,7 @@ export default function ExploreScreen() {
                         year={cardYear(item)}
                         width={cellW}
                         style={{ marginRight: 0 }}
+                        typeBadge
                       />
                     </View>
                   ))}

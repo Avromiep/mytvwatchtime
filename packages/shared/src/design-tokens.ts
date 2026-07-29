@@ -20,6 +20,10 @@ export interface Tokens {
   primary: string;
   primaryForeground: string;
   primaryMuted: string;
+  /** Soft primary-tinted fill for SELECTED states (voting tiles, filter pills) —
+   *  textPrimary on top stays legible in both themes (primaryMuted is a full-strength
+   *  gold that swallows the yellow accent). */
+  primarySoft: string;
   success: string;
   danger: string;
   warning: string;
@@ -61,6 +65,7 @@ const dark: Tokens = {
   primary: '#FFD60A',
   primaryForeground: '#0F1115',
   primaryMuted: '#C9AC00',
+  primarySoft: '#2E2A17',
   success: '#22C55E',
   danger: '#EF4444',
   warning: '#F59E0B',
@@ -100,6 +105,7 @@ const light: Tokens = {
   primary: '#FFD60A',
   primaryForeground: '#0F1115',
   primaryMuted: '#C9AC00',
+  primarySoft: '#FEF3C7',
   success: '#16A34A',
   danger: '#DC2626',
   warning: '#D97706',

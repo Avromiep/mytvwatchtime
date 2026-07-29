@@ -1394,6 +1394,8 @@ export const useToggleWatchlist = () => {
       // evict it from both.
       qc.invalidateQueries({ queryKey: ['watchNext'] });
       qc.invalidateQueries({ queryKey: ['upcoming'] });
+      // My Shows buckets (watching/notStarted) — removal marks the show dropped.
+      qc.invalidateQueries({ queryKey: ['showsByStatus'] });
       void refreshWidgets();
     },
   });
@@ -1797,6 +1799,8 @@ export const useToggleTrackingPause = () => {
       qc.invalidateQueries({ queryKey: ['show'] });
       qc.invalidateQueries({ queryKey: ['watchNext'] });
       qc.invalidateQueries({ queryKey: ['upcoming'] });
+      // My Shows has its own "Paused" bucket fed by /me/shows/progress.
+      qc.invalidateQueries({ queryKey: ['showsByStatus'] });
     },
   });
 };

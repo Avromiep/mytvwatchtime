@@ -175,8 +175,10 @@ export class DiscoveryService {
         )
       ).map((e) => e.id);
     }
-    // NOTE: sort=releaseDate is honored on the DB browse paths and TMDB discover;
-    // provider search keeps its relevance order (the window carries no release dates).
+    // releaseDate sort: order the (bounded) window newest-first before slicing —
+    // provider relevance can't carry dates, so we resolve years for the window ids
+    // in one DB round trip. Unknown years sink to the bottom.
+    if (q.sort === 'releaseDate') orderedIds = await this.sortIdsByReleaseDesc(orderedIds);
     const slice = orderedIds.slice(start, start + want);
     const items = await this.fetchListDtos(slice, userId, want);
     // hasMore via paginate's formula: +1 while more pages may exist upstream.
@@ -336,6 +338,21 @@ export class DiscoveryService {
     return [...poster, ...noPoster];
   }
 
+  /** Newest-first ordering for an id window (one query; unknown years sink last). */
+  private async sortIdsByReleaseDesc(ids: string[]): Promise<string[]> {
+    if (ids.length < 2) return ids;
+    const rows = await this.prisma.mediaItem.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        show: { select: { yearStart: true } },
+        movie: { select: { releaseYear: true } },
+      },
+    });
+    const year = new Map(rows.map((r) => [r.id, r.show?.yearStart ?? r.movie?.releaseYear ?? 0]));
+    return [...ids].sort((a, b) => (year.get(b) ?? 0) - (year.get(a) ?? 0));
+  }
+
   private async searchViaDb(term: string, q: SearchQueryDto, userId?: string) {
     const hideAnime = q.hideAnime || (await this.resolveHideAnime(userId));
     const exclude = this.parseSlugList(q.excludeGenres);
@@ -462,22 +479,26 @@ export class DiscoveryService {
         page,
         hasMore: false,
       };
-    // NOTE: TMDB trending has no server-side sort — `sort` only applies to the DB
-    // fallback above; exclusion/country/hideAnime filter the window below.
+    // NOTE: TMDB trending has no server-side sort — with sort=releaseDate the
+    // filtered window / page is re-ordered newest-first locally (sortIdsByReleaseDesc).
     const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
+    const releaseSort = filters?.sort === 'releaseDate';
     const g = genre?.trim();
     if (g || this.parseSlugList(filters?.excludeGenres).length > 0 || filters?.country?.trim()) {
       const win = await this.trendingWindow('show', g, page * pageSize, hideAnime, filters);
+      const ids = releaseSort ? await this.sortIdsByReleaseDesc(win.ids) : win.ids;
       const items = await this.fetchListDtos(
-        win.ids.slice((page - 1) * pageSize, page * pageSize),
+        ids.slice((page - 1) * pageSize, page * pageSize),
         userId,
         pageSize,
       );
-      return { items, page, hasMore: win.ids.length > page * pageSize || !win.exhausted };
+      return { items, page, hasMore: ids.length > page * pageSize || !win.exhausted };
     }
     const entries = await this.cachedTrendingEntries('show', page);
     const visible = hideAnime ? await this.filterAnimeEntries(entries) : entries;
-    const listItems = await this.fetchListDtos(visible.map((e) => e.id), userId, pageSize);
+    const ids = visible.map((e) => e.id);
+    const ordered = releaseSort ? await this.sortIdsByReleaseDesc(ids) : ids;
+    const listItems = await this.fetchListDtos(ordered, userId, pageSize);
     return { items: listItems, page, hasMore: entries.length === 20 };
   }
 
@@ -495,19 +516,23 @@ export class DiscoveryService {
         hasMore: false,
       };
     const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
+    const releaseSort = filters?.sort === 'releaseDate';
     const g = genre?.trim();
     if (g || this.parseSlugList(filters?.excludeGenres).length > 0 || filters?.country?.trim()) {
       const win = await this.trendingWindow('movie', g, page * pageSize, hideAnime, filters);
+      const ids = releaseSort ? await this.sortIdsByReleaseDesc(win.ids) : win.ids;
       const items = await this.fetchListDtos(
-        win.ids.slice((page - 1) * pageSize, page * pageSize),
+        ids.slice((page - 1) * pageSize, page * pageSize),
         userId,
         pageSize,
       );
-      return { items, page, hasMore: win.ids.length > page * pageSize || !win.exhausted };
+      return { items, page, hasMore: ids.length > page * pageSize || !win.exhausted };
     }
     const entries = await this.cachedTrendingEntries('movie', page);
     const visible = hideAnime ? await this.filterAnimeEntries(entries) : entries;
-    const listItems = await this.fetchListDtos(visible.map((e) => e.id), userId, pageSize);
+    const ids = visible.map((e) => e.id);
+    const ordered = releaseSort ? await this.sortIdsByReleaseDesc(ids) : ids;
+    const listItems = await this.fetchListDtos(ordered, userId, pageSize);
     return { items: listItems, page, hasMore: entries.length === 20 };
   }
 
@@ -853,6 +878,9 @@ export class DiscoveryService {
       // otherwise poison the section for 5 min after their first adds.
       if (ids.length) await this.redis.set(key, ids, 300);
     }
+    // releaseDate sort: re-order the ranked window newest-first (the cached ranking
+    // is sort-agnostic — the affinity order is just the default view).
+    if (filters?.sort === 'releaseDate') ids = await this.sortIdsByReleaseDesc(ids);
     const items = await this.fetchListDtos(ids.slice((page - 1) * pageSize, page * pageSize), userId, pageSize);
     return { items, page, hasMore: ids.length > page * pageSize };
   }

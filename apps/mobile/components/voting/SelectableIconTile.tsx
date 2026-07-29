@@ -71,7 +71,9 @@ export function SelectableIconTile({
       style={({ pressed }) => [
         styles.tile,
         {
-          backgroundColor: selected ? tokens.primaryMuted : tokens.surfaceAlt,
+          // primarySoft tinted fill: textPrimary label/icon stay legible on it in
+          // both themes (primaryMuted's full-strength gold made the yellow unreadable).
+          backgroundColor: selected ? tokens.primarySoft : tokens.surfaceAlt,
           borderColor: selected ? tokens.primary : tokens.border,
           borderWidth: selected ? 2 : 1,
           opacity: disabled && !selected ? 0.5 : 1,
@@ -90,7 +92,7 @@ export function SelectableIconTile({
 
       <View style={styles.iconWrap}>
         {icon ? (
-          <Ionicons name={icon} size={iconSize} color={selected ? tokens.primary : tokens.textSecondary} />
+          <Ionicons name={icon} size={iconSize} color={selected ? tokens.textPrimary : tokens.textSecondary} />
         ) : (
           <T style={{ fontSize: iconSize, lineHeight: iconSize + 4 }}>{emoji}</T>
         )}
@@ -99,7 +101,7 @@ export function SelectableIconTile({
       <T
         variant="caption"
         numberOfLines={2}
-        style={{ color: selected ? tokens.primary : tokens.textMuted, textAlign: 'center', marginTop: 2 }}
+        style={{ color: selected ? tokens.textPrimary : tokens.textMuted, textAlign: 'center', marginTop: 2 }}
       >
         {label}
       </T>
