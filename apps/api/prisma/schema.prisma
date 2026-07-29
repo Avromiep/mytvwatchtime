@@ -846,6 +846,10 @@ model MediaCast {
   characters Json?       @map("characters")
   characterVotes CharacterVote[]
 
+  // One credit row per (media, person). The accompanying migration re-points votes
+  // off exact duplicates before creating the index; cross-person duplicates (same
+  // human under two provider ids) are merged by the cast-dedup repair job first.
+  @@unique([mediaId, castMemberId])
   @@index([mediaId])
   @@index([mediaId, characterExternalId])
   @@map("media_cast")

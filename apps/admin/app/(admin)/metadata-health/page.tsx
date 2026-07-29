@@ -36,6 +36,10 @@ interface MetadataHealth {
   animeTvdbUnresolvable: number;
   recommendationsMissing: number;
   moviesMissingCountry: number;
+  castDuplicateMedia: number;
+  castDuplicateRows: number;
+  castDuplicateVotes: number;
+  dualStructureShows: number;
 }
 
 /** Live progress of one background repair job (from /admin/metadata-health/repair-progress). */
@@ -63,6 +67,8 @@ const REPAIR_LABELS: Record<string, string> = {
   ratings: 'Rating backfill',
   recommendations: 'Recommendations backfill',
   'movie-countries': 'Movie countries backfill',
+  'cast-dedup': 'Cast dedup',
+  'structure-reconcile': 'Structure reconcile',
 };
 
 /** One-line guidance per stat: what it means and what to do about it. */
@@ -98,6 +104,10 @@ const STAT_HINTS: Record<string, string> = {
     'TMDB-linked rows whose "similar shows/movies" recommendations were never synced (rows hydrated before recommendations existed, or TVDB-hydrated rows — TVDB supplies none). Backfill fetches TMDB /recommendations per row with ONE light call (no rehydration), most-popular first, stopping early on TMDB rate limits. Rows whose provider has no recommendations are stamped as checked and leave the count. No user data touched.',
   moviesMissingCountry:
     'TMDB-linked movie rows with no production country — the explore country filter can only match movies whose country is known. Backfill resolves TMDB production_countries per row with ONE light call, most-popular first, stopping early on rate limits. Rows TMDB has no country for are stamped as checked and skipped for 90 days. No user data touched.',
+  castDuplicates:
+    'Duplicate cast credits created when TVDB people ids were stored under the TMDB_ id namespace, by unstable fallback ids, or by concurrent hydrations — the same person appears twice. Dedup auto-merges groups that are provably the same person+role on one title: same cast-member record, same TVDB character id, or the same normalized actor+character name (including prefix variants like "Matt Murdock" vs "Matt Murdock / Daredevil"). Votes are re-pointed to the surviving row BEFORE anything is deleted, so character votes are never lost. One actor playing two different characters is never merged. Run Report first, then Dry-run for exact counts, then Repair. Anything else can be merged manually per title via the inspect box below.',
+  dualStructureShows:
+    'Shows storing two provider season structures at once (e.g. a flattened TMDB structure next to the canonical TVDB split — the "Dragon Ball" case). Report lists them; Dry-run shows how the absolute-number matcher would map stale episodes onto the canonical structure; Repair runs the full TVDB repair for anime titles (hydrate → remap, watch history/ratings/comments transferred, obsolete rows removed only after migration). Non-anime titles are never auto-switched — they are flagged for a deliberate provider decision.',
 };
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -147,6 +157,23 @@ export default function MetadataHealthPage() {
   const [countriesResult, setCountriesResult] = useState<string | null>(null);
   const [countriesCount, setCountriesCount] = useState('500');
   const [castCount, setCastCount] = useState('500');
+  const [dedupRunning, setDedupRunning] = useState(false);
+  const [dedupResult, setDedupResult] = useState<string | null>(null);
+  const [dedupCount, setDedupCount] = useState('500');
+  const [reconCount, setReconCount] = useState('200');
+  const [reconMediaId, setReconMediaId] = useState('');
+  const [reconTargeted, setReconTargeted] = useState(false);
+  const [dedupInspectId, setDedupInspectId] = useState('');
+  const [dedupInspecting, setDedupInspecting] = useState(false);
+  const [dedupReview, setDedupReview] = useState<{
+    titles?: { mediaId: string; title: string }[];
+    review: { mediaId: string; title: string; rows: { id: string; member: string; character: string | null; votes: number }[] }[];
+    groupsHigh?: number;
+    groupsMedium?: number;
+  } | null>(null);
+  const [mergingPair, setMergingPair] = useState(false);
+  const [reconRunning, setReconRunning] = useState(false);
+  const [reconResult, setReconResult] = useState<string | null>(null);
   const [repairs, setRepairs] = useState<Record<string, RepairProgress>>({});
   const [batchCount, setBatchCount] = useState('200');
   const [batchRps, setBatchRps] = useState('');
@@ -254,6 +281,129 @@ export default function MetadataHealthPage() {
       })
       .catch(() => setCastResult('Cast backfill failed to start.'))
       .finally(() => setBackfillingCast(false));
+  };
+
+  const runCastDedup = (mode: 'report' | 'dry-run' | 'repair') => {
+    if (
+      mode === 'repair' &&
+      !window.confirm(
+        'Merge HIGH-confidence duplicate cast rows? Votes are re-pointed to the surviving row before anything is deleted. Run Report and Dry-run first and review the counts.',
+      )
+    ) {
+      return;
+    }
+    setDedupRunning(true);
+    setDedupResult(null);
+    const n = Math.max(1, Number(dedupCount) || 500);
+    api
+      .post(`/admin/cast-dedup/run?mode=${mode}&count=${n}`)
+      .then(() => {
+        setDedupResult(
+          `Cast dedup (${mode}, max ${n} titles) started in background. Stats refresh in 30s — watch the Cast Dedup progress row above.`,
+        );
+        setTimeout(() => load(), 30000);
+      })
+      .catch(() => setDedupResult('Cast dedup failed to start.'))
+      .finally(() => setDedupRunning(false));
+  };
+
+  /** Targeted report for ONE title — returns the review rows synchronously so the
+   *  admin can merge name-only pairs (e.g. "Matt Murdock" vs "Matt Murdock / Daredevil"). */
+  const inspectCastDedup = () => {
+    const mediaId = dedupInspectId.trim();
+    if (!mediaId) return;
+    setDedupInspecting(true);
+    setDedupReview(null);
+    setDedupResult(null);
+    api
+      .post(`/admin/cast-dedup/run?mode=report&mediaId=${encodeURIComponent(mediaId)}`)
+      .then((r) => {
+        setDedupReview(r.data);
+        if (!(r.data?.review ?? []).length) {
+          setDedupResult('No name-only duplicate groups on this title (nothing to review).');
+        }
+      })
+      .catch((e) => setDedupResult(`Inspect failed: ${e?.response?.data?.message ?? 'error'}`))
+      .finally(() => setDedupInspecting(false));
+  };
+
+  const mergeCastPair = (mediaId: string, keepCastId: string, mergeCastId: string) => {
+    if (
+      !window.confirm(
+        'Merge the second row into the kept row? Votes are re-pointed before the duplicate is deleted. This cannot be undone.',
+      )
+    ) {
+      return;
+    }
+    setMergingPair(true);
+    api
+      .post('/admin/cast-dedup/merge', { mediaId, keepCastId, mergeCastId })
+      .then((r) => {
+        setDedupResult(
+          `Merged: ${r.data.votesMoved} vote(s) moved, ${r.data.rowsDeleted} row(s) deleted. Re-inspecting…`,
+        );
+        inspectCastDedup();
+      })
+      .catch((e) =>
+        setDedupResult(`Merge failed: ${e?.response?.data?.message ?? 'error'}`),
+      )
+      .finally(() => setMergingPair(false));
+  };
+
+  const runStructureReconcile = (mode: 'report' | 'dry-run' | 'repair') => {
+    if (
+      mode === 'repair' &&
+      !window.confirm(
+        'Reconcile mixed-provider season structures for anime titles (hydrate from TVDB and remap episodes, transferring all user data)? Run Report and Dry-run first and review the matches.',
+      )
+    ) {
+      return;
+    }
+    setReconRunning(true);
+    setReconResult(null);
+    const n = Math.max(1, Number(reconCount) || 200);
+    api
+      .post(`/admin/structure-reconcile/run?mode=${mode}&count=${n}`)
+      .then(() => {
+        setReconResult(
+          `Structure reconcile (${mode}, max ${n} titles) started in background. Stats refresh in 30s — watch the Structure Reconcile progress row above.`,
+        );
+        setTimeout(() => load(), 30000);
+      })
+      .catch(() => setReconResult('Structure reconcile failed to start.'))
+      .finally(() => setReconRunning(false));
+  };
+
+  /** Targeted reconcile for ONE title (awaited — returns the action taken). */
+  const runStructureReconcileTargeted = (mode: 'dry-run' | 'repair') => {
+    const mediaId = reconMediaId.trim();
+    if (!mediaId) return;
+    if (
+      mode === 'repair' &&
+      !window.confirm(
+        'Run the full structure repair for this title (hydrate from TVDB + remap episodes, transferring all user data)? Run Dry-run first and review the matches.',
+      )
+    ) {
+      return;
+    }
+    setReconTargeted(true);
+    setReconResult(null);
+    api
+      .post(`/admin/structure-reconcile/run?mode=${mode}&mediaId=${encodeURIComponent(mediaId)}`)
+      .then((r) => {
+        const t = r.data?.titles?.[0];
+        const remap = t?.remap
+          ? ` — mapped ${t.remap.mapped}, unmapped ${t.remap.unmapped}, rules ${JSON.stringify(t.remap.matchRules)}`
+          : '';
+        setReconResult(
+          t
+            ? `${t.title}: ${t.action} (stale ${t.stale}, fresh ${t.fresh})${remap}`
+            : `Done: ${JSON.stringify(r.data)}`,
+        );
+        setTimeout(() => load(), 10000);
+      })
+      .catch((e) => setReconResult(`Targeted reconcile failed: ${e?.response?.data?.message ?? 'error'}`))
+      .finally(() => setReconTargeted(false));
   };
 
   const runTvdbIdRepair = () => {
@@ -501,6 +651,55 @@ export default function MetadataHealthPage() {
           {countriesResult}
         </div>
       )}
+      {dedupResult && (
+        <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm text-violet-800 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-200">
+          {dedupResult}
+        </div>
+      )}
+      {reconResult && (
+        <div className="rounded-lg border border-cyan-200 bg-cyan-50 p-3 text-sm text-cyan-800 dark:border-cyan-800 dark:bg-cyan-950 dark:text-cyan-200">
+          {reconResult}
+        </div>
+      )}
+
+      {/* Manual cast-merge review (name-only duplicate pairs of one inspected title) */}
+      {dedupReview && (dedupReview.review ?? []).length > 0 && (
+        <div className="rounded-lg border border-violet-200 p-4 dark:border-violet-800">
+          <h2 className="mb-1 font-medium">Cast duplicates — manual review</h2>
+          <p className="mb-3 text-xs text-zinc-500">
+            Name-only matches are never auto-merged. Pick which row survives; votes on the
+            other row are re-pointed before it is deleted.
+          </p>
+          {dedupReview.review.map((g) => (
+            <div key={g.mediaId} className="mb-3 rounded border border-zinc-200 p-3 dark:border-zinc-700">
+              <p className="mb-2 text-sm font-medium">{g.title}</p>
+              <div className="space-y-1">
+                {g.rows.map((r) => (
+                  <div key={r.id} className="flex items-center justify-between gap-2 text-sm">
+                    <span>
+                      {r.member} — {r.character ?? '(no character)'}
+                      <span className="ml-2 text-xs text-zinc-400">{r.votes} vote(s)</span>
+                    </span>
+                    <button
+                      onClick={() =>
+                        mergeCastPair(
+                          g.mediaId,
+                          r.id,
+                          g.rows.find((o) => o.id !== r.id)?.id ?? r.id,
+                        )
+                      }
+                      disabled={mergingPair || g.rows.length !== 2}
+                      className="shrink-0 rounded border border-violet-600 px-2 py-1 text-xs font-medium text-violet-600 hover:bg-violet-50 disabled:opacity-50"
+                    >
+                      Keep this row
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Live repair progress (polls every 3s; finished jobs stay visible ~60s) */}
       {Object.keys(repairs).length > 0 && (
@@ -653,6 +852,125 @@ export default function MetadataHealthPage() {
                 </div>
               }
             />
+            <MetricCard
+              label="Duplicate Cast"
+              value={stats.castDuplicateMedia ?? 0}
+              sub={`${stats.castDuplicateRows ?? 0} excess rows · ${stats.castDuplicateVotes ?? 0} votes on dup rows`}
+              hint={STAT_HINTS.castDuplicates}
+              highlight={(stats.castDuplicateMedia ?? 0) > 0}
+              action={
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={dedupCount}
+                    onChange={(e) => setDedupCount(e.target.value)}
+                    className="w-20 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+                    title="Titles per run"
+                  />
+                  <button
+                    onClick={() => runCastDedup('report')}
+                    disabled={dedupRunning}
+                    className="rounded border border-zinc-400 px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:text-zinc-300"
+                  >
+                    Report
+                  </button>
+                  <button
+                    onClick={() => runCastDedup('dry-run')}
+                    disabled={dedupRunning}
+                    className="rounded border border-zinc-400 px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:text-zinc-300"
+                  >
+                    Dry-run
+                  </button>
+                  <button
+                    onClick={() => runCastDedup('repair')}
+                    disabled={dedupRunning}
+                    className="rounded border border-red-600 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    {dedupRunning ? 'Starting…' : 'Repair'}
+                  </button>
+                </div>
+              }
+            />
+            <div className="col-span-full flex items-center gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-700">
+              <span className="text-xs text-zinc-500">Manual review (one title):</span>
+              <input
+                value={dedupInspectId}
+                onChange={(e) => setDedupInspectId(e.target.value)}
+                placeholder="mediaId"
+                className="w-72 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+              />
+              <button
+                onClick={inspectCastDedup}
+                disabled={dedupInspecting || !dedupInspectId.trim()}
+                className="rounded border border-violet-600 px-2 py-1 text-xs font-medium text-violet-600 hover:bg-violet-50 disabled:opacity-50"
+              >
+                {dedupInspecting ? 'Inspecting…' : 'Inspect name-only pairs'}
+              </button>
+            </div>
+            <MetricCard
+              label="Dual Season Structures"
+              value={stats.dualStructureShows ?? 0}
+              sub="shows mixing TMDB + TVDB structures"
+              hint={STAT_HINTS.dualStructureShows}
+              highlight={(stats.dualStructureShows ?? 0) > 0}
+              action={
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={reconCount}
+                    onChange={(e) => setReconCount(e.target.value)}
+                    className="w-20 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+                    title="Titles per run"
+                  />
+                  <button
+                    onClick={() => runStructureReconcile('report')}
+                    disabled={reconRunning}
+                    className="rounded border border-zinc-400 px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:text-zinc-300"
+                  >
+                    Report
+                  </button>
+                  <button
+                    onClick={() => runStructureReconcile('dry-run')}
+                    disabled={reconRunning}
+                    className="rounded border border-zinc-400 px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:text-zinc-300"
+                  >
+                    Dry-run
+                  </button>
+                  <button
+                    onClick={() => runStructureReconcile('repair')}
+                    disabled={reconRunning}
+                    className="rounded border border-red-600 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    {reconRunning ? 'Starting…' : 'Repair'}
+                  </button>
+                </div>
+              }
+            />
+            <div className="col-span-full flex items-center gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-700">
+              <span className="text-xs text-zinc-500">Targeted (one title):</span>
+              <input
+                value={reconMediaId}
+                onChange={(e) => setReconMediaId(e.target.value)}
+                placeholder="mediaId"
+                className="w-72 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+              />
+              <button
+                onClick={() => runStructureReconcileTargeted('dry-run')}
+                disabled={reconTargeted || !reconMediaId.trim()}
+                className="rounded border border-zinc-400 px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:text-zinc-300"
+              >
+                Dry-run
+              </button>
+              <button
+                onClick={() => runStructureReconcileTargeted('repair')}
+                disabled={reconTargeted || !reconMediaId.trim()}
+                className="rounded border border-red-600 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+              >
+                {reconTargeted ? 'Running…' : 'Repair this title'}
+              </button>
+            </div>
             <MetricCard
               label="Multiple TVDB IDs"
               value={stats.multiTvdbIds}

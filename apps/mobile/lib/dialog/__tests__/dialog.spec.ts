@@ -153,6 +153,68 @@ describe('dialog controller', () => {
     expect(ctrl.entries.find((e) => e.id === id)).toBeUndefined();
   });
 
+  it("closeOnPress 'before' dismisses first, then runs onPress (no stacked modals)", async () => {
+    const events: string[] = [];
+    const id = ctrl.showDialog({
+      title: 'menu',
+      buttons: [
+        {
+          label: 'Add',
+          closeOnPress: 'before',
+          onPress: () => {
+            events.push(ctrl.entries.find((e) => e.id === id) ? 'open' : 'dismissed');
+            // Follow-up dialog opened by the action (the only one on screen at once).
+            ctrl.showInfo({ description: 'picker' });
+          },
+        },
+      ],
+    });
+    await press(ctrl.entries.find((e) => e.id === id)!, 0);
+    expect(events).toEqual(['dismissed']);
+    expect(ctrl.entries.find((e) => e.id === id)).toBeUndefined();
+    expect(ctrl.entries).toHaveLength(1);
+    expect(ctrl.entries[0].description).toBe('picker');
+  });
+
+  it("closeOnPress 'before' stays dismissed even when onPress rejects", async () => {
+    const onPress = jest.fn().mockRejectedValueOnce(new Error('boom'));
+    const id = ctrl.showDialog({
+      title: 'x',
+      buttons: [{ label: 'Go', onPress, closeOnPress: 'before' }],
+    });
+    await press(ctrl.entries.find((e) => e.id === id)!, 0);
+    expect(onPress).toHaveBeenCalled();
+    expect(ctrl.entries.find((e) => e.id === id)).toBeUndefined();
+  });
+
+  it("closeOnPress 'before' prevents double-submit while the action runs", async () => {
+    let resolveAction: () => void = () => {};
+    const onPress = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveAction = resolve;
+        }),
+    );
+    const id = ctrl.showDialog({
+      title: 'x',
+      buttons: [{ label: 'Go', onPress, closeOnPress: 'before' }],
+    });
+    const entry = ctrl.entries.find((e) => e.id === id)!;
+    const p = press(entry, 0);
+    // Second press of another dialog's button while busy -> blocked by the busy lock.
+    const id2 = ctrl.showInfo({ description: 'other' });
+    const other = ctrl.entries.find((e) => e.id === id2)!;
+    const onPress2 = jest.fn();
+    ctrl.dismiss(id2);
+    const id3 = ctrl.showDialog({ title: 'y', buttons: [{ label: 'Go2', onPress: onPress2 }] });
+    await press(ctrl.entries.find((e) => e.id === id3)!, 0);
+    expect(onPress2).not.toHaveBeenCalled();
+    resolveAction();
+    await p;
+    expect(onPress).toHaveBeenCalledTimes(1);
+    void other;
+  });
+
   it('default helper buttons are added when an empty buttons array is supplied', () => {
     ctrl.showDialog({ title: 'x', buttons: [] });
     expect(ctrl.entries[0].buttons).toHaveLength(1);

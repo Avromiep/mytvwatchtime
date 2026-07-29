@@ -48,6 +48,9 @@ export interface Tokens {
   mediaGradient: [string, string];
   // Native controls:
   controlThumb: string;
+  /** Switch OFF track — must contrast with card backgrounds in BOTH themes
+   *  (surfaceElevated is white-on-white in light mode, hiding the track). */
+  controlTrackOff: string;
 }
 
 const dark: Tokens = {
@@ -88,6 +91,7 @@ const dark: Tokens = {
   mediaScrim: 'rgba(0,0,0,0.6)',
   mediaGradient: ['rgba(0,0,0,0)', 'rgba(0,0,0,0.85)'],
   controlThumb: '#FFFFFF',
+  controlTrackOff: '#3A4150',
 };
 
 const light: Tokens = {
@@ -128,6 +132,7 @@ const light: Tokens = {
   mediaScrim: 'rgba(0,0,0,0.6)',
   mediaGradient: ['rgba(0,0,0,0)', 'rgba(0,0,0,0.85)'],
   controlThumb: '#FFFFFF',
+  controlTrackOff: '#D7DBE2',
 };
 
 export function buildTokens(resolved: ResolvedTheme): Tokens {

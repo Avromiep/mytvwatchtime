@@ -42,13 +42,15 @@ function mockPrisma() {
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       count: jest.fn().mockResolvedValue(0),
     },
-    episode: { delete: jest.fn().mockResolvedValue({}) },
+    episode: { delete: jest.fn().mockResolvedValue({}), update: jest.fn().mockResolvedValue({}) },
     season: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
     userShowStatus: { upsert: jest.fn().mockResolvedValue({}) },
     $queryRaw: jest.fn().mockResolvedValue([]),
+    $executeRaw: jest.fn().mockResolvedValue(0),
   };
-  // Transactions run against the same mock (tx exposes the same model API).
-  p.$transaction = jest.fn((fn: any) => fn(p));
+  // Transactions run against the same mock (tx exposes the same model API); array form
+  // (used by the absoluteNumber backfill) just awaits all statements.
+  p.$transaction = jest.fn((arg: any) => (Array.isArray(arg) ? Promise.all(arg) : arg(p)));
   return p;
 }
 
@@ -273,7 +275,9 @@ describe('StructureRemapService', () => {
 
     expect(res).toMatchObject({ stale: 1, mapped: 0, unmapped: 1, episodesRemoved: 0 });
     expect(prisma.episode.delete).not.toHaveBeenCalled(); // kept — never lose watch data
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    // No transfer ran (only the absoluteNumber backfill touches the DB in this test).
+    expect(prisma.userEpisodeStatus.update).not.toHaveBeenCalled();
+    expect(prisma.watchHistory.updateMany).not.toHaveBeenCalled();
   });
 
   it('deletes unmapped stale rows that carry no user data and drops emptied seasons', async () => {
@@ -344,5 +348,192 @@ describe('StructureRemapService', () => {
     expect(prisma.userShowStatus.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ where: { userId_mediaId: { userId: 'u1', mediaId: 'show-new' } } }),
     );
+  });
+
+  // ---- Matching ladder v2 (absoluteNumber) — the Dragon Ball regression ----
+
+  it('maps a flattened TMDB row onto the split TVDB structure via absoluteNumber', async () => {
+    // Dragon Ball shape: TMDB S1 = 153 eps; TVDB S1 = 35, S2 = 15, … — stale TMDB
+    // S1E36.. predate the absoluteNumber column (null); TVDB rows carry provider values.
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('s1', 1, [
+          // Fresh merged rows: TVDB S1E1..E3 (TVDB absolute 1..3) — have TMDB + TVDB ids.
+          ...[1, 2, 3].map((n) =>
+            ep({
+              id: `fresh-s1e${n}`,
+              number: n,
+              title: `DB ep ${n}`,
+              absoluteNumber: n,
+              externalIds: [{ provider: 'TMDB' }, { provider: 'THE_TVDB' }],
+            }),
+          ),
+          // Stale flattened TMDB rows S1E4.. (absoluteNumber unknown — backfilled).
+          ep({ id: 'stale-e4', number: 4, title: 'DB ep 4 (tmdb title)', absoluteNumber: null }),
+          ep({ id: 'stale-e5', number: 5, title: 'DB ep 5 (tmdb title)', absoluteNumber: null }),
+        ]),
+        season('s2', 2, [
+          // TVDB S2E1/E2 = absolute 4/5.
+          ep({
+            id: 'fresh-s2e1',
+            number: 1,
+            title: 'DB ep 4 (tvdb title)',
+            absoluteNumber: 4,
+            externalIds: [{ provider: 'THE_TVDB' }],
+          }),
+          ep({
+            id: 'fresh-s2e2',
+            number: 2,
+            title: 'DB ep 5 (tvdb title)',
+            absoluteNumber: 5,
+            externalIds: [{ provider: 'THE_TVDB' }],
+          }),
+        ]),
+      ]),
+    );
+
+    const res = await service.remapShow('m1');
+
+    expect(res.stale).toBe(2);
+    expect(res.mapped).toBe(2);
+    expect(res.unmapped).toBe(0);
+    expect(res.matchRules).toEqual({ absolute: 2 });
+    // Backfill assigned 4/5 to the stale rows (never overwrote provider values).
+    expect(prisma.episode.update).toHaveBeenCalledWith({
+      where: { id: 'stale-e4' },
+      data: { absoluteNumber: 4 },
+    });
+    expect(prisma.episode.update).toHaveBeenCalledWith({
+      where: { id: 'stale-e5' },
+      data: { absoluteNumber: 5 },
+    });
+    // Stale rows deleted after their (empty) user-data transfer.
+    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'stale-e4' } });
+    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'stale-e5' } });
+  });
+
+  it('trusts a unique absolute match even when provider airDates conflict', async () => {
+    // Real data: TMDB S1E36 "Major Metallitron" (1986-10-29) vs TVDB S3E8 (1987-06-10) —
+    // same episode, provider dates months apart. Unique absolute correspondence wins.
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('s1', 1, [ep({ id: 'stale', number: 7, title: 'X', absoluteNumber: 7, airDate: D })]),
+        season('s2', 2, [
+          ep({
+            id: 'fresh-conflict',
+            number: 1,
+            title: 'Y',
+            absoluteNumber: 7,
+            airDate: D2,
+            externalIds: [{ provider: 'THE_TVDB' }],
+          }),
+        ]),
+      ]),
+    );
+    prisma.userEpisodeStatus.count.mockResolvedValue(1);
+
+    const res = await service.remapShow('m1');
+    expect(res).toMatchObject({ stale: 1, mapped: 1, unmapped: 0 });
+    expect(res.matchRules).toEqual({ absolute: 1 });
+    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'stale' } });
+  });
+
+  it('remaps stale rows that have NO provider ids at all (Dragon Ball: ids lost)', async () => {
+    // Flattened S1 rows whose TMDB ids were lost entirely: externalIds = [].
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('s1', 1, [
+          ep({ id: 'fresh-e1', number: 1, title: 'Ep 1', absoluteNumber: 1, externalIds: [{ provider: 'THE_TVDB' }] }),
+          ep({ id: 'stale-e2', number: 2, title: 'Ep 2', absoluteNumber: null, externalIds: [] }),
+        ]),
+        season('s2', 2, [
+          ep({ id: 'fresh-e2', number: 1, title: 'Ep 2', absoluteNumber: 2, externalIds: [{ provider: 'THE_TVDB' }] }),
+        ]),
+      ]),
+    );
+
+    const res = await service.remapShow('m1');
+    expect(res.stale).toBe(1);
+    expect(res.mapped).toBe(1);
+    expect(res.matchRules).toEqual({ absolute: 1 });
+    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'stale-e2' } });
+  });
+
+  it('never deletes into the void when no TVDB-linked rows exist', async () => {
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('s1', 1, [
+          ep({ id: 'e1', number: 1, title: 'A' }),
+          ep({ id: 'e2', number: 2, title: 'B' }),
+        ]),
+      ]),
+    );
+    const res = await service.remapShow('m1');
+    expect(res).toMatchObject({ stale: 0, mapped: 0, episodesRemoved: 0 });
+    expect(prisma.episode.delete).not.toHaveBeenCalled();
+  });
+
+  it('matches via absolute+date when both signals agree', async () => {
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('s1', 1, [ep({ id: 'stale', number: 7, title: 'Old', absoluteNumber: 7, airDate: D })]),
+        season('s2', 2, [
+          ep({
+            id: 'fresh',
+            number: 1,
+            title: 'New',
+            absoluteNumber: 7,
+            airDate: D,
+            externalIds: [{ provider: 'THE_TVDB' }],
+          }),
+        ]),
+      ]),
+    );
+    const res = await service.remapShow('m1');
+    expect(res.mapped).toBe(1);
+    expect(res.matchRules).toEqual({ 'absolute+date': 1 });
+  });
+
+  it('refuses to guess when two fresh rows share an absolute number', async () => {
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('s1', 1, [ep({ id: 'stale', number: 7, title: 'Old', absoluteNumber: 7 })]),
+        season('s2', 2, [
+          ep({ id: 'f1', number: 1, title: 'A', absoluteNumber: 7, externalIds: [{ provider: 'THE_TVDB' }] }),
+          ep({ id: 'f2', number: 2, title: 'B', absoluteNumber: 7, externalIds: [{ provider: 'THE_TVDB' }] }),
+        ]),
+      ]),
+    );
+    const res = await service.remapShow('m1');
+    expect(res.mapped).toBe(0);
+    expect(res.unmapped).toBe(0); // no user data → deleted, but never mis-mapped
+    expect(res.episodesRemoved).toBe(1);
+  });
+
+  it('dry-run computes matches and kept/deleted counts without any writes', async () => {
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('s1', 1, [
+          ep({ id: 'stale-mapped', number: 4, title: 'M', absoluteNumber: 4 }),
+          ep({ id: 'stale-unmapped', number: 99, title: 'U', absoluteNumber: 99 }),
+        ]),
+        season('s2', 2, [
+          ep({ id: 'fresh', number: 1, title: 'M2', absoluteNumber: 4, externalIds: [{ provider: 'THE_TVDB' }] }),
+        ]),
+      ]),
+    );
+
+    const res = await service.remapShow('m1', { dryRun: true });
+
+    expect(res.dryRun).toBe(true);
+    expect(res.stale).toBe(2);
+    expect(res.mapped).toBe(1);
+    expect(res.matchRules).toEqual({ absolute: 1 });
+    expect(res.episodesRemoved).toBe(1); // would-be deletion of the data-free unmapped row
+    // No writes at all: no transferPair, no backfill persist, no deletes.
+    expect(prisma.episode.delete).not.toHaveBeenCalled();
+    expect(prisma.episode.update).not.toHaveBeenCalled();
+    expect(prisma.watchHistory.updateMany).not.toHaveBeenCalled();
+    expect(prisma.season.deleteMany).not.toHaveBeenCalled();
   });
 });

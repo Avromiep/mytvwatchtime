@@ -60,8 +60,14 @@ export default function MovieDetailScreen() {
           <View style={[styles.overlay, { backgroundColor: tokens.mediaScrim }]}>
             <Header
               showBack
+              tone="media"
               right={
-                <Pressable hitSlop={10} onPress={() => addToList.openMediaMenu({ id: movie.id, title: movie.title, kind: 'movie' })}>
+                <Pressable
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('common:moreOptions')}
+                  onPress={() => addToList.openMediaMenu({ id: movie.id, title: movie.title, kind: 'movie' })}
+                >
                   <Ionicons name="ellipsis-horizontal" size={24} color={tokens.mediaText} />
                 </Pressable>
               }

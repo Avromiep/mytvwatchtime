@@ -105,6 +105,102 @@ export class AdminController {
     };
   }
 
+  /**
+   * Duplicate-cast repair. mode=report (default, counts only), dry-run (exact counts,
+   * rolled back), repair (commits high-confidence merges; votes are re-pointed before
+   * any row is deleted). With mediaId the run is targeted, awaited, and audited.
+   */
+  @Post('cast-dedup/run')
+  @RequireRoles('ADMIN')
+  async runCastDedup(
+    @CurrentUser('id') adminId: string,
+    @Query('mode') mode?: string,
+    @Query('count') count?: string,
+    @Query('mediaId') mediaId?: string,
+  ) {
+    const m = mode === 'dry-run' || mode === 'repair' ? mode : 'report';
+    const n = count ? Number(count) : undefined;
+    if (mediaId) {
+      const result = await this.metadataBackfill.repairCastDuplicates({
+        mode: m,
+        mediaId,
+      });
+      await this.admin.audit(adminId, 'cast_dedup', 'media', mediaId, {
+        mode: m,
+        merged: result.merged,
+        votesMoved: result.votesMoved,
+        rowsDeleted: result.rowsDeleted,
+      });
+      return result;
+    }
+    this.metadataBackfill.repairCastDuplicates({ mode: m, limit: n }).catch((e) => {
+      console.error('[Cast Dedup] FAILED:', (e as Error)?.message ?? e);
+    });
+    return { message: `Cast dedup (${m}) started. Check API logs / repair progress.` };
+  }
+
+  /**
+   * Manually merge ONE reviewed duplicate cast pair (the report's name-only/MEDIUM
+   * cases — e.g. "Matt Murdock" vs "Matt Murdock / Daredevil"). keepCastId survives;
+   * votes on mergeCastId are re-pointed before its row is deleted. Awaited + audited.
+   */
+  @Post('cast-dedup/merge')
+  @RequireRoles('ADMIN')
+  async mergeCastPair(
+    @CurrentUser('id') adminId: string,
+    @Body() body: { mediaId?: string; keepCastId?: string; mergeCastId?: string },
+  ) {
+    if (!body?.mediaId || !body?.keepCastId || !body?.mergeCastId) {
+      throw new BadRequestException('mediaId, keepCastId and mergeCastId are required');
+    }
+    if (body.keepCastId === body.mergeCastId) {
+      throw new BadRequestException('keepCastId and mergeCastId must differ');
+    }
+    const result = await this.metadataBackfill.mergeCastPair(
+      body.mediaId,
+      body.keepCastId,
+      body.mergeCastId,
+    );
+    await this.admin.audit(adminId, 'cast_dedup_merge', 'media', body.mediaId, {
+      keepCastId: body.keepCastId,
+      mergeCastId: body.mergeCastId,
+      ...result,
+    });
+    return result;
+  }
+
+  /**
+   * Season/episode structure reconciliation (mixed-provider structures, e.g. Dragon
+   * Ball's flattened TMDB structure surviving next to the TVDB split). mode=report
+   * (default), dry-run (matcher only), repair (anime titles only; non-anime titles are
+   * reported for a deliberate provider decision). With mediaId: targeted, awaited,
+   * audited — the Dragon Ball one-time remediation path.
+   */
+  @Post('structure-reconcile/run')
+  @RequireRoles('ADMIN')
+  async runStructureReconcile(
+    @CurrentUser('id') adminId: string,
+    @Query('mode') mode?: string,
+    @Query('count') count?: string,
+    @Query('mediaId') mediaId?: string,
+  ) {
+    const m = mode === 'dry-run' || mode === 'repair' ? mode : 'report';
+    const n = count ? Number(count) : undefined;
+    if (mediaId) {
+      const result = await this.metadataBackfill.reconcileStructures({ mode: m, mediaId });
+      await this.admin.audit(adminId, 'structure_reconcile', 'media', mediaId, {
+        mode: m,
+        repaired: result.repaired,
+        remapped: result.remapped,
+      });
+      return result;
+    }
+    this.metadataBackfill.reconcileStructures({ mode: m, limit: n }).catch((e) => {
+      console.error('[Structure Reconcile] FAILED:', (e as Error)?.message ?? e);
+    });
+    return { message: `Structure reconcile (${m}) started. Check API logs / repair progress.` };
+  }
+
   @Post('repair-tvdb-id-conflicts/run')
   @RequireRoles('ADMIN')
   runRepairTvdbIdConflicts(@Query('count') count?: string) {

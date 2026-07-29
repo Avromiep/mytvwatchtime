@@ -67,9 +67,10 @@ export function FavoriteCharacterVote({
         const selected = section.userVote === c.creditId;
         const pct = percents.get(c.creditId) ?? 0;
         const handlePress = () => {
-          if (pending || selected) return;
+          if (pending) return;
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-          onSelect(c.creditId);
+          // Tapping the selected character again removes the vote (toggle).
+          onSelect(selected ? null : c.creditId);
         };
         const name = t('episode:a11y.characterOption', { name: c.character ?? c.name });
         return (
@@ -77,7 +78,7 @@ export function FavoriteCharacterVote({
             key={c.creditId}
             onPress={handlePress}
             disabled={pending}
-            accessibilityRole="radio"
+            accessibilityRole="button"
             accessibilityState={{ selected }}
             accessibilityLabel={composeOptionLabel(t, name, selected, reveal, pct)}
             style={styles.item}

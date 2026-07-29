@@ -223,7 +223,7 @@ export default function SettingsScreen() {
             <Switch
               value={me?.isPrivate ?? false}
               onValueChange={togglePrivate}
-              trackColor={{ false: tokens.surfaceElevated, true: tokens.primary }}
+              trackColor={{ false: tokens.controlTrackOff, true: tokens.primary }}
               thumbColor={tokens.controlThumb}
             />
           </View>
@@ -235,7 +235,7 @@ export default function SettingsScreen() {
             <Switch
               value={me?.hideAnimeInExplore ?? false}
               onValueChange={toggleHideAnime}
-              trackColor={{ false: tokens.surfaceElevated, true: tokens.primary }}
+              trackColor={{ false: tokens.controlTrackOff, true: tokens.primary }}
               thumbColor={tokens.controlThumb}
             />
           </View>

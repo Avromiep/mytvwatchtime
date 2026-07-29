@@ -19,6 +19,13 @@ export interface NormalizedCast {
   order: number;
   /** TVDB character id of the role (TVDB hydration only) — TVTime character-vote resolution. */
   characterExternalId?: number | null;
+  /**
+   * Provider-namespaced CastMember.externalId (e.g. "TMDB_123", "TVDB_456"). Always set
+   * by providers; the TMDB_ prefix is reserved for real TMDB person ids and TVDB_ for
+   * TVDB people ids — previously TVDB people ids were stored under the TMDB_ namespace,
+   * which created duplicate cast members when a title was hydrated by both providers.
+   */
+  personExternalId?: string;
 }
 export interface NormalizedProvider {
   name: string;
@@ -59,6 +66,13 @@ export interface NormalizedEpisode {
   airDate?: string | null;
   rating?: number | null;
   isFinale: boolean;
+  /**
+   * Running episode number across the whole series (1..N, specials excluded). TVDB
+   * supplies it directly; TMDB hydration computes it cumulatively. This is the key
+   * that maps a flattened TMDB structure (S1 = 153 eps) onto a split TVDB structure
+   * (TMDB S1E32 == TVDB S2E1 == absolute 32) during structure reconciliation.
+   */
+  absoluteNumber?: number | null;
 }
 export interface NormalizedShow {
   type: MediaType.SHOW;
@@ -371,6 +385,7 @@ export class TmdbProvider {
       character: c.character ?? null,
       profileUrl: this.tmdb.img(c.profile_path, 'w185'),
       order: c.order ?? 0,
+      personExternalId: `TMDB_${c.id}`,
     }));
   }
 
@@ -635,6 +650,19 @@ export class TmdbProvider {
             ? appended
             : await this.tmdb.get<TmdbSeason>(`/tv/${id}/season/${se.number}`, {}, language);
         se.episodes = (detail.episodes || []).map((e) => this.normalizeEpisode(e));
+      }
+    }
+    // Absolute numbering: TMDB has no absoluteNumber field — compute it cumulatively
+    // across the ordered non-special seasons (TMDB S1E32 == TVDB S2E1 == absolute 32;
+    // the structure reconciler matches on this). Skipped (episode-less) seasons use
+    // their summary episodeCount so later seasons stay correctly offset.
+    let absoluteCursor = 1;
+    for (const se of [...seasons].sort((a, b) => a.number - b.number)) {
+      if (se.isSpecial) continue;
+      if (se.episodes.length > 0) {
+        for (const ep of se.episodes) ep.absoluteNumber = absoluteCursor++;
+      } else {
+        absoluteCursor += se.episodeCount ?? 0;
       }
     }
     // Multi-network shows keep up to 2 names joined in the single string (e.g. "TV Tokyo · AT-X").

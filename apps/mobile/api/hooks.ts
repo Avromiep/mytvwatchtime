@@ -1530,16 +1530,24 @@ export const useToggleWatchlist = () => {
     onMutate: async ({ id, on }) => {
       const prevShow = qc.getQueryData(qk.show(id));
       qc.setQueryData(qk.show(id), (old: any) => (old ? { ...old, inWatchlist: on } : old));
-      // Removing evicts the card from watchlist grids + the My Shows "Not started"
-      // bucket (server marks the show dropped). Adding is left to the refetch.
+      // Removing evicts the card from watchlist grids + every My Shows bucket
+      // (server marks the show dropped, hiding it from watching/finished/paused too).
+      // Adding is left to the refetch.
       const prevWatchlist = on
         ? undefined
         : patchPrefix(qc, 'watchlist', (d) => filterItemsDeep(d, (it: any) => it.id !== id));
+      const evict = (arr: any[]) => (arr ?? []).filter((i: any) => i.id !== id);
       const prevByStatus = on
         ? undefined
         : patchPrefix(qc, 'showsByStatus', (d: any) =>
             d
-              ? { ...d, notStarted: (d.notStarted ?? []).filter((i: any) => i.id !== id) }
+              ? {
+                  ...d,
+                  notStarted: evict(d.notStarted),
+                  watching: evict(d.watching),
+                  finished: evict(d.finished),
+                  paused: evict(d.paused),
+                }
               : d,
           );
       return { prevShow, prevWatchlist, prevByStatus };

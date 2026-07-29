@@ -1,5 +1,6 @@
 import { ExternalProvider, ProviderEntityKind } from '@tvwatch/shared';
 import { MetadataBackfillService } from './metadata-backfill.service';
+import { StructureRemapService } from './structure-remap.service';
 import { ProviderError } from './providers/shared/provider-errors';
 import { ProviderThrottled } from './providers/shared/provider-http';
 
@@ -79,6 +80,8 @@ describe('MetadataBackfillService — backfill anime routing (isAnimeMedia)', ()
       mediaItem: {
         findMany: jest.fn(async () => [candidate]),
         count: jest.fn(async () => 0),
+        // hydrateOne reads the structureProvider stamp before routing.
+        findUnique: jest.fn(async () => ({ metadataProvenance: null })),
       },
       episode: { count: jest.fn(async () => 0) },
       $queryRaw: jest.fn(async () => []), // parked prefetch
@@ -623,10 +626,17 @@ describe('MetadataBackfillService', () => {
       });
       expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
       expect(structureRemap.remapShow).toHaveBeenCalledWith('m1');
-      // Kept-unmapped count persisted so kept rows alone never re-arm the repair.
+      // Kept-unmapped count + matcher version + canonical structure provider persisted
+      // (kept rows alone never re-arm the repair; an older matcher version does).
       expect(prisma.mediaItem.update).toHaveBeenCalledWith({
         where: { id: 'm1' },
-        data: { metadataProvenance: { animeTvdbKeptUnmapped: 2 } },
+        data: {
+          metadataProvenance: {
+            animeTvdbKeptUnmapped: 2,
+            animeTvdbRemapVersion: StructureRemapService.MATCHER_VERSION,
+            structureProvider: 'tvdb',
+          },
+        },
       });
       expect(res).toEqual({ fixed: true, remapped: 50 });
     });
@@ -645,13 +655,31 @@ describe('MetadataBackfillService', () => {
 
     it('skips when only previously-kept unmapped rows remain (no re-hydration loop)', async () => {
       prisma.mediaItem.findUnique.mockResolvedValue(
-        animeShow({ metadataProvenance: { animeTvdbKeptUnmapped: 27 } }),
+        animeShow({
+          metadataProvenance: {
+            animeTvdbKeptUnmapped: 27,
+            animeTvdbRemapVersion: StructureRemapService.MATCHER_VERSION,
+          },
+        }),
       );
       prisma.__setStaleRows(27); // == kept count → nothing new
       const res = await service.fixAnimeShowFromTvdb('m1');
       expect(res.fixed).toBe(false);
       expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
       expect(tvdb.searchShows).not.toHaveBeenCalled();
+    });
+
+    it('re-arms when the kept rows were processed by an older matcher version', async () => {
+      prisma.mediaItem.findUnique.mockResolvedValue(
+        animeShow({
+          metadataProvenance: { animeTvdbKeptUnmapped: 27, animeTvdbRemapVersion: 1 },
+        }),
+      );
+      prisma.__setStaleRows(27); // same rows, but the v1 matcher never had absoluteNumber
+      structureRemap.remapShow.mockResolvedValue({ stale: 27, mapped: 27, unmapped: 0 });
+      const res = await service.fixAnimeShowFromTvdb('m1');
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
+      expect(res.fixed).toBe(true);
     });
 
     it('re-arms the repair when new stale rows appear (count grew past kept count)', async () => {

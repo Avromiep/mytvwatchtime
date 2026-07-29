@@ -59,4 +59,27 @@ describe('client vote-math', () => {
       { value: 'PHONE', count: 2 },
     ]);
   });
+
+  it('optimistic toggle-off clears the vote and decrements total', () => {
+    const res = applyVoteChange(
+      [
+        { value: 'TV', count: 2 },
+        { value: 'PHONE', count: 1 },
+      ],
+      3,
+      'TV',
+      null,
+    );
+    expect(res.total).toBe(2);
+    expect(res.options).toEqual([
+      { value: 'TV', count: 1 },
+      { value: 'PHONE', count: 1 },
+    ]);
+  });
+
+  it('clearing with no current vote is a no-op', () => {
+    const res = applyVoteChange([{ value: 'TV', count: 2 }], 2, null, null);
+    expect(res.total).toBe(2);
+    expect(res.options).toEqual([{ value: 'TV', count: 2 }]);
+  });
 });

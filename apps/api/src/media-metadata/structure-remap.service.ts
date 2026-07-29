@@ -16,11 +16,16 @@ export interface RemapStats {
   commentsMoved: number;
   episodesRemoved: number;
   seasonsRemoved: number;
+  /** Rule that produced each mapping (absolute+date, absolute, airDate, title). */
+  matchRules: Record<string, number>;
+  /** True when the run only computed matches (no writes). */
+  dryRun: boolean;
 }
 
 interface EpRow {
   id: string;
   number: number;
+  absoluteNumber: number | null;
   title: string;
   airDate: Date | null;
   seasonId: string;
@@ -42,6 +47,8 @@ const ZERO: RemapStats = {
   commentsMoved: 0,
   episodesRemoved: 0,
   seasonsRemoved: 0,
+  matchRules: {},
+  dryRun: false,
 };
 
 /**
@@ -57,26 +64,48 @@ const ZERO: RemapStats = {
 export class StructureRemapService {
   private readonly logger = new Logger(StructureRemapService.name);
 
+  /**
+   * Matching-ladder version. v1 = exact airDate / exact slugified title only — it could
+   * never map a flattened TMDB structure onto a split TVDB one (TMDB S1E32 ↔ TVDB S2E1
+   * share neither a reliable 1986 airDate nor a title). v2 adds absoluteNumber matching.
+   * Repairs store the version they ran with and re-arm when it bumps.
+   */
+  static readonly MATCHER_VERSION = 2;
+
   constructor(private readonly prisma: PrismaService) {}
 
   /**
    * After a TVDB hydration of a formerly TMDB-structured show: union upsert keeps stale
-   * TMDB-only rows (e.g. Re:ZERO TMDB S1E26-77 vs TVDB S2-S4). Stale = has a TMDB episode
-   * external id and NO TVDB one (fresh rows carry both). Maps them onto the fresh rows.
+   * rows that never got linked to TVDB (e.g. Re:ZERO TMDB S1E26-77 vs TVDB S2-S4, or
+   * Dragon Ball's flattened TMDB S1 = 153 rows whose TMDB ids were lost entirely).
+   * Stale = has NO TVDB episode external id; fresh = has one. Maps them onto the fresh
+   * rows. dryRun computes matches/counts without any writes.
    */
-  async remapShow(mediaId: string): Promise<RemapStats> {
+  async remapShow(mediaId: string, opts?: { dryRun?: boolean }): Promise<RemapStats> {
+    const dryRun = opts?.dryRun === true;
     const episodes = await this.loadShowEpisodes(mediaId);
-    if (episodes === null) return { ...ZERO };
+    if (episodes === null) return { ...ZERO, dryRun };
 
-    const stale = episodes.filter((e) => !e.hasTvdb && e.hasTmdb);
-    if (stale.length === 0) return { ...ZERO };
+    const stale = episodes.filter((e) => !e.hasTvdb);
+    if (stale.length === 0) return { ...ZERO, dryRun };
     const fresh = episodes.filter((e) => e.hasTvdb);
+    // No canonical rows to map onto — never delete into the void.
+    if (fresh.length === 0) return { ...ZERO, dryRun };
 
-    const stats = await this.transferMatches(stale, fresh, mediaId);
+    // Rows hydrated before Episode.absoluteNumber existed have it NULL — the matching
+    // ladder needs it on BOTH sides. Fill gaps cumulatively from the show's own
+    // (possibly stale) ordering: in a flattened TMDB structure S1E32 IS absolute 32,
+    // which is exactly the value the TVDB side carries for S2E1. Provider-supplied
+    // values are never overwritten; dry-run computes in memory only.
+    if (episodes.some((e) => e.absoluteNumber == null)) {
+      await this.backfillAbsoluteNumbers(episodes, dryRun);
+    }
+
+    const stats = await this.transferMatches(stale, fresh, mediaId, dryRun);
 
     // Seasons left empty by the cleanup are not part of the fresh structure — drop them.
     const showId = episodes[0]?.showId;
-    if (showId) {
+    if (showId && !dryRun) {
       const removedSeasons = await this.prisma.season.deleteMany({
         where: { showId, episodes: { none: {} } },
       });
@@ -84,10 +113,11 @@ export class StructureRemapService {
     }
 
     this.logger.log(
-      `remapShow(${mediaId}): ${stats.mapped}/${stats.stale} mapped, ${stats.unmapped} unmapped/kept, ` +
+      `remapShow(${mediaId})${dryRun ? ' [dry-run]' : ''}: ${stats.mapped}/${stats.stale} mapped, ${stats.unmapped} unmapped/kept, ` +
         `${stats.episodesRemoved} episodes + ${stats.seasonsRemoved} seasons removed, ` +
         `${stats.statusesMoved} statuses, ${stats.historiesMoved} history, ${stats.ratingsMoved} ratings, ` +
-        `${stats.reactionsMoved} reactions, ${stats.votesMoved} votes, ${stats.commentsMoved} comments`,
+        `${stats.reactionsMoved} reactions, ${stats.votesMoved} votes, ${stats.commentsMoved} comments, ` +
+        `rules=${JSON.stringify(stats.matchRules)}`,
     );
     return stats;
   }
@@ -115,9 +145,42 @@ export class StructureRemapService {
 
   // ---- shared core ----
 
+  /**
+   * Fill NULL absoluteNumbers from the show's own season/episode ordering (specials
+   * excluded — they don't participate in absolute aired order). Provider-supplied
+   * values win; only gaps are filled. Persisted unless dryRun (matching uses the
+   * in-memory values either way).
+   */
+  private async backfillAbsoluteNumbers(
+    episodes: (EpRow & { showId: string })[],
+    dryRun: boolean,
+  ): Promise<void> {
+    const regular = episodes
+      .filter((e) => !e.isSpecial)
+      .sort((a, b) => a.seasonNumber - b.seasonNumber || a.number - b.number);
+    let cursor = 1;
+    const updates: { id: string; abs: number }[] = [];
+    for (const e of regular) {
+      if (e.absoluteNumber == null) {
+        updates.push({ id: e.id, abs: cursor });
+        e.absoluteNumber = cursor;
+      }
+      cursor++;
+    }
+    if (dryRun || updates.length === 0) return;
+    await this.prisma.$transaction(
+      updates.map((u) =>
+        this.prisma.episode.update({
+          where: { id: u.id },
+          data: { absoluteNumber: u.abs },
+        }),
+      ),
+    );
+    this.logger.log(`remap: backfilled absoluteNumber on ${updates.length} episode rows`);
+  }
+
   /** All episodes of a media's shows row (null when the media has no shows row). */
-  private async loadShowEpisodes(mediaId: string): Promise<(EpRow & { showId: string })[] | null> {
-    const show = await this.prisma.show.findUnique({
+  private async loadShowEpisodes(mediaId: string): Promise<(EpRow & { showId: string })[] | null> {    const show = await this.prisma.show.findUnique({
       where: { mediaId },
       include: {
         seasons: {
@@ -139,6 +202,7 @@ export class StructureRemapService {
         rows.push({
           id: e.id,
           number: e.number,
+          absoluteNumber: e.absoluteNumber,
           title: e.title,
           airDate: e.airDate,
           seasonId: s.id,
@@ -154,16 +218,19 @@ export class StructureRemapService {
   }
 
   /** Match stale→fresh, transfer user data per pair, clean up unmapped rows, and
-   *  recompute progress caches on the target show for every affected user. */
+   *  recompute progress caches on the target show for every affected user.
+   *  dryRun computes matches and kept/deleted counts without any writes. */
   private async transferMatches(
     stale: EpRow[],
     fresh: EpRow[],
     targetMediaId: string,
+    dryRun = false,
   ): Promise<RemapStats> {
-    const stats: RemapStats = { ...ZERO, stale: stale.length };
+    const stats: RemapStats = { ...ZERO, stale: stale.length, matchRules: {}, dryRun };
     const claimed = new Set<string>();
     const byDate = new Map<string, EpRow[]>();
     const byTitle = new Map<string, EpRow[]>();
+    const byAbsolute = new Map<number, EpRow[]>();
     for (const f of fresh) {
       if (f.airDate) {
         const k = f.airDate.toISOString().slice(0, 10);
@@ -171,18 +238,33 @@ export class StructureRemapService {
       }
       const slug = slugify(f.title);
       if (slug) byTitle.set(slug, [...(byTitle.get(slug) ?? []), f]);
+      if (f.absoluteNumber != null) {
+        byAbsolute.set(f.absoluteNumber, [...(byAbsolute.get(f.absoluteNumber) ?? []), f]);
+      }
     }
 
-    const pairs: { from: EpRow; to: EpRow }[] = [];
+    const pairs: { from: EpRow; to: EpRow; rule: string }[] = [];
     const unmapped: EpRow[] = [];
     for (const s of stale) {
-      const to = this.matchTarget(s, byDate, byTitle, claimed);
-      if (to) {
-        claimed.add(to.id);
-        pairs.push({ from: s, to });
+      const match = this.matchTarget(s, byDate, byTitle, byAbsolute, claimed);
+      if (match) {
+        claimed.add(match.to.id);
+        pairs.push({ from: s, to: match.to, rule: match.rule });
+        stats.matchRules[match.rule] = (stats.matchRules[match.rule] ?? 0) + 1;
       } else {
         unmapped.push(s);
       }
+    }
+
+    if (dryRun) {
+      // Counts mirror the real run's decisions: mapped pairs, and among unmapped rows
+      // how many would be KEPT (user data) vs deleted.
+      stats.mapped = pairs.length;
+      for (const s of unmapped) {
+        if (await this.hasUserData(s.id)) stats.unmapped++;
+        else stats.episodesRemoved++;
+      }
+      return stats;
     }
 
     const affectedUsers = new Set<string>();
@@ -241,29 +323,65 @@ export class StructureRemapService {
     return stats;
   }
 
-  /** Conservative target pick: exact airDate (disambiguated by title), else exact title. */
+  /**
+   * Conservative target pick, strongest signal first:
+   *  1. absoluteNumber + airDate (±1 day) — cross-provider proof (0.95).
+   *  2. absoluteNumber alone, unique on both sides, airDate missing somewhere (0.9) —
+   *     the flattened-TMDB ↔ split-TVDB correspondence (TMDB S1E32 == TVDB S2E1).
+   *  3. exact airDate, unique (disambiguated by title) — v1 behavior.
+   *  4. exact slugified title, unique — v1 behavior.
+   * Anything ambiguous returns null — never guess, the stale row is kept and reported.
+   */
   private matchTarget(
     s: EpRow,
     byDate: Map<string, EpRow[]>,
     byTitle: Map<string, EpRow[]>,
+    byAbsolute: Map<number, EpRow[]>,
     claimed: Set<string>,
-  ): EpRow | null {
-    if (s.airDate) {
-      const candidates = (byDate.get(s.airDate.toISOString().slice(0, 10)) ?? []).filter(
+  ): { to: EpRow; rule: string } | null {
+    const dayOf = (d: Date) => d.toISOString().slice(0, 10);
+    const sameDayish = (a: Date | null, b: Date | null) => {
+      if (!a || !b) return false;
+      const diff = Math.abs(a.getTime() - b.getTime());
+      return diff <= 36 * 60 * 60 * 1000; // ±1.5 days absorbs TZ shifts
+    };
+
+    if (s.absoluteNumber != null) {
+      const candidates = (byAbsolute.get(s.absoluteNumber) ?? []).filter(
         (f) => !claimed.has(f.id),
       );
-      if (candidates.length === 1) return candidates[0];
+      if (candidates.length === 1) {
+        const c = candidates[0];
+        if (s.airDate && c.airDate && sameDayish(s.airDate, c.airDate)) {
+          return { to: c, rule: 'absolute+date' };
+        }
+        // A UNIQUE absolute-number correspondence is proof on its own: both structures
+        // are aired-order, and real provider data shows airDates routinely disagree by
+        // months for the same episode (Dragon Ball 1986). Dates can only VETO via
+        // duplicate absolutes below, not block a unique match.
+        return { to: c, rule: 'absolute' };
+      }
+      if (candidates.length > 1) {
+        const dated = candidates.filter((f) => sameDayish(s.airDate, f.airDate));
+        if (dated.length === 1) return { to: dated[0], rule: 'absolute+date' };
+        return null; // duplicate absolute numbers on the fresh side — do not guess
+      }
+    }
+
+    if (s.airDate) {
+      const candidates = (byDate.get(dayOf(s.airDate)) ?? []).filter((f) => !claimed.has(f.id));
+      if (candidates.length === 1) return { to: candidates[0], rule: 'airDate' };
       if (candidates.length > 1) {
         const slug = slugify(s.title);
         const titled = candidates.filter((f) => slugify(f.title) === slug);
-        if (titled.length === 1) return titled[0];
+        if (titled.length === 1) return { to: titled[0], rule: 'airDate+title' };
         return null; // ambiguous airDate group — do not guess
       }
     }
     const slug = slugify(s.title);
     if (slug) {
       const titled = (byTitle.get(slug) ?? []).filter((f) => !claimed.has(f.id));
-      if (titled.length === 1) return titled[0];
+      if (titled.length === 1) return { to: titled[0], rule: 'title' };
     }
     return null;
   }
@@ -310,6 +428,15 @@ export class StructureRemapService {
           where: { episodeId: from.id },
           data: { episodeId: to.id, seasonNumber: to.seasonNumber, episodeNumber: to.number },
         });
+        // Collapse exact duplicates created when the user watched BOTH the stale and the
+        // fresh row of the same episode (rewatch history is otherwise preserved row-for-row).
+        await tx.$executeRaw`
+          DELETE FROM watch_history a
+          USING watch_history b
+          WHERE a.episode_id = ${to.id} AND b.episode_id = ${to.id}
+            AND a.user_id = b.user_id
+            AND a.watched_at = b.watched_at
+            AND a.id > b.id`;
         for (const h of await tx.watchHistory.findMany({
           where: { episodeId: to.id },
           select: { userId: true },

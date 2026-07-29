@@ -23,6 +23,9 @@ import { EN_CONTENT_VERIFIER_VERSION } from './util/en-content-verifier';
 /** Metadata is considered stale (eligible for a full refresh) after 24h. */
 const DAY_MS = 1000 * 60 * 60 * 24;
 
+/** Compare-and-delete for the media write lock (only the owner releases). */
+const MEDIA_LOCK_RELEASE = `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end`;
+
 @Injectable()
 export class MediaMetadataService {
   private readonly logger = new Logger(MediaMetadataService.name);
@@ -37,6 +40,37 @@ export class MediaMetadataService {
     private readonly redis: RedisService,
     private readonly externalReviews?: ExternalReviewsService,
   ) {}
+
+  /**
+   * Serializing per-media write lock (acquire-or-wait, then execute). Hydrations of the
+   * same media (detail view vs. tvdb-rehydrate vs. anime cron) used to run their cast /
+   * season read-modify-write transactions concurrently, producing duplicate media_cast
+   * rows. Unlike ProviderRateLimiter.distinctLock (which skips the waiter's work), every
+   * caller here must persist its own payload, so waiters queue and then run.
+   */
+  private async withMediaWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const client = (this.redis as any)?.client;
+    if (!client?.set) return fn(); // Redis unavailable (tests/degraded env) — proceed.
+    const lockKey = `LOCK:hydrate:media:${key}`;
+    const token = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      const acquired =
+        (await client.set(lockKey, token, 'PX', 90_000, 'NX').catch(() => null)) === 'OK';
+      if (acquired) {
+        try {
+          return await fn();
+        } finally {
+          await client.eval(MEDIA_LOCK_RELEASE, 1, lockKey, token).catch(() => undefined);
+        }
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    // Never fail a hydration on lock contention — worst case we are back to the
+    // pre-lock behavior (unique constraints still protect integrity).
+    this.logger.warn(`withMediaWriteLock: timed out on ${lockKey} — proceeding unlocked`);
+    return fn();
+  }
 
   /** Enqueue classification, versioned by metadataRefreshedAt so each re-hydration re-runs
    *  once (not deduped against the earlier search-stub classify). Called on detail view. */
@@ -1194,6 +1228,20 @@ export class MediaMetadataService {
     // (TMDB id for TMDB hydration; TVDB id smuggled into the same field for TVDB hydration).
     episodeExternalProvider: ExternalProvider = ExternalProvider.TMDB,
   ): Promise<string> {
+    // Serialize concurrent hydrations of the same media (see withMediaWriteLock).
+    const lockKey = existingId ?? `${episodeExternalProvider}:show:${data.tvdbId ?? data.tmdbId}`;
+    return this.withMediaWriteLock(lockKey, () =>
+      this.persistShowLocked(data, existingId, lang, enData, episodeExternalProvider),
+    );
+  }
+
+  private async persistShowLocked(
+    data: NormalizedShow,
+    existingId: string | undefined,
+    lang: string,
+    enData: NormalizedShow | undefined,
+    episodeExternalProvider: ExternalProvider,
+  ): Promise<string> {
     // 60s timeout (default 5s): thousand-episode shows (Come Home Love, Super Sentai,
     // The Price is Right) upsert thousands of rows in this tx — the 5s default killed
     // the transaction mid-sync ("Transaction already closed / not found").
@@ -1367,6 +1415,22 @@ export class MediaMetadataService {
           episodeExternalProvider,
         );
 
+        // Record which provider owns this show's season/episode structure — set once
+        // (first full hydration) and only upgraded by the anime TVDB repair, so refresh
+        // routing (hydrateOne) is deterministic instead of inferring ownership from the
+        // mere presence of a TVDB cross-id. (Guarded: raw SQL only — some test harnesses
+        // mock a reduced transaction surface.)
+        if (typeof (tx as any).$executeRaw === 'function') {
+          const structureProvider =
+            episodeExternalProvider === ExternalProvider.THE_TVDB ? 'tvdb' : 'tmdb';
+          await tx.$executeRaw`
+          UPDATE media_items
+          SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
+                || jsonb_build_object('structureProvider', ${structureProvider}::text)
+          WHERE id = ${mediaId!}
+            AND metadata_provenance->>'structureProvider' IS NULL`;
+        }
+
         return mediaId!;
       },
       { timeout: 60_000 },
@@ -1390,6 +1454,22 @@ export class MediaMetadataService {
     // Source of `data` — only TMDB hydration is authoritative for watch offers
     // (TVDB supplies none; syncing from it would wipe TMDB-persisted links).
     source: ExternalProvider = ExternalProvider.TMDB,
+  ): Promise<string> {
+    // Serialize concurrent hydrations of the same media (see withMediaWriteLock).
+    // NormalizedMovie carries no tvdbId; TVDB-hydrated movies arrive with tmdbId=0 and
+    // an existingId from the light upsert, so the id-less fallback is rare and benign.
+    const lockKey = existingId ?? `${source}:movie:${data.tmdbId}`;
+    return this.withMediaWriteLock(lockKey, () =>
+      this.persistMovieLocked(data, existingId, lang, enData, source),
+    );
+  }
+
+  private async persistMovieLocked(
+    data: NormalizedMovie,
+    existingId: string | undefined,
+    lang: string,
+    enData: NormalizedMovie | undefined,
+    source: ExternalProvider,
   ): Promise<string> {
     const mediaId = await this.prisma.$transaction(
       async (tx) => {
@@ -1845,6 +1925,7 @@ export class MediaMetadataService {
           create: {
             seasonId: season.id,
             number: e.number,
+            absoluteNumber: e.absoluteNumber ?? null,
             title: enE?.title ?? e.title,
             overview: enE?.overview ?? e.overview,
             stillUrl: enE?.stillUrl ?? e.stillUrl,
@@ -1857,6 +1938,9 @@ export class MediaMetadataService {
             stillUrls: epStillUrls,
           },
           update: {
+            // Backfill only — never wipe an existing value with a provider that
+            // supplies none (null means "unknown", not "cleared").
+            ...(e.absoluteNumber != null ? { absoluteNumber: e.absoluteNumber } : {}),
             title: enE?.title ?? e.title,
             overview: enE?.overview ?? e.overview,
             stillUrl: enE?.stillUrl ?? e.stillUrl,
@@ -1965,20 +2049,26 @@ export class MediaMetadataService {
 
   private async upsertCast(
     tx: PrismaTransaction,
-    cast: { tmdbPersonId: number; name: string; profileUrl?: string | null }[],
-  ) {
-    const map = new Map<string, { name: string; profileUrl?: string | null }>();
+    cast: { tmdbPersonId: number; name: string; profileUrl?: string | null; personExternalId?: string }[],
+  ): Promise<Map<string, string>> {
+    const byExternal = new Map<string, { name: string; profileUrl?: string | null }>();
     for (const c of cast) {
-      map.set(`TMDB_${c.tmdbPersonId}`, { name: c.name, profileUrl: c.profileUrl });
+      // Provider-namespaced id (TMDB_/TVDB_) — see NormalizedCast.personExternalId.
+      const key = c.personExternalId ?? `TMDB_${c.tmdbPersonId}`;
+      if (!byExternal.has(key)) {
+        byExternal.set(key, { name: c.name, profileUrl: c.profileUrl });
+      }
     }
-    const ids: string[] = [];
-    for (const [externalId, info] of map) {
+    // externalId -> castMemberId (callers resolve per cast entry; a person with
+    // multiple roles appears once here but may repeat in the cast array).
+    const ids = new Map<string, string>();
+    for (const [externalId, info] of byExternal) {
       const member = await tx.castMember.upsert({
         where: { externalId },
         create: { externalId, name: info.name, profileUrl: info.profileUrl },
         update: { name: info.name, profileUrl: info.profileUrl ?? undefined },
       });
-      ids.push(member.id);
+      ids.set(externalId, member.id);
     }
     return ids;
   }
@@ -2006,12 +2096,13 @@ export class MediaMetadataService {
   private async syncCast(
     tx: PrismaTransaction,
     mediaId: string,
-    castMemberIds: string[],
+    castMemberIds: Map<string, string>,
     cast: {
       tmdbPersonId?: number;
       character?: string | null;
       characterExternalId?: number | null;
       order: number;
+      personExternalId?: string;
     }[],
     lang: string = currentLanguage(),
     enCast?: {
@@ -2019,6 +2110,7 @@ export class MediaMetadataService {
       character?: string | null;
       characterExternalId?: number | null;
       order: number;
+      personExternalId?: string;
     }[],
   ) {
     // Preserve other locales' characters: read existing JSON before recreating rows.
@@ -2027,11 +2119,39 @@ export class MediaMetadataService {
       select: { id: true, castMemberId: true, characters: true, characterExternalId: true },
     });
     const existingMap = new Map(existing.map((c) => [c.castMemberId, c]));
+    // Legacy rows created when TVDB people ids lived under the TMDB_ namespace can be
+    // matched by their TVDB character id and repointed to the correctly-namespaced
+    // cast member IN PLACE — media_cast.id (and its character votes) is preserved.
+    const byCharacterExt = new Map<number, (typeof existing)[number]>();
+    for (const row of existing) {
+      if (row.characterExternalId != null && !byCharacterExt.has(row.characterExternalId)) {
+        byCharacterExt.set(row.characterExternalId, row);
+      }
+    }
+    const castKey = (c?: { tmdbPersonId?: number; personExternalId?: string } | null) =>
+      c?.personExternalId ?? (c?.tmdbPersonId != null ? `TMDB_${c.tmdbPersonId}` : null);
+    const seen = new Set<string>();
     const retainedIds: string[] = [];
-    for (let i = 0; i < castMemberIds.length; i++) {
-      const id = castMemberIds[i];
+    for (let i = 0; i < cast.length; i++) {
       const c = cast[i];
-      const prev = existingMap.get(id);
+      const key = castKey(c);
+      // One row per (media, person): repeated roles of the same person are skipped
+      // (first/best-billed role wins) instead of creating duplicate media_cast rows.
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const id = castMemberIds.get(key);
+      if (!id) continue;
+      let prev = existingMap.get(id);
+      let repoint = false;
+      if (!prev && c?.characterExternalId != null) {
+        const legacy = byCharacterExt.get(c.characterExternalId);
+        if (legacy && legacy.castMemberId !== id) {
+          prev = legacy;
+          repoint = true;
+        } else if (legacy) {
+          prev = legacy;
+        }
+      }
       const enChar = enCast?.find(
         (e) => e.tmdbPersonId != null && e.tmdbPersonId === c?.tmdbPersonId,
       )?.character;
@@ -2051,7 +2171,7 @@ export class MediaMetadataService {
       if (prev) {
         await tx.mediaCast.update({
           where: { id: prev.id },
-          data,
+          data: repoint ? { ...data, castMemberId: id } : data,
         });
         retainedIds.push(prev.id);
       } else {

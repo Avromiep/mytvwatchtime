@@ -8,8 +8,13 @@ export interface DialogButton {
   label: string;
   variant?: DialogVariant;
   onPress?: () => void | Promise<unknown>;
-  /** Close the dialog after onPress resolves successfully. Default: true. */
-  closeOnPress?: boolean;
+  /**
+   * Close the dialog after onPress resolves successfully. Default: true.
+   * Use 'before' when the action opens a follow-up dialog: the current dialog is
+   * dismissed BEFORE onPress runs, so two native Modals are never stacked (stacking
+   * them and then dismissing the underneath one breaks iOS modal presentation).
+   */
+  closeOnPress?: boolean | 'before';
   /** Start the button in a loading state (rarely needed; the controller manages this). */
   loading?: boolean;
   disabled?: boolean;
@@ -56,7 +61,7 @@ export interface NormalizedButton {
   label: string;
   variant: DialogVariant;
   onPress?: () => void | Promise<unknown>;
-  closeOnPress: boolean;
+  closeOnPress: boolean | 'before';
   loading: boolean;
   disabled: boolean;
 }
@@ -161,6 +166,21 @@ export function createDialogController(): DialogController {
     const onPress = button.onPress;
     if (!onPress) {
       if (button.closeOnPress) dismiss(entry.id);
+      return;
+    }
+
+    if (button.closeOnPress === 'before') {
+      // Dismiss first, then run the action (which typically opens a follow-up
+      // dialog). No loading state: the dialog is already gone.
+      dismiss(entry.id);
+      busy = true;
+      try {
+        await onPress();
+      } catch {
+        // The follow-up dialog/action handles its own errors.
+      } finally {
+        busy = false;
+      }
       return;
     }
 

@@ -918,13 +918,17 @@ export class LibraryService {
     const finished: any[] = [];
     const paused: any[] = [];
     for (const s of statuses) {
+      // Dropped shows (removed from the watchlist) stay out of every bucket even
+      // though their watch history is kept — same rule as watchNext/trackedMediaIds.
+      // They return when the show is re-added or an episode is watched again.
+      if (s.dropped) continue;
       const w = s.watchedCount ?? 0;
       const airedTotal = airedMap.get(s.mediaId) ?? 0;
       const progress = airedTotal > 0 ? w / airedTotal : 0;
       const item = { id: s.media.id, title: s.media.title, posterUrl: s.media.posterUrl, rating: s.media.rating ?? null, year: s.media.show?.yearStart ?? null, progress, lastWatchedAt: s.lastWatchedAt, pausedAt: s.pausedAt };
-      // Tracking-paused shows (not dropped) get their own rail — out of the
+      // Tracking-paused shows get their own rail — out of the
       // To watch/Finished buckets regardless of progress.
-      if (s.pausedAt && !s.dropped) {
+      if (s.pausedAt) {
         paused.push(item);
         continue;
       }

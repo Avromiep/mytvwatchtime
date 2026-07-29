@@ -1,4 +1,4 @@
-﻿{
+{
   "title": "Film",
   "watchlist": "Daftar Tontonan",
   "watchlistEmpty": "Tambahkan film ke daftar tontonan agar muncul di sini.",
@@ -7,7 +7,7 @@
   "favorites": "Favorit",
   "favoritesEmpty": "Tambahkan film favorit.",
   "watchedButton": "Sudah ditonton",
-  "watchedButtonCount": "Sudah ditonton Ã—{{count}}",
+  "watchedButtonCount": "Sudah ditonton ×{{count}}",
   "inWatchlist": "Sudah di daftar",
   "addWatchlist": "Daftar Tontonan",
   "overview": "Ringkasan",

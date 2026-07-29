@@ -33,6 +33,23 @@ import {
   NormalizedShow,
 } from './tmdb.provider';
 import { TvdbClient } from './tvdb.client';
+import { slugify } from '../util/slugify';
+
+/**
+ * CastMember.externalId for a TVDB cast entry. Real TVDB people ids get the TVDB_
+ * namespace (they were previously stored under TMDB_, colliding with real TMDB person
+ * ids and duplicating cast on provider switches). Entries without a people id fall back
+ * to a STABLE, show-scoped id (character id, else person-name slug) — never a list
+ * index, which changed between refreshes and collided across shows.
+ */
+function tvdbPersonExternalId(
+  tvdbId: number,
+  c: { peopleId?: number | null; id?: number | null; personName?: string | null },
+): string {
+  if (c.peopleId != null) return `TVDB_${c.peopleId}`;
+  if (c.id != null) return `TVDB_${tvdbId}_CHAR_${c.id}`;
+  return `TVDB_${tvdbId}_NAME_${slugify(c.personName ?? 'unknown')}`;
+}
 
 interface TvdbSearchHit {
   tvdb_id: number;
@@ -380,12 +397,13 @@ export class TvdbProvider {
       .filter((c) => c.personName && c.peopleType === 'Actor')
       .slice(0, TVDB_CAST_LIMIT)
       .map((c, i) => ({
-        tmdbPersonId: c.peopleId ?? 900000000 + i, // unique per person (avoids all-0 collision)
+        tmdbPersonId: c.peopleId ?? 900000000 + i, // legacy numeric slot (unused when personExternalId is set)
         name: c.personName ?? 'Unknown',
         character: c.name ?? null,
         profileUrl: c.personImgURL ?? c.image ?? null,
         order: c.sort ?? i,
         characterExternalId: c.id ?? null,
+        personExternalId: tvdbPersonExternalId(tvdbId, c),
       }));
 
     return {
@@ -558,6 +576,7 @@ export class TvdbProvider {
       airDate: e.aired || null,
       rating: null,
       isFinale: e.finaleType === 'season' || e.finaleType === 'series',
+      absoluteNumber: e.absoluteNumber ?? null,
     };
   }
 
@@ -584,11 +603,12 @@ export class TvdbProvider {
       .filter((c) => c.personName && c.peopleType === 'Actor')
       .slice(0, TVDB_CAST_LIMIT)
       .map((c, i) => ({
-        tmdbPersonId: c.peopleId ?? 900000000 + i,
+        tmdbPersonId: c.peopleId ?? 900000000 + i, // legacy numeric slot (unused when personExternalId is set)
         name: c.personName ?? 'Unknown',
         character: c.name ?? null,
         profileUrl: c.personImgURL ?? c.image ?? null,
         order: c.sort ?? i,
+        personExternalId: tvdbPersonExternalId(tvdbId, c),
       }));
 
     const genres: NormalizedGenre[] = (m.genres || [])

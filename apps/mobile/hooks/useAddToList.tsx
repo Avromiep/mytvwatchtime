@@ -196,12 +196,16 @@ export function useAddToList() {
       title: media.title,
       buttons: [
         // Primary (yellow): the menu's one real action.
-        { label: t('lists:addToList'), variant: 'primary', onPress: () => openListPicker(media.id) },
+        // closeOnPress 'before': these actions open a follow-up dialog/modal — the
+        // menu must be dismissed first so two RN Modals are never stacked (iOS breaks
+        // when the underneath modal is dismissed while another is presented).
+        { label: t('lists:addToList'), variant: 'primary', closeOnPress: 'before', onPress: () => openListPicker(media.id) },
         ...(media.kind === 'movie'
           ? [
               {
                 label: t('lists:reassign'),
                 variant: 'secondary' as const,
+                closeOnPress: 'before' as const,
                 onPress: () => reassign.openReassign(media),
               },
             ]

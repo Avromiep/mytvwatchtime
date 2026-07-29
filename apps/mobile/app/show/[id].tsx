@@ -122,8 +122,14 @@ export default function ShowDetailScreen() {
           <LinearGradient colors={['rgba(15,17,21,0.65)', 'rgba(15,17,21,0.05)', 'rgba(15,17,21,0.7)']} locations={[0, 0.45, 1]} style={styles.overlay}>
             <Header
               showBack
+              tone="media"
               right={
-                <Pressable hitSlop={10} onPress={() => addToList.openMediaMenu({ id: show.id, title: show.title, kind: 'show', trackingPaused: show.trackingPaused })}>
+                <Pressable
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('common:moreOptions')}
+                  onPress={() => addToList.openMediaMenu({ id: show.id, title: show.title, kind: 'show', trackingPaused: show.trackingPaused })}
+                >
                   <Ionicons name="ellipsis-horizontal" size={24} color={tokens.mediaText} />
                 </Pressable>
               }
@@ -239,6 +245,9 @@ export default function ShowDetailScreen() {
         {tab === 'episodes' ? <EpisodesTab showId={id} /> : <AboutTab show={show} id={id} />}
         <View style={{ height: 40 }} />
       </ScrollView>
+      {/* useAddToList contract: the calling screen renders the reassign modal
+          (currently movie-only, but keeps the hook's render contract intact). */}
+      {addToList.reassignModal}
     </Screen>
   );
 }

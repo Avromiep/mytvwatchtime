@@ -134,4 +134,42 @@ describe('LibraryService showsByStatus paused bucket', () => {
       30,
     );
   });
+
+  it('excludes dropped shows (removed from watchlist) from every bucket while keeping their history', async () => {
+    const { svc, prisma } = makeSvc();
+    prisma.userShowStatus.findMany.mockResolvedValue([
+      statusRow('watching1', { watchedCount: 3 }),
+      statusRow('droppedWatching', { watchedCount: 3, dropped: true }),
+      statusRow('droppedFinished', { watchedCount: 10, dropped: true }),
+      statusRow('droppedPaused', { watchedCount: 2, dropped: true, pausedAt: new Date('2026-07-01') }),
+    ]);
+    prisma.watchlistItem.findMany.mockResolvedValue([]);
+    prisma.$queryRaw.mockResolvedValue([
+      { mediaId: 'watching1', airedCount: 10 },
+      { mediaId: 'droppedWatching', airedCount: 10 },
+      { mediaId: 'droppedFinished', airedCount: 10 },
+      { mediaId: 'droppedPaused', airedCount: 10 },
+    ]);
+
+    const res = await svc.showsByStatus('u1');
+    expect(res.watching.map((i: any) => i.id)).toEqual(['watching1']);
+    expect(res.finished).toEqual([]);
+    expect(res.paused).toEqual([]);
+    expect(res.notStarted).toEqual([]);
+  });
+
+  it('returns a re-added show (dropped cleared) to its bucket', async () => {
+    const { svc, prisma } = makeSvc();
+    prisma.userShowStatus.findMany.mockResolvedValue([
+      statusRow('readded', { watchedCount: 3, dropped: false }),
+    ]);
+    prisma.watchlistItem.findMany.mockResolvedValue([
+      { userId: 'u1', mediaId: 'readded', createdAt: new Date(), media: statusRow('readded', {}).media },
+    ]);
+    prisma.$queryRaw.mockResolvedValue([{ mediaId: 'readded', airedCount: 10 }]);
+
+    const res = await svc.showsByStatus('u1');
+    expect(res.watching.map((i: any) => i.id)).toEqual(['readded']);
+    expect(res.notStarted).toEqual([]);
+  });
 });

@@ -108,6 +108,8 @@ export class MetadataBackfillService {
   private typeRepairRunning = false;
   /** Prevents concurrent cast character-id backfills. */
   private charIdFixRunning = false;
+  /** Prevents concurrent cast-dedup batches. */
+  private castDedupRunning = false;
   /** In-flight per-show repairs — concurrent callers (detail + episodes requests arriving
    *  together, or a view racing the cron) share ONE repair instead of double-hydrating. */
   private readonly animeFixInflight = new Map<
@@ -235,6 +237,21 @@ export class MetadataBackfillService {
 
   /** Counts of media needing attention — powers the admin "metadata health" view. */
   async getHealthStats(includeContentStats = false, includeDeepContentStats = false) {
+    // The page polls this on every open/refresh and repairs trigger re-loads; the
+    // aggregates scan the whole catalog. Cache briefly — 60s staleness is fine for
+    // health metrics and keeps prod-sized scans off the request path.
+    const cacheKey = `admin:metadata-health:v1:${includeContentStats ? 1 : 0}:${includeDeepContentStats ? 1 : 0}`;
+    const cached =
+      typeof this.redis.get === 'function'
+        ? await this.redis.get<string>(cacheKey).catch(() => null)
+        : null;
+    if (cached) {
+      try {
+        return JSON.parse(cached);
+      } catch {
+        // fall through to recompute
+      }
+    }
     const deepCursor =
       (await this.redis.get<string>(EN_CONTENT_DEEP_CURSOR_KEY).catch(() => null)) ?? '';
     // Optimized queries: avoid NOT EXISTS on episodes (573k rows); check at the season level.
@@ -260,6 +277,8 @@ export class MetadataBackfillService {
       animeTvdbUnresolvable,
       recommendationsMissing,
       moviesMissingCountry,
+      castDuplicates,
+      dualStructure,
     ] = await Promise.all([
       this.prisma.mediaItem.count(),
       this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
@@ -424,11 +443,47 @@ export class MetadataBackfillService {
           AND mv.country IS NULL
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB' AND e.provider_entity_kind = 'MOVIE')
           AND COALESCE(m.metadata_provenance->>'countryCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'`,
+      // Duplicate-cast + dual-structure stats (set-based; run in the same parallel
+      // batch so a cache miss costs one round of queries, not two).
+      this.getCastDuplicateStats().catch(() => ({
+        castDuplicateMedia: 0,
+        castDuplicateRows: 0,
+        castDuplicateVotes: 0,
+      })),
+      // Shows whose stored structure contradicts the canonical provider (mixed TVDB +
+      // TMDB-only episodes, or TVDB-canonical shows with unlinked rows) — reconciled by
+      // the structure-reconcile job. Same set-based shape as findDualStructureShows.
+      this.prisma
+        .$queryRaw<{ c: bigint }[]>`
+        WITH flags AS (
+          SELECT episode_id,
+            bool_or(provider = 'TMDB') AS has_tmdb,
+            bool_or(provider = 'THE_TVDB') AS has_tvdb
+          FROM episode_external_ids
+          GROUP BY episode_id
+        ),
+        per_show AS (
+          SELECT sh.media_id,
+            count(*) FILTER (WHERE f.has_tvdb) AS fresh,
+            count(*) FILTER (WHERE NOT COALESCE(f.has_tvdb, false)) AS unlinked,
+            count(*) FILTER (WHERE COALESCE(f.has_tmdb, false) AND NOT COALESCE(f.has_tvdb, false)) AS tmdb_only
+          FROM episodes e
+          JOIN seasons s ON s.id = e.season_id
+          JOIN shows sh ON sh.id = s.show_id
+          LEFT JOIN flags f ON f.episode_id = e.id
+          GROUP BY sh.media_id
+        )
+        SELECT count(*)::bigint AS c
+        FROM per_show p
+        JOIN media_items mi ON mi.id = p.media_id
+        WHERE (p.fresh > 0 AND p.tmdb_only > 0)
+           OR (mi.metadata_provenance->>'structureProvider' = 'tvdb' AND p.unlinked > 0)`
+        .catch(() => [{ c: BigInt(0) }]),
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     const enContent = englishContentHealth?.[0];
     const enNum = (value: bigint | undefined) => Number(value ?? 0);
-    return {
+    const stats = {
       total,
       neverHydrated,
       showsMissingEpisodes: toNum(showsNoSeasons as any),
@@ -464,7 +519,14 @@ export class MetadataBackfillService {
       animeTvdbUnresolvable: toNum(animeTvdbUnresolvable as any),
       recommendationsMissing: toNum(recommendationsMissing as any),
       moviesMissingCountry: toNum(moviesMissingCountry as any),
+      ...castDuplicates,
+      dualStructureShows: toNum(dualStructure as any),
     };
+    // Cache write is best-effort (RedisService may be a reduced mock in tests).
+    if (typeof this.redis.set === 'function') {
+      await this.redis.set(cacheKey, JSON.stringify(stats), 60).catch(() => undefined);
+    }
+    return stats;
   }
 
   /** One batch: hydrate up to `count` media that is GENUINELY incomplete (missing data).
@@ -628,7 +690,23 @@ export class MetadataBackfillService {
           where: { id: mediaId, type: 'MOVIE', overview: { not: null } },
         })) > 0;
 
-    if (hasStructure && tvdb) {
+    // Deterministic structure ownership: the stamp is written at first full hydration
+    // and by the anime TVDB repair. It beats the legacy heuristic below ("has episodes
+    // + has a TVDB cross-id ⇒ TVDB structure"), which misroutes TMDB-structured shows
+    // that merely carry a TVDB cross-id (TMDB attaches it automatically).
+    const structureProvider = (
+      await this.prisma.mediaItem.findUnique({
+        where: { id: mediaId },
+        select: { metadataProvenance: true },
+      })
+    )?.metadataProvenance as any;
+    const structureOwner = structureProvider?.structureProvider as string | undefined;
+
+    if (isShow && structureOwner === 'tvdb' && tvdb) {
+      await this.meta.ensureShowFullTvdb(Number(tvdb.value)).catch(() => undefined);
+    } else if (isShow && structureOwner === 'tmdb' && tmdb) {
+      await this.meta.ensureShowFull(Number(tmdb.value));
+    } else if (hasStructure && tvdb) {
       // Already has TVDB-sourced structure → keep TVDB. NEVER override with TMDB.
       if (isShow) await this.meta.ensureShowFullTvdb(Number(tvdb.value)).catch(() => undefined);
       else await this.meta.ensureMovieFullTvdb(Number(tvdb.value)).catch(() => undefined);
@@ -890,6 +968,10 @@ export class MetadataBackfillService {
     // ~1.3M TVDB episode ids to temp (measured 6.7s on prod data, on EVERY anime
     // detail/episodes view). Correlated EXISTS uses episode_external_ids_episode_id_idx
     // per candidate row instead — single-digit ms.
+    //
+    // Stale = episode NOT linked to TVDB. For an anime title TVDB is canonical, so
+    // TMDB-only rows AND rows whose provider ids were lost entirely (the Dragon Ball
+    // case: flattened S1 rows with NO external ids left) are both stale.
     const staleRows = Number(
       (
         await this.prisma.$queryRaw<{ c: bigint }[]>`
@@ -898,10 +980,6 @@ export class MetadataBackfillService {
         JOIN seasons s ON s.id = e.season_id
         JOIN shows sh ON sh.id = s.show_id
         WHERE sh.media_id = ${mediaId}
-          AND EXISTS (
-            SELECT 1 FROM episode_external_ids x
-            WHERE x.episode_id = e.id AND x.provider = 'TMDB'
-          )
           AND NOT EXISTS (
             SELECT 1 FROM episode_external_ids y
             WHERE y.episode_id = e.id AND y.provider = 'THE_TVDB'
@@ -920,8 +998,18 @@ export class MetadataBackfillService {
     // (unmapped, but carrying user data) still look stale forever — without this gate
     // every view re-runs a full TVDB hydration + remap for zero effect. A stale count
     // that grew past the kept count means new contamination → re-arm the repair.
+    // The matcher version re-arms it too: a repair done by an older matching ladder
+    // (e.g. airDate/title-only v1, which could never map flattened TMDB structures)
+    // runs again so the improved matcher gets a pass at the kept rows.
     const keptBefore = (media.metadataProvenance as any)?.animeTvdbKeptUnmapped;
-    if (typeof keptBefore === 'number' && staleRows <= keptBefore) return notFixed;
+    const remapVersion = (media.metadataProvenance as any)?.animeTvdbRemapVersion ?? 1;
+    if (
+      typeof keptBefore === 'number' &&
+      staleRows <= keptBefore &&
+      remapVersion >= StructureRemapService.MATCHER_VERSION
+    ) {
+      return notFixed;
+    }
 
     // Skip when the TVDB id recently proved UNRESOLVABLE for this row — every detail
     // view / cron run would otherwise redo the cross-id lookups for a row that can't
@@ -963,13 +1051,22 @@ export class MetadataBackfillService {
       data: { metadataRefreshedAt: null },
     });
     await this.meta.ensureShowFullTvdb(tvdbId);
-    const remap = await this.structureRemap.remapShow(mediaId);
+    // The remap phase takes the media write lock (long TTL: hundred-pair remaps run
+    // many small transactions) so no hydration can interleave mid-transfer.
+    const remap = await this.withCastDedupLock(
+      mediaId,
+      () => this.structureRemap.remapShow(mediaId),
+      10 * 60 * 1000,
+    );
     // Remember the kept-unmapped count so kept rows alone never re-arm this repair.
-    // A success also clears the no-id / fail-strike marks.
+    // A success also clears the no-id / fail-strike marks. TVDB is now the canonical
+    // structure provider for this show (anime policy).
     const provenance = { ...((media.metadataProvenance as any) ?? {}) } as Record<string, any>;
     delete provenance.animeTvdbNoId;
     delete provenance.animeTvdbFail;
     provenance.animeTvdbKeptUnmapped = remap.unmapped;
+    provenance.animeTvdbRemapVersion = StructureRemapService.MATCHER_VERSION;
+    provenance.structureProvider = 'tvdb';
     await this.prisma.mediaItem.update({
       where: { id: mediaId },
       data: { metadataProvenance: provenance },
@@ -2055,6 +2152,929 @@ export class MetadataBackfillService {
       return { processed: candidates.length, succeeded, failed, rateLimited, parked, sample };
     } finally {
       this.charIdFixRunning = false;
+    }
+  }
+
+  // ---- Cast deduplication ----
+
+  /** Same lock key as MediaMetadataService.withMediaWriteLock — dedup and hydration
+   *  of the same media are mutually exclusive. */
+  private async withCastDedupLock<T>(
+    mediaId: string,
+    fn: () => Promise<T>,
+    ttlMs = 45_000,
+  ): Promise<T> {
+    const client = (this.redis as any)?.client;
+    if (!client?.set) return fn(); // Redis unavailable (tests/degraded env) — proceed.
+    const lockKey = `LOCK:hydrate:media:${mediaId}`;
+    const token = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const release = `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end`;
+    const deadline = Date.now() + Math.max(60_000, ttlMs);
+    while (Date.now() < deadline) {
+      const acquired =
+        (await client.set(lockKey, token, 'PX', ttlMs, 'NX').catch(() => null)) === 'OK';
+      if (acquired) {
+        try {
+          return await fn();
+        } finally {
+          await client.eval(release, 1, lockKey, token).catch(() => undefined);
+        }
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error(`cast-dedup: timed out waiting for hydration lock on ${mediaId}`);
+  }
+
+  /** Media ids having any likely-duplicate cast group (same person record, same TVDB
+   *  character id, or same normalized person+character name — including prefix variants
+   *  like "Matt Murdock" vs "Matt Murdock / Daredevil" — appearing more than once). */
+  private async findCastDuplicateMediaIds(limit: number): Promise<string[]> {
+    const rows = await this.prisma.$queryRaw<{ media_id: string }[]>`
+      SELECT media_id FROM (
+        SELECT media_id, cast_member_id::text AS k FROM media_cast
+          GROUP BY media_id, cast_member_id HAVING count(*) > 1
+        UNION
+        SELECT media_id, 'ce:' || character_external_id::text FROM media_cast
+          WHERE character_external_id IS NOT NULL
+          GROUP BY media_id, character_external_id HAVING count(*) > 1
+        UNION
+        SELECT mc.media_id, 'n:' || lower(cm.name) || '|' || lower(COALESCE(mc.character, ''))
+          FROM media_cast mc JOIN cast_members cm ON cm.id = mc.cast_member_id
+          GROUP BY mc.media_id, lower(cm.name), lower(COALESCE(mc.character, ''))
+          HAVING count(*) > 1
+        UNION
+        SELECT mc.media_id, 'nb:' || lower(cm.name) || '|' || btrim(lower(split_part(COALESCE(mc.character, ''), '/', 1)))
+          FROM media_cast mc JOIN cast_members cm ON cm.id = mc.cast_member_id
+          GROUP BY mc.media_id, lower(cm.name), btrim(lower(split_part(COALESCE(mc.character, ''), '/', 1)))
+          HAVING count(*) > 1
+      ) x
+      GROUP BY media_id
+      LIMIT ${limit}`;
+    return rows.map((r) => r.media_id);
+  }
+
+  /** Counts for the Metadata Health page. All set-based (single passes with hash
+   *  aggregates) — correlated EXISTS/self-join variants of these queries were
+   *  measured to hang the endpoint on prod-sized catalogs. */
+  async getCastDuplicateStats(): Promise<{
+    castDuplicateMedia: number;
+    castDuplicateRows: number;
+    castDuplicateVotes: number;
+  }> {
+    const [media] = await this.prisma.$queryRaw<{ c: bigint }[]>`
+      SELECT count(*)::bigint AS c FROM (
+        SELECT media_id FROM (
+          SELECT media_id, cast_member_id::text AS k FROM media_cast
+            GROUP BY media_id, cast_member_id HAVING count(*) > 1
+          UNION
+          SELECT media_id, 'ce:' || character_external_id::text FROM media_cast
+            WHERE character_external_id IS NOT NULL
+            GROUP BY media_id, character_external_id HAVING count(*) > 1
+          UNION
+          SELECT mc.media_id, 'n:' || lower(cm.name) || '|' || lower(COALESCE(mc.character, ''))
+            FROM media_cast mc JOIN cast_members cm ON cm.id = mc.cast_member_id
+            GROUP BY mc.media_id, lower(cm.name), lower(COALESCE(mc.character, ''))
+            HAVING count(*) > 1
+          UNION
+          SELECT mc.media_id, 'nb:' || lower(cm.name) || '|' || btrim(lower(split_part(COALESCE(mc.character, ''), '/', 1)))
+            FROM media_cast mc JOIN cast_members cm ON cm.id = mc.cast_member_id
+            GROUP BY mc.media_id, lower(cm.name), btrim(lower(split_part(COALESCE(mc.character, ''), '/', 1)))
+            HAVING count(*) > 1
+        ) x GROUP BY media_id
+      ) y`;
+    const [rows] = await this.prisma.$queryRaw<{ c: bigint }[]>`
+      SELECT COALESCE(sum(cnt - 1), 0)::bigint AS c FROM (
+        SELECT count(*) AS cnt FROM media_cast GROUP BY media_id, cast_member_id HAVING count(*) > 1
+        UNION ALL
+        SELECT count(*) FROM media_cast WHERE character_external_id IS NOT NULL
+          GROUP BY media_id, character_external_id HAVING count(*) > 1
+      ) z`;
+    // Votes on rows belonging to any exact-duplicate group (member- or character-id
+    // based) — set-based: duplicate keys first, then a plain join to votes.
+    const [votes] = await this.prisma.$queryRaw<{ c: bigint }[]>`
+      WITH dup_rows AS (
+        SELECT a.id
+        FROM media_cast a
+        JOIN (
+          SELECT media_id, cast_member_id FROM media_cast
+          GROUP BY media_id, cast_member_id HAVING count(*) > 1
+        ) d ON d.media_id = a.media_id AND d.cast_member_id = a.cast_member_id
+        UNION
+        SELECT a.id
+        FROM media_cast a
+        JOIN (
+          SELECT media_id, character_external_id FROM media_cast
+          WHERE character_external_id IS NOT NULL
+          GROUP BY media_id, character_external_id HAVING count(*) > 1
+        ) d2 ON d2.media_id = a.media_id AND d2.character_external_id = a.character_external_id
+      )
+      SELECT count(*)::bigint AS c
+      FROM character_votes cv
+      WHERE cv.cast_id IN (SELECT id FROM dup_rows)`;
+    return {
+      castDuplicateMedia: Number(media?.c ?? 0),
+      castDuplicateRows: Number(rows?.c ?? 0),
+      castDuplicateVotes: Number(votes?.c ?? 0),
+    };
+  }
+
+  /**
+   * Detect and (in repair mode) merge duplicate media_cast rows — created historically
+   * when TVDB people ids were stored under the TMDB_ external-id namespace, by the
+   * index-based fallback ids, or by concurrent hydrations.
+   *
+   * Confidence: HIGH = rows share the same cast_member id, the same TVDB
+   * characterExternalId, OR the same normalized person+character name within one media
+   * (including prefix variants like "Matt Murdock" vs "Matt Murdock / Daredevil") —
+   * auto-merged. Genuinely different characters never group (one actor, two roles
+   * stays untouched). Anything not provably the same person+role on the same title is
+   * left for the manual pair-merge endpoint after human review.
+   *
+   * User data is preserved: character votes are re-pointed to the canonical row inside
+   * the same transaction BEFORE any duplicate row is deleted; a duplicate row is only
+   * deleted once zero votes reference it. Modes: report (detection only), dry-run
+   * (full migration inside a rolled-back transaction — exact counts, no writes),
+   * repair (commits).
+   */
+  async repairCastDuplicates(opts?: {
+    mode?: 'report' | 'dry-run' | 'repair';
+    limit?: number;
+    mediaId?: string;
+  }): Promise<{
+    mode: string;
+    processed: number;
+    groupsHigh: number;
+    groupsMedium: number;
+    merged: number;
+    rowsDeleted: number;
+    votesMoved: number;
+    votesConflictResolved: number;
+    orphanMembersDeleted: number;
+    failed: number;
+    review: { mediaId: string; title: string; rows: { id: string; member: string; character: string | null; votes: number }[] }[];
+    /** Total review groups (review array is capped at 50). */
+    reviewTotal: number;
+    sample: string[];
+  }> {
+    const mode = opts?.mode ?? 'report';
+    const empty = {
+      mode,
+      processed: 0,
+      groupsHigh: 0,
+      groupsMedium: 0,
+      merged: 0,
+      rowsDeleted: 0,
+      votesMoved: 0,
+      votesConflictResolved: 0,
+      orphanMembersDeleted: 0,
+      failed: 0,
+      review: [] as {
+        mediaId: string;
+        title: string;
+        rows: { id: string; member: string; character: string | null; votes: number }[];
+      }[],
+      reviewTotal: 0,
+      sample: [] as string[],
+    };
+    if (this.castDedupRunning) {
+      this.logger.log('Cast dedup already running — skipping');
+      return empty;
+    }
+    this.castDedupRunning = true;
+    this.trackRepair('cast-dedup', {
+      running: true,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      finishedAt: null,
+    });
+    try {
+      const limit = Math.max(1, Math.min(opts?.limit ?? 500, 100000));
+      const mediaIds = opts?.mediaId
+        ? [opts.mediaId]
+        : await this.findCastDuplicateMediaIds(limit);
+      this.trackRepair('cast-dedup', { total: mediaIds.length });
+
+      let groupsHigh = 0;
+      let groupsMedium = 0;
+      let merged = 0;
+      let rowsDeleted = 0;
+      let votesMoved = 0;
+      let votesConflictResolved = 0;
+      let orphanMembersDeleted = 0;
+      let failed = 0;
+      const review: typeof empty.review = [];
+      const sample: string[] = [];
+
+      for (let i = 0; i < mediaIds.length; i++) {
+        const mediaId = mediaIds[i];
+        this.trackRepair('cast-dedup', {
+          processed: i + 1,
+          succeeded: merged,
+          failed,
+          current: mediaId,
+        });
+        try {
+          const result = await this.withCastDedupLock(mediaId, () =>
+            this.mergeMediaCastDuplicates(mediaId, mode),
+          );
+          groupsHigh += result.groupsHigh;
+          groupsMedium += result.groupsMedium;
+          merged += result.merged;
+          rowsDeleted += result.rowsDeleted;
+          votesMoved += result.votesMoved;
+          votesConflictResolved += result.votesConflictResolved;
+          orphanMembersDeleted += result.orphanMembersDeleted;
+          if (result.review.length) review.push({ mediaId, title: result.title, rows: result.review });
+          if (result.merged > 0 && sample.length < 10) sample.push(result.title);
+        } catch (e) {
+          failed++;
+          this.logger.warn(`cast-dedup failed for ${mediaId}: ${(e as Error).message}`);
+        }
+      }
+
+      const summary = {
+        mode,
+        processed: mediaIds.length,
+        groupsHigh,
+        groupsMedium,
+        merged,
+        rowsDeleted,
+        votesMoved,
+        votesConflictResolved,
+        orphanMembersDeleted,
+        failed,
+        // Bounded payload (CronJobRun.result has a 2000-char budget; full detail is
+        // in the logs and via the targeted inspect endpoint).
+        review: review.slice(0, 50),
+        reviewTotal: review.length,
+        sample,
+      };
+      this.trackRepair('cast-dedup', {
+        running: false,
+        processed: mediaIds.length,
+        succeeded: merged,
+        failed,
+        finishedAt: new Date(),
+      });
+      this.logger.log(
+        `Cast dedup (${mode}): ${mediaIds.length} media scanned, ${groupsHigh} high-confidence groups, ` +
+          `${merged} merged, ${votesMoved} votes moved, ${rowsDeleted} rows deleted, ` +
+          `${groupsMedium} medium-confidence groups need review, ${failed} failed`,
+      );
+      return summary;
+    } finally {
+      this.castDedupRunning = false;
+    }
+  }
+
+  /** Sentinel used to roll back a dry-run transaction after counting. */
+  private static readonly DRY_RUN = Symbol('cast-dedup-dry-run');
+
+  /** Per-media merge, executed under the hydration lock. Returns per-mode counts. */
+  private async mergeMediaCastDuplicates(
+    mediaId: string,
+    mode: 'report' | 'dry-run' | 'repair',
+  ): Promise<{
+    title: string;
+    groupsHigh: number;
+    groupsMedium: number;
+    merged: number;
+    rowsDeleted: number;
+    votesMoved: number;
+    votesConflictResolved: number;
+    orphanMembersDeleted: number;
+    review: { id: string; member: string; character: string | null; votes: number }[];
+  }> {
+    try {
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const media = await tx.mediaItem.findUniqueOrThrow({
+            where: { id: mediaId },
+            select: { title: true },
+          });
+          const rows = await tx.mediaCast.findMany({
+            where: { mediaId },
+            include: {
+              castMember: { select: { id: true, name: true, externalId: true } },
+              _count: { select: { characterVotes: true } },
+            },
+            orderBy: { sortOrder: 'asc' },
+          });
+          const groups = this.groupDuplicateCast(rows);
+          const out = {
+            title: media.title,
+            groupsHigh: groups.filter((g) => g.confidence === 'HIGH').length,
+            groupsMedium: groups.filter((g) => g.confidence === 'MEDIUM').length,
+            merged: 0,
+            rowsDeleted: 0,
+            votesMoved: 0,
+            votesConflictResolved: 0,
+            orphanMembersDeleted: 0,
+            review: [] as { id: string; member: string; character: string | null; votes: number }[],
+          };
+          if (mode === 'report') {
+            for (const g of groups) {
+              if (g.confidence !== 'MEDIUM') continue;
+              for (const r of g.rows) {
+                out.review.push({
+                  id: r.id,
+                  member: `${r.castMember.name} (${r.castMember.externalId ?? 'no-ext-id'})`,
+                  character: r.character,
+                  votes: r._count.characterVotes,
+                });
+              }
+            }
+            return out;
+          }
+          for (const g of groups) {
+            if (g.confidence !== 'HIGH') continue;
+            const r = await this.mergeCastGroupTx(tx, mediaId, media.title, g.rows);
+            out.merged += r.merged;
+            out.rowsDeleted += r.rowsDeleted;
+            out.votesMoved += r.votesMoved;
+            out.votesConflictResolved += r.votesConflictResolved;
+            out.orphanMembersDeleted += r.orphanMembersDeleted;
+          }
+          if (mode === 'dry-run') {
+            // Counts are exact (all statements executed) but the transaction rolls back.
+            this.dryRunCapture = out;
+            // eslint-disable-next-line no-throw-literal
+            throw MetadataBackfillService.DRY_RUN;
+          }
+          // Repair mode: stamp the audit trail on the media row.
+          if (out.merged > 0) {
+            await tx.$executeRaw`
+              UPDATE media_items
+              SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
+                    || jsonb_build_object('castDedup', jsonb_build_object(
+                         'at', ${new Date().toISOString()}::text,
+                         'merged', ${out.merged}::int,
+                         'votesMoved', ${out.votesMoved}::int))
+              WHERE id = ${mediaId}`;
+          }
+          return out;
+        },
+        { timeout: 30_000 },
+      );
+    } catch (e) {
+      if (e === MetadataBackfillService.DRY_RUN) {
+        // The sentinel unwound the (rolled-back) transaction; results were captured
+        // just before the throw.
+        const captured = this.dryRunCapture;
+        this.dryRunCapture = null;
+        if (captured) return captured;
+        throw e;
+      }
+      throw e;
+    }
+  }
+
+  /** Side channel for dry-run results (the sentinel exception unwinds the tx). */
+  private dryRunCapture: {
+    title: string;
+    groupsHigh: number;
+    groupsMedium: number;
+    merged: number;
+    rowsDeleted: number;
+    votesMoved: number;
+    votesConflictResolved: number;
+    orphanMembersDeleted: number;
+    review: { id: string; member: string; character: string | null; votes: number }[];
+  } | null = null;
+
+  /**
+   * Manually merge ONE reviewed duplicate pair (the report's MEDIUM/name-only cases,
+   * e.g. "Matt Murdock" vs "Matt Murdock / Daredevil"). keepCastId survives; votes on
+   * mergeCastId are re-pointed before its row is deleted. Runs under the media lock,
+   * in one transaction, and stamps the audit trail. Used by the admin merge endpoint
+   * after a human confirms the two rows are the same person/character.
+   */
+  async mergeCastPair(
+    mediaId: string,
+    keepCastId: string,
+    mergeCastId: string,
+  ): Promise<{ merged: number; votesMoved: number; rowsDeleted: number }> {
+    return this.withCastDedupLock(mediaId, async () => {
+      const result = await this.prisma.$transaction(
+        async (tx) => {
+          const media = await tx.mediaItem.findUniqueOrThrow({
+            where: { id: mediaId },
+            select: { title: true },
+          });
+          const rows = await tx.mediaCast.findMany({
+            where: { id: { in: [keepCastId, mergeCastId] }, mediaId },
+            include: {
+              castMember: { select: { id: true, name: true, externalId: true } },
+              _count: { select: { characterVotes: true } },
+            },
+          });
+          if (rows.length !== 2) {
+            throw new BadRequestException(
+              `Expected 2 cast rows for media ${mediaId} (keep=${keepCastId}, merge=${mergeCastId}), found ${rows.length}`,
+            );
+          }
+          const out = await this.mergeCastGroupTx(tx, mediaId, media.title, rows, keepCastId);
+          if (out.merged > 0) {
+            await tx.$executeRaw`
+              UPDATE media_items
+              SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
+                    || jsonb_build_object('castDedup', jsonb_build_object(
+                         'at', ${new Date().toISOString()}::text,
+                         'merged', ${out.merged}::int,
+                         'votesMoved', ${out.votesMoved}::int,
+                         'manual', true))
+              WHERE id = ${mediaId}`;
+          }
+          return out;
+        },
+        { timeout: 30_000 },
+      );
+      return {
+        merged: result.merged,
+        votesMoved: result.votesMoved,
+        rowsDeleted: result.rowsDeleted,
+      };
+    });
+  }
+
+  /**
+   * Merge one duplicate group inside an open transaction. Canonical survivor: the
+   * forced id when given (manual merge), else pickCanonicalCastRow. Votes are
+   * re-pointed BEFORE the duplicate rows are deleted; duplicates are deleted only
+   * once vote-free; fallback cast members orphaned by the merge are removed.
+   */
+  private async mergeCastGroupTx(
+    tx: Prisma.TransactionClient,
+    mediaId: string,
+    title: string,
+    rows: {
+      id: string;
+      castMemberId: string;
+      character: string | null;
+      characterExternalId: number | null;
+      sortOrder: number;
+      characters: unknown;
+      castMember: { id: string; name: string; externalId: string | null };
+      _count: { characterVotes: number };
+    }[],
+    forcedCanonicalId?: string,
+  ): Promise<{
+    merged: number;
+    rowsDeleted: number;
+    votesMoved: number;
+    votesConflictResolved: number;
+    orphanMembersDeleted: number;
+  }> {
+    const out = {
+      merged: 0,
+      rowsDeleted: 0,
+      votesMoved: 0,
+      votesConflictResolved: 0,
+      orphanMembersDeleted: 0,
+    };
+    const canonical = forcedCanonicalId
+      ? rows.find((r) => r.id === forcedCanonicalId)!
+      : this.pickCanonicalCastRow(rows);
+    const dups = rows.filter((r) => r.id !== canonical.id);
+    if (!dups.length) return out;
+    const dupIds = dups.map((r) => r.id);
+    // 1) Re-point votes to the canonical row, guarded against the (logically
+    //    impossible) same user+episode collision with the canonical row.
+    const moved = await tx.$executeRaw`
+      UPDATE character_votes cv SET cast_id = ${canonical.id}
+      WHERE cv.cast_id IN (${Prisma.join(dupIds)})
+        AND NOT EXISTS (
+          SELECT 1 FROM character_votes x
+          WHERE x.user_id = cv.user_id AND x.episode_id = cv.episode_id AND x.cast_id = ${canonical.id}
+        )`;
+    out.votesMoved += moved;
+    // 2) Pathological leftovers (user somehow voted both rows for the SAME episode —
+    //    impossible via the API, possible via a past import race): the canonical row's
+    //    vote wins; log the discarded duplicate vote ids.
+    const conflicts = await tx.$queryRaw<{ id: string }[]>`
+      SELECT cv.id FROM character_votes cv
+      WHERE cv.cast_id IN (${Prisma.join(dupIds)})
+        AND EXISTS (
+          SELECT 1 FROM character_votes x
+          WHERE x.user_id = cv.user_id AND x.episode_id = cv.episode_id AND x.cast_id = ${canonical.id}
+        )`;
+    if (conflicts.length) {
+      this.logger.warn(
+        `cast-dedup ${mediaId}: discarding ${conflicts.length} duplicate same-episode vote(s) ` +
+          `(kept canonical row ${canonical.id}): ${conflicts.map((c) => c.id).join(', ')}`,
+      );
+      await tx.$executeRaw`
+        DELETE FROM character_votes WHERE id IN (${Prisma.join(conflicts.map((c) => c.id))})`;
+      out.votesConflictResolved += conflicts.length;
+    }
+    // 3) Delete duplicates only once zero votes reference them. This runs BEFORE the
+    //    canonical update below so a member repoint can never transiently violate the
+    //    (mediaId, castMemberId) unique index.
+    const deleted = await tx.$executeRaw`
+      DELETE FROM media_cast mc WHERE mc.id IN (${Prisma.join(dupIds)})
+        AND NOT EXISTS (SELECT 1 FROM character_votes cv WHERE cv.cast_id = mc.id)`;
+    out.rowsDeleted += deleted;
+    out.merged += deleted > 0 ? 1 : 0;
+    // 4) Merge localized character-name overrides into the canonical row, and repoint
+    //    it to the group's REAL provider-namespaced cast member when the canonical row
+    //    sits on a legacy fallback member (TMDB_900000000+i / TVDB_<id>_(CHAR|NAME)_).
+    const isFallbackExt = (ext: string | null) =>
+      /^TMDB_9\d{8}$/.test(ext ?? '') || /^TVDB_\d+_(CHAR|NAME)_/.test(ext ?? '');
+    const realMember = [canonical, ...dups].find((r) => !isFallbackExt(r.castMember.externalId));
+    const repointMember =
+      realMember && realMember.castMemberId !== canonical.castMemberId
+        ? realMember.castMemberId
+        : undefined;
+    const mergedChars: Record<string, string> = {};
+    for (const r of [...dups, canonical]) {
+      const c = r.characters;
+      if (c && typeof c === 'object' && !Array.isArray(c)) {
+        Object.assign(mergedChars, c as Record<string, string>);
+      }
+    }
+    await tx.mediaCast.update({
+      where: { id: canonical.id },
+      data: {
+        ...(repointMember ? { castMemberId: repointMember } : {}),
+        characters: Object.keys(mergedChars).length ? mergedChars : undefined,
+        character: canonical.character ?? dups.find((d) => d.character)?.character ?? null,
+        characterExternalId:
+          canonical.characterExternalId ??
+          dups.find((d) => d.characterExternalId != null)?.characterExternalId ??
+          null,
+        sortOrder: Math.min(canonical.sortOrder, ...dups.map((d) => d.sortOrder)),
+      },
+    });
+    // 5) Remove orphan FALLBACK cast members left with no credits at all — including
+    //    the canonical row's original member after a repoint. Real provider-id members
+    //    are global records and are kept.
+    const memberIdsToCheck = new Set(dups.map((r) => r.castMemberId));
+    if (repointMember) memberIdsToCheck.add(canonical.castMemberId);
+    for (const memberId of memberIdsToCheck) {
+      const memberRow =
+        dups.find((r) => r.castMemberId === memberId)?.castMember ??
+        (memberId === canonical.castMemberId ? canonical.castMember : null);
+      if (!memberRow || !isFallbackExt(memberRow.externalId)) continue;
+      const remaining = await tx.mediaCast.count({ where: { castMemberId: memberId } });
+      if (remaining === 0) {
+        await tx.castMember.delete({ where: { id: memberId } }).catch(() => undefined);
+        out.orphanMembersDeleted++;
+      }
+    }
+    this.logger.log(
+      `cast-dedup ${mediaId} (${title}): merged ${dupIds.length} row(s) into ${canonical.id} ` +
+        `(member ${canonical.castMember.externalId ?? canonical.castMemberId}); ` +
+        `votes moved=${moved}, conflicts=${conflicts.length}, rows deleted=${deleted}`,
+    );
+    return out;
+  }
+
+  /**
+   * Union-find grouping of a media's cast rows into duplicate clusters.
+   *
+   * HIGH (auto-merged):
+   *  - same cast_member record, or same TVDB characterExternalId;
+   *  - same normalized person name + same normalized character name. Within ONE media
+   *    this is a safe merge: two different actors with the same name playing the same
+   *    character on the same title is effectively impossible, and the rows exist only
+   *    because providers issued different person ids;
+   *  - same normalized person name + prefix-compatible character ("Matt Murdock" vs
+   *    "Matt Murdock / Daredevil" — providers format dual-role names differently).
+   * Rows are only grouped when the normalized person name is non-empty.
+   * Genuinely different characters never group (one actor, two roles stays untouched).
+   */
+  private groupDuplicateCast(
+    rows: {
+      id: string;
+      castMemberId: string;
+      character: string | null;
+      characterExternalId: number | null;
+      sortOrder: number;
+      characters: unknown;
+      castMember: { id: string; name: string; externalId: string | null };
+      _count: { characterVotes: number };
+    }[],
+  ): { confidence: 'HIGH' | 'MEDIUM'; rows: typeof rows }[] {
+    const parent = new Map<string, string>();
+    const find = (x: string): string => {
+      let r = x;
+      while (parent.get(r) !== r) r = parent.get(r)!;
+      parent.set(x, r);
+      return r;
+    };
+    const union = (a: string, b: string) => parent.set(find(a), find(b));
+    for (const r of rows) parent.set(r.id, r.id);
+    const highKeys = new Map<string, string[]>();
+    const norm = (s: string) =>
+      s
+        .toLowerCase()
+        .normalize('NFKD')
+        .replace(/\p{Mark}/gu, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    for (const r of rows) {
+      const normName = norm(r.castMember.name);
+      const normChar = norm(r.character ?? '');
+      const keys = [`member:${r.castMemberId}`];
+      if (r.characterExternalId != null) keys.push(`charExt:${r.characterExternalId}`);
+      if (normName) {
+        keys.push(`name:${normName}|${normChar}`);
+        // Prefix variant ("Matt Murdock" vs "Matt Murdock / Daredevil"): BOTH rows
+        // emit the base-segment key so the pair groups as HIGH.
+        const charBase = normChar.split('/')[0].trim();
+        if (charBase) keys.push(`namebase:${normName}|${charBase}`);
+      }
+      for (const key of keys) {
+        const arr = highKeys.get(key) ?? [];
+        arr.push(r.id);
+        highKeys.set(key, arr);
+      }
+    }
+    const highEdge = new Set<string>();
+    for (const ids of highKeys.values()) {
+      if (ids.length < 2) continue;
+      for (let k = 1; k < ids.length; k++) {
+        union(ids[0], ids[k]);
+        highEdge.add(ids[0]);
+        highEdge.add(ids[k]);
+      }
+    }
+    const byRoot = new Map<string, typeof rows>();
+    for (const r of rows) {
+      const root = find(r.id);
+      const arr = byRoot.get(root) ?? [];
+      arr.push(r);
+      byRoot.set(root, arr);
+    }
+    const groups: { confidence: 'HIGH' | 'MEDIUM'; rows: typeof rows }[] = [];
+    for (const members of byRoot.values()) {
+      if (members.length < 2) continue;
+      const confidence = members.some((m) => highEdge.has(m.id)) ? 'HIGH' : 'MEDIUM';
+      groups.push({ confidence, rows: members });
+    }
+    return groups;
+  }
+
+  /** Canonical survivor of a duplicate group: votes first (never lose votes), then a
+   *  real provider-namespaced member id, then a TVDB character id, then billing. */
+  private pickCanonicalCastRow<
+    T extends {
+      id: string;
+      castMemberId: string;
+      characterExternalId: number | null;
+      sortOrder: number;
+      castMember: { externalId: string | null };
+      _count: { characterVotes: number };
+    },
+  >(rows: T[]): T {
+    const realId = (r: T) => {
+      const ext = r.castMember.externalId ?? '';
+      // Real provider id (TMDB_/TVDB_ + digits) but NOT the legacy index-based
+      // fallback range (TMDB_900000000+i).
+      return /^(TMDB|TVDB)_\d+$/.test(ext) && !/^TMDB_9\d{8}$/.test(ext) ? 1 : 0;
+    };
+    return [...rows].sort(
+      (a, b) =>
+        b._count.characterVotes - a._count.characterVotes ||
+        realId(b) - realId(a) ||
+        (b.characterExternalId != null ? 1 : 0) - (a.characterExternalId != null ? 1 : 0) ||
+        a.sortOrder - b.sortOrder ||
+        a.id.localeCompare(b.id),
+    )[0];
+  }
+
+
+  // ---- Season/episode structure reconciliation ----
+
+  /** Prevents concurrent structure-reconcile batches. */
+  private structureReconcileRunning = false;
+
+  /** Shows whose stored structure contradicts the canonical provider:
+   *  - mixed: TVDB-linked and TMDB-only episodes coexist (union-hydration contamination);
+   *  - tvdb-canonical (anime repair / stamp) with episodes that never got linked to
+   *    TVDB (TMDB ids lost entirely — the Dragon Ball case).
+   *  Pure TMDB-structured shows (no stamp, no TVDB episode ids) are NOT candidates.
+   *  Set-based: ONE aggregate pass over episode_external_ids, then a join — the
+   *  per-episode correlated-EXISTS version hung on prod-sized catalogs. */
+  private async findDualStructureShows(limit: number): Promise<
+    { mediaId: string; stale: number; fresh: number }[]
+  > {
+    const rows = await this.prisma.$queryRaw<
+      { media_id: string; stale: bigint; fresh: bigint }[]
+    >`
+      WITH flags AS (
+        SELECT episode_id,
+          bool_or(provider = 'TMDB') AS has_tmdb,
+          bool_or(provider = 'THE_TVDB') AS has_tvdb
+        FROM episode_external_ids
+        GROUP BY episode_id
+      ),
+      per_show AS (
+        SELECT sh.media_id,
+          count(*) FILTER (WHERE f.has_tvdb) AS fresh,
+          count(*) FILTER (WHERE NOT COALESCE(f.has_tvdb, false)) AS unlinked,
+          count(*) FILTER (WHERE COALESCE(f.has_tmdb, false) AND NOT COALESCE(f.has_tvdb, false)) AS tmdb_only
+        FROM episodes e
+        JOIN seasons s ON s.id = e.season_id
+        JOIN shows sh ON sh.id = s.show_id
+        LEFT JOIN flags f ON f.episode_id = e.id
+        GROUP BY sh.media_id
+      )
+      SELECT p.media_id,
+        (CASE WHEN mi.metadata_provenance->>'structureProvider' = 'tvdb' THEN p.unlinked ELSE p.tmdb_only END)::bigint AS stale,
+        p.fresh::bigint AS fresh
+      FROM per_show p
+      JOIN media_items mi ON mi.id = p.media_id
+      WHERE (p.fresh > 0 AND p.tmdb_only > 0)
+         OR (mi.metadata_provenance->>'structureProvider' = 'tvdb' AND p.unlinked > 0)
+      ORDER BY stale DESC
+      LIMIT ${limit}`;
+    return rows.map((r) => ({ mediaId: r.media_id, stale: Number(r.stale), fresh: Number(r.fresh) }));
+  }
+
+  /**
+   * Detect and reconcile titles whose stored season/episode structure mixes providers
+   * (e.g. a flattened TMDB structure surviving next to the canonical TVDB split — the
+   * "Dragon Ball" case). Canonical provider: anime ⇒ TVDB (existing policy); otherwise
+   * the structureProvider stamp written at first hydration.
+   *
+   * Modes: report (detection + counts only), dry-run (matcher runs, nothing is
+   * written), repair (anime titles go through the full TVDB repair: resolve id →
+   * hydrate → absolute-number-aware remap → stamps; non-anime titles are reported for
+   * a deliberate provider decision, never auto-switched).
+   */
+  async reconcileStructures(opts?: {
+    mode?: 'report' | 'dry-run' | 'repair';
+    limit?: number;
+    mediaId?: string;
+  }): Promise<{
+    mode: string;
+    processed: number;
+    anime: number;
+    repaired: number;
+    remapped: number;
+    needsReview: number;
+    failed: number;
+    titles: {
+      mediaId: string;
+      title: string;
+      anime: boolean;
+      structureProvider: string | null;
+      stale: number;
+      fresh: number;
+      action: string;
+      remap?: { mapped: number; unmapped: number; matchRules: Record<string, number> };
+    }[];
+    /** Total candidate titles (titles array is capped at 50). */
+    titlesTotal: number;
+  }> {
+    const mode = opts?.mode ?? 'report';
+    const empty = {
+      mode,
+      processed: 0,
+      anime: 0,
+      repaired: 0,
+      remapped: 0,
+      needsReview: 0,
+      failed: 0,
+      titles: [] as {
+        mediaId: string;
+        title: string;
+        anime: boolean;
+        structureProvider: string | null;
+        stale: number;
+        fresh: number;
+        action: string;
+        remap?: { mapped: number; unmapped: number; matchRules: Record<string, number> };
+      }[],
+      titlesTotal: 0,
+    };
+    if (this.structureReconcileRunning) {
+      this.logger.log('Structure reconcile already running — skipping');
+      return empty;
+    }
+    this.structureReconcileRunning = true;
+    this.trackRepair('structure-reconcile', {
+      running: true,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      finishedAt: null,
+    });
+    try {
+      const limit = Math.max(1, Math.min(opts?.limit ?? 200, 100000));
+      const candidates = opts?.mediaId
+        ? [{ mediaId: opts.mediaId, stale: -1, fresh: -1 }]
+        : await this.findDualStructureShows(limit);
+      this.trackRepair('structure-reconcile', { total: candidates.length });
+
+      let animeCount = 0;
+      let repaired = 0;
+      let remapped = 0;
+      let needsReview = 0;
+      let failed = 0;
+
+      for (let i = 0; i < candidates.length; i++) {
+        const { mediaId, stale, fresh } = candidates[i];
+        this.trackRepair('structure-reconcile', {
+          processed: i + 1,
+          succeeded: repaired,
+          failed,
+          current: mediaId,
+        });
+        try {
+          const media = await this.prisma.mediaItem.findUnique({
+            where: { id: mediaId },
+            include: {
+              show: { select: { keywords: true } },
+              genres: { include: { genre: { select: { slug: true, name: true } } } },
+            },
+          });
+          if (!media) continue;
+          const anime = this.isAnimeMedia(media);
+          if (anime) animeCount++;
+          const structureProvider =
+            (media.metadataProvenance as any)?.structureProvider ?? null;
+          const entry: (typeof empty.titles)[number] = {
+            mediaId,
+            title: media.title,
+            anime,
+            structureProvider,
+            stale,
+            fresh,
+            action: 'report',
+          };
+
+          if (mode === 'dry-run') {
+            if (fresh !== 0) {
+              const remap = await this.structureRemap.remapShow(mediaId, { dryRun: true });
+              entry.remap = {
+                mapped: remap.mapped,
+                unmapped: remap.unmapped,
+                matchRules: remap.matchRules,
+              };
+              entry.action = remap.mapped > 0 ? 'would-remap' : 'no-matches';
+            } else {
+              entry.action = anime ? 'would-hydrate-tvdb' : 'needs-review';
+            }
+            if (!anime) needsReview++;
+          } else if (mode === 'repair') {
+            // Anime titles AND titles already stamped TVDB-canonical go through the
+            // full TVDB repair (a stamped non-anime title was deliberately switched
+            // before). Anything else is reported for a deliberate provider decision.
+            if (anime || structureProvider === 'tvdb') {
+              const { fixed, remapped: moved } = await this.fixAnimeShowFromTvdb(mediaId);
+              entry.action = fixed ? 'repaired' : 'no-stale-rows';
+              if (fixed) {
+                repaired++;
+                remapped += moved;
+              }
+            } else {
+              // Non-anime dual structures: never auto-switch a provider — reported for
+              // a deliberate admin decision (the stamp documents current ownership).
+              entry.action = 'needs-review';
+              needsReview++;
+            }
+          } else if (!anime) {
+            needsReview++;
+          }
+          empty.titles.push(entry);
+        } catch (e) {
+          failed++;
+          this.logger.warn(`structure-reconcile failed for ${mediaId}: ${(e as Error).message}`);
+        }
+      }
+
+      const summary = {
+        ...empty,
+        processed: candidates.length,
+        anime: animeCount,
+        repaired,
+        remapped,
+        needsReview,
+        failed,
+        // Bounded payload (CronJobRun.result has a 2000-char budget; the full list is
+        // in the logs). Top-50 by stale count (candidate SQL already orders by stale).
+        titles: empty.titles.slice(0, 50),
+        titlesTotal: empty.titles.length,
+      };
+      this.trackRepair('structure-reconcile', {
+        running: false,
+        processed: candidates.length,
+        succeeded: repaired,
+        failed,
+        finishedAt: new Date(),
+      });
+      this.logger.log(
+        `Structure reconcile (${mode}): ${candidates.length} titles scanned, ${animeCount} anime, ` +
+          `${repaired} repaired (${remapped} episodes remapped), ${needsReview} need review, ${failed} failed`,
+      );
+      return summary;
+    } finally {
+      this.structureReconcileRunning = false;
     }
   }
 

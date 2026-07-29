@@ -14,6 +14,26 @@ interface JobHandler {
   fn: () => Promise<unknown>;
 }
 
+const CRON_RESULT_BUDGET = 2000;
+
+/**
+ * Bound a handler's outcome summary to the CronJobRun.result size budget WITHOUT
+ * breaking JSON: full payload when it fits, otherwise the scalar summary fields plus
+ * a truncation marker (array payloads like per-title lists are dropped, counts kept).
+ */
+export function safeCronResultSummary(result: object): Record<string, unknown> {
+  const json = JSON.stringify(result);
+  if (json.length <= CRON_RESULT_BUDGET) return result as Record<string, unknown>;
+  const compact: Record<string, unknown> = { truncated: true };
+  for (const [k, v] of Object.entries(result)) {
+    if (v == null || typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') {
+      compact[k] = v;
+    }
+  }
+  if (JSON.stringify(compact).length <= CRON_RESULT_BUDGET) return compact;
+  return { truncated: true };
+}
+
 const DEFAULTS: { name: string; label: string; schedule: string }[] = [
   {
     name: 'episode_notifications',
@@ -54,6 +74,16 @@ const DEFAULTS: { name: string; label: string; schedule: string }[] = [
     name: 'recommendations_backfill',
     label: 'Recommendations Backfill',
     schedule: '0 11 * * *',
+  },
+  {
+    name: 'cast_dedup',
+    label: 'Cast Dedup Report',
+    schedule: '0 14 * * 1',
+  },
+  {
+    name: 'structure_reconcile',
+    label: 'Structure Reconcile Report',
+    schedule: '30 14 * * 1',
   },
   {
     name: 'movie_countries_backfill',
@@ -156,6 +186,20 @@ export class CronManagerService implements OnModuleInit {
       label: 'Recommendations Backfill',
       defaultSchedule: '0 11 * * *',
       fn: () => this.metadataBackfill.repairRecommendations(500),
+    });
+    this.handlers.set('cast_dedup', {
+      label: 'Cast Dedup Report',
+      defaultSchedule: '0 14 * * 1',
+      // Report mode only: recurring visibility into duplicate-cast recurrence.
+      // Repairs are deliberate admin actions (POST /admin/cast-dedup/run?mode=...).
+      fn: () => this.metadataBackfill.repairCastDuplicates({ mode: 'report', limit: 5000 }),
+    });
+    this.handlers.set('structure_reconcile', {
+      label: 'Structure Reconcile Report',
+      defaultSchedule: '30 14 * * 1',
+      // Report mode only: recurring visibility into mixed-provider structures.
+      // Repairs are deliberate admin actions (POST /admin/structure-reconcile/run?mode=...).
+      fn: () => this.metadataBackfill.reconcileStructures({ mode: 'report', limit: 1000 }),
     });
     this.handlers.set('movie_countries_backfill', {
       label: 'Movie Countries Backfill',
@@ -320,10 +364,11 @@ export class CronManagerService implements OnModuleInit {
       const finishedAt = new Date();
       const durationMs = finishedAt.getTime() - startedAt.getTime();
       // Persist the handler's outcome summary (counts) with the run — powers the
-      // "Report" column in the admin history view.
+      // "Report" column in the admin history view. Must stay valid JSON within the
+      // 2000-char budget: slicing mid-JSON breaks parsing and falsely fails the run.
       const resultJson =
         result && typeof result === 'object'
-          ? (JSON.parse(JSON.stringify(result).slice(0, 2000) || '{}') as any)
+          ? (safeCronResultSummary(result) as any)
           : undefined;
 
       await this.prisma.cronJob.update({

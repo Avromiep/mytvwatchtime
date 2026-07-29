@@ -1,4 +1,4 @@
-import { CronManagerService } from './cron-manager.service';
+import { CronManagerService, safeCronResultSummary } from './cron-manager.service';
 
 const scheduleMock: jest.Mock = jest.fn(() => ({ start: jest.fn() }));
 jest.mock('node-cron', () => ({ schedule: scheduleMock }));
@@ -102,6 +102,43 @@ describe('CronManagerService', () => {
         result: { processed: 12, succeeded: 10, failed: 2 },
       }),
     });
+  });
+
+  it('keeps oversized handler results as valid JSON instead of slicing mid-string', async () => {
+    const { svc, prisma } = makeService();
+    prisma.cronJob.findMany.mockResolvedValue([]);
+    prisma.scheduledHydration.findMany.mockResolvedValue([]);
+    (svc as any).handlers.set('big_job', {
+      label: 'Big',
+      defaultSchedule: '0 1 * * *',
+      // Regression: the old slice(0, 2000) truncated mid-JSON and the run was falsely
+      // recorded as FAILED ("Unterminated string in JSON at position 2000").
+      fn: async () => ({
+        mode: 'report',
+        processed: 1000,
+        titles: Array.from({ length: 500 }, (_, i) => ({
+          mediaId: `m${i}`,
+          title: `Some Show ${i}`,
+          action: 'needs-review',
+        })),
+      }),
+    });
+    prisma.cronJob.findUnique.mockResolvedValue({ id: 'cj2', name: 'big_job', enabled: true });
+    prisma.cronJob.upsert.mockResolvedValue(undefined);
+
+    await svc.onModuleInit();
+    await (svc as any).executeJob('big_job');
+
+    const created = prisma.cronJobRun.create.mock.calls[0][0].data;
+    expect(created.status).toBe('success'); // NOT failed
+    expect(() => JSON.parse(JSON.stringify(created.result))).not.toThrow();
+    expect(JSON.stringify(created.result).length).toBeLessThanOrEqual(2000);
+    expect(created.result).toMatchObject({ truncated: true, processed: 1000 });
+  });
+
+  it('safeCronResultSummary passes through payloads within the budget', () => {
+    const small = { processed: 3, ok: true };
+    expect(safeCronResultSummary(small)).toEqual(small);
   });
 
   it('registers per-row hydration jobs with their own schedule + timezone (no hourly batch)', async () => {

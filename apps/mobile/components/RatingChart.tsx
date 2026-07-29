@@ -10,7 +10,7 @@ interface Season { seasonNumber: number; episodes: Ep[] }
 
 export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undefined }) {
   const { tokens } = useAppearance();
-  const { t } = useTranslation(['showDetail']);
+  const { t } = useTranslation(['showDetail', 'social']);
   const seasons = (seasonRatings ?? [])
     .filter((s) => s.episodes.length > 0)
     .sort((a, b) => a.seasonNumber - b.seasonNumber);
@@ -57,7 +57,7 @@ export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undef
           <T variant="caption" style={{ color: active === seasons.length - 1 ? tokens.textDim : tokens.primary }}>›</T>
         </Pressable>
       </View>
-      <T variant="micro" muted style={{ textAlign: 'center', marginBottom: 4 }}>{t('showDetail:chartCaption')}</T>
+      <T variant="micro" muted style={{ textAlign: 'center', marginBottom: 4 }}>{t('social:chartCaption')}</T>
       <FlatList
         ref={ref}
         horizontal
