@@ -986,6 +986,7 @@ model WatchHistory {
 
   @@index([userId, watchedAt])
   @@index([mediaId])
+  @@index([episodeId])
   @@map("watch_history")
 }
 

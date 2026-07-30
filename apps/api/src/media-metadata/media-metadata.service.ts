@@ -1244,9 +1244,9 @@ export class MediaMetadataService {
     enData: NormalizedShow | undefined,
     episodeExternalProvider: ExternalProvider,
   ): Promise<string> {
-    // 60s timeout (default 5s): thousand-episode shows (Come Home Love, Super Sentai,
-    // The Price is Right) upsert thousands of rows in this tx — the 5s default killed
-    // the transaction mid-sync ("Transaction already closed / not found").
+    // 60s timeout (default 5s): this tx now carries only show-level writes (media,
+    // genres, providers, cast, stamp) — seasons persist per-season afterwards
+    // (see syncSeasons), so the timeout is generous headroom, not a hard cliff.
     const mediaId = await this.prisma.$transaction(
       async (tx) => {
         // Existing JSON (to merge locale overrides without clobbering other locales).
@@ -1408,14 +1408,6 @@ export class MediaMetadataService {
           await this.syncProviders(tx, mediaId!, providers);
         }
         await this.syncCast(tx, mediaId!, castMembers, data.cast, lang, enData?.cast);
-        await this.syncSeasons(
-          tx,
-          mediaId!,
-          data.seasons,
-          lang,
-          enData?.seasons,
-          episodeExternalProvider,
-        );
 
         // Record which provider owns this show's season/episode structure — set once
         // (first full hydration) and only upgraded by the anime TVDB repair, so refresh
@@ -1437,6 +1429,12 @@ export class MediaMetadataService {
       },
       { timeout: 60_000 },
     );
+    // Seasons persist OUTSIDE the core transaction — one transaction per season
+    // (see syncSeasons). Mega-dailies (10k+ episodes) otherwise built a single
+    // ~30k-statement transaction that blew the 60s timeout and silently rolled
+    // back the ENTIRE hydration, and the whole existing episode graph (fat
+    // per-locale JSONB) was held in memory at once.
+    await this.syncSeasons(mediaId, data.seasons, lang, enData?.seasons, episodeExternalProvider);
     // TMDB reviews ride the one-call hydration (append=reviews); TVDB carries none.
     if (data.reviews && this.externalReviews) {
       await this.externalReviews
@@ -1840,20 +1838,64 @@ export class MediaMetadataService {
   }
 
   // ---- Mapping normalized seasons/episodes ----
+  /**
+   * Persist a show's seasons ONE PER TRANSACTION. Mega-dailies (Jeopardy! 15k eps,
+   * Days of our Lives 9k) previously upserted every episode inside the caller's single
+   * interactive transaction: ~30k serial statements blew the 60s timeout and silently
+   * rolled back the whole hydration, and the up-front existing-rows read held the
+   * show's ENTIRE episode graph (fat per-locale JSONB) in memory. Per-season txs cap
+   * both: memory stays at one season, a slow season can't roll back the others, and a
+   * crash mid-show leaves committed progress behind (upserts are idempotent — the next
+   * hydration completes the rest). On season failures the freshness stamp is cleared
+   * so the 24h gate retries immediately instead of leaving gaps for a day.
+   */
   private async syncSeasons(
-    tx: PrismaTransaction,
     mediaId: string,
     seasons: NormalizedSeason[],
     lang: string = currentLanguage(),
     enSeasons?: NormalizedSeason[],
     episodeExternalProvider: ExternalProvider = ExternalProvider.TMDB,
   ) {
-    const show = await tx.show.findUnique({ where: { mediaId } });
+    const show = await this.prisma.show.findUnique({ where: { mediaId } });
     if (!show) return;
-    // Batch-read existing season/episode JSON to merge locale overrides (preserve
-    // other locales) in a single query instead of one per season/episode.
-    const existingSeasons = await tx.season.findMany({
-      where: { showId: show.id },
+    const failed: number[] = [];
+    for (const s of seasons) {
+      const enS = enSeasons?.find((e) => e.number === s.number);
+      try {
+        await this.prisma.$transaction(
+          (tx) => this.syncOneSeason(tx, show.id, s, enS, lang, episodeExternalProvider),
+          { timeout: 60_000 },
+        );
+      } catch (e) {
+        failed.push(s.number);
+        this.logger.error(
+          `syncSeasons: season ${s.number} of media ${mediaId} failed: ${(e as Error).message}`,
+        );
+      }
+    }
+    if (failed.length > 0) {
+      await this.prisma.mediaItem
+        .update({ where: { id: mediaId }, data: { metadataRefreshedAt: null } })
+        .catch(() => undefined);
+      throw new Error(
+        `syncSeasons: ${failed.length} season(s) failed for media ${mediaId}: ${failed.join(', ')}`,
+      );
+    }
+  }
+
+  /** Persist one season + its episodes (runs inside its own transaction). */
+  private async syncOneSeason(
+    tx: PrismaTransaction,
+    showId: string,
+    s: NormalizedSeason,
+    enS: NormalizedSeason | undefined,
+    lang: string,
+    episodeExternalProvider: ExternalProvider,
+  ) {
+    // Existing season/episode JSON (per-season read — keeps peak memory at one season)
+    // to merge locale overrides without clobbering other locales.
+    const prev = await tx.season.findUnique({
+      where: { showId_number: { showId, number: s.number } },
       select: {
         number: true,
         titles: true,
@@ -1862,105 +1904,99 @@ export class MediaMetadataService {
         episodes: { select: { number: true, titles: true, overviews: true, stillUrls: true } },
       },
     });
-    const seasonMap = new Map(existingSeasons.map((s) => [s.number, s]));
     const airedCount = (eps: NormalizedSeason['episodes']) =>
       eps.filter((e) => e.airDate && new Date(e.airDate) <= new Date()).length;
+    // Skip empty season shells: no episodes from the provider AND no existing episodes.
+    // Prevents broken "0/0 watched" rows when a provider (e.g. TVDB) is rate-limited/empty.
+    if ((!s.episodes || s.episodes.length === 0) && (s.episodeCount ?? 0) === 0) {
+      if (!prev || (prev.episodes?.length ?? 0) === 0) return;
+    }
+    const titles = mergeLocalized(prev?.titles as any, lang, s.title, enS?.title);
+    const overviews = mergeLocalized(prev?.overviews as any, lang, s.overview, enS?.overview);
+    const posterUrls = mergeLocalized(prev?.posterUrls as any, lang, s.posterUrl, enS?.posterUrl);
     // Upsert by (showId, number) / (seasonId, number) to PRESERVE user progress across refreshes.
-    for (const s of seasons) {
-      // Skip empty season shells: no episodes from the provider AND no existing episodes.
-      // Prevents broken "0/0 watched" rows when a provider (e.g. TVDB) is rate-limited/empty.
-      if ((!s.episodes || s.episodes.length === 0) && (s.episodeCount ?? 0) === 0) {
-        const prevSeason = seasonMap.get(s.number);
-        if (!prevSeason || (prevSeason.episodes?.length ?? 0) === 0) continue;
-      }
-      const enS = enSeasons?.find((e) => e.number === s.number);
-      const prev = seasonMap.get(s.number);
-      const titles = mergeLocalized(prev?.titles as any, lang, s.title, enS?.title);
-      const overviews = mergeLocalized(prev?.overviews as any, lang, s.overview, enS?.overview);
-      const posterUrls = mergeLocalized(prev?.posterUrls as any, lang, s.posterUrl, enS?.posterUrl);
-      const season = await tx.season.upsert({
-        where: { showId_number: { showId: show.id, number: s.number } },
+    const season = await tx.season.upsert({
+      where: { showId_number: { showId, number: s.number } },
+      create: {
+        showId,
+        number: s.number,
+        title: enS?.title ?? s.title,
+        overview: enS?.overview ?? s.overview,
+        posterUrl: enS?.posterUrl ?? s.posterUrl,
+        episodeCount: s.episodeCount,
+        isSpecial: s.isSpecial,
+        airedCount: airedCount(s.episodes),
+        titles,
+        overviews,
+        posterUrls,
+      },
+      update: {
+        title: enS?.title ?? s.title,
+        overview: enS?.overview ?? s.overview,
+        posterUrl: enS?.posterUrl ?? s.posterUrl,
+        episodeCount: s.episodeCount,
+        isSpecial: s.isSpecial,
+        airedCount: airedCount(s.episodes),
+        titles,
+        overviews,
+        posterUrls,
+      },
+    });
+    const epMap = new Map((prev?.episodes ?? []).map((e) => [e.number, e]));
+    for (const e of s.episodes) {
+      const enE = enS?.episodes.find((ee) => ee.number === e.number);
+      const prevEp = epMap.get(e.number);
+      const epTitles = mergeLocalized(prevEp?.titles as any, lang, e.title, enE?.title);
+      const epOverviews = mergeLocalized(
+        prevEp?.overviews as any,
+        lang,
+        e.overview,
+        enE?.overview,
+      );
+      const epStillUrls = mergeLocalized(
+        prevEp?.stillUrls as any,
+        lang,
+        e.stillUrl,
+        enE?.stillUrl,
+      );
+      const ep = await tx.episode.upsert({
+        where: { seasonId_number: { seasonId: season.id, number: e.number } },
         create: {
-          showId: show.id,
-          number: s.number,
-          title: enS?.title ?? s.title,
-          overview: enS?.overview ?? s.overview,
-          posterUrl: enS?.posterUrl ?? s.posterUrl,
-          episodeCount: s.episodeCount,
-          isSpecial: s.isSpecial,
-          airedCount: airedCount(s.episodes),
-          titles,
-          overviews,
-          posterUrls,
+          seasonId: season.id,
+          number: e.number,
+          absoluteNumber: e.absoluteNumber ?? null,
+          title: enE?.title ?? e.title,
+          overview: enE?.overview ?? e.overview,
+          stillUrl: enE?.stillUrl ?? e.stillUrl,
+          runtimeMinutes: e.runtimeMinutes,
+          airDate: e.airDate ? new Date(e.airDate) : null,
+          rating: e.rating,
+          isFinale: e.isFinale,
+          titles: epTitles,
+          overviews: epOverviews,
+          stillUrls: epStillUrls,
         },
         update: {
-          title: enS?.title ?? s.title,
-          overview: enS?.overview ?? s.overview,
-          posterUrl: enS?.posterUrl ?? s.posterUrl,
-          episodeCount: s.episodeCount,
-          isSpecial: s.isSpecial,
-          airedCount: airedCount(s.episodes),
-          titles,
-          overviews,
-          posterUrls,
+          // Backfill only — never wipe an existing value with a provider that
+          // supplies none (null means "unknown", not "cleared").
+          ...(e.absoluteNumber != null ? { absoluteNumber: e.absoluteNumber } : {}),
+          title: enE?.title ?? e.title,
+          overview: enE?.overview ?? e.overview,
+          stillUrl: enE?.stillUrl ?? e.stillUrl,
+          runtimeMinutes: e.runtimeMinutes,
+          airDate: e.airDate ? new Date(e.airDate) : null,
+          rating: e.rating,
+          isFinale: e.isFinale,
+          titles: epTitles,
+          overviews: epOverviews,
+          stillUrls: epStillUrls,
         },
       });
-      const epMap = new Map((prev?.episodes ?? []).map((e) => [e.number, e]));
-      for (const e of s.episodes) {
-        const enE = enS?.episodes.find((ee) => ee.number === e.number);
-        const prevEp = epMap.get(e.number);
-        const epTitles = mergeLocalized(prevEp?.titles as any, lang, e.title, enE?.title);
-        const epOverviews = mergeLocalized(
-          prevEp?.overviews as any,
-          lang,
-          e.overview,
-          enE?.overview,
-        );
-        const epStillUrls = mergeLocalized(
-          prevEp?.stillUrls as any,
-          lang,
-          e.stillUrl,
-          enE?.stillUrl,
-        );
-        const ep = await tx.episode.upsert({
-          where: { seasonId_number: { seasonId: season.id, number: e.number } },
-          create: {
-            seasonId: season.id,
-            number: e.number,
-            absoluteNumber: e.absoluteNumber ?? null,
-            title: enE?.title ?? e.title,
-            overview: enE?.overview ?? e.overview,
-            stillUrl: enE?.stillUrl ?? e.stillUrl,
-            runtimeMinutes: e.runtimeMinutes,
-            airDate: e.airDate ? new Date(e.airDate) : null,
-            rating: e.rating,
-            isFinale: e.isFinale,
-            titles: epTitles,
-            overviews: epOverviews,
-            stillUrls: epStillUrls,
-          },
-          update: {
-            // Backfill only — never wipe an existing value with a provider that
-            // supplies none (null means "unknown", not "cleared").
-            ...(e.absoluteNumber != null ? { absoluteNumber: e.absoluteNumber } : {}),
-            title: enE?.title ?? e.title,
-            overview: enE?.overview ?? e.overview,
-            stillUrl: enE?.stillUrl ?? e.stillUrl,
-            runtimeMinutes: e.runtimeMinutes,
-            airDate: e.airDate ? new Date(e.airDate) : null,
-            rating: e.rating,
-            isFinale: e.isFinale,
-            titles: epTitles,
-            overviews: epOverviews,
-            stillUrls: epStillUrls,
-          },
-        });
-        // Persist the provider's episode id so import matching can resolve episodes by
-        // external id (EpisodeExternalId fast path + /find recovery). `e.tmdbId` carries
-        // the TMDB episode id for TMDB hydration, the TVDB episode id for TVDB hydration.
-        if (e.tmdbId) {
-          await this.syncEpisodeExternalId(tx, ep.id, episodeExternalProvider, String(e.tmdbId));
-        }
+      // Persist the provider's episode id so import matching can resolve episodes by
+      // external id (EpisodeExternalId fast path + /find recovery). `e.tmdbId` carries
+      // the TMDB episode id for TMDB hydration, the TVDB episode id for TVDB hydration.
+      if (e.tmdbId) {
+        await this.syncEpisodeExternalId(tx, ep.id, episodeExternalProvider, String(e.tmdbId));
       }
     }
   }

@@ -1068,6 +1068,7 @@ export class MetadataBackfillService {
       where: { id: mediaId },
       data: { metadataRefreshedAt: null },
     });
+    this.trackRepair('structure-reconcile', { current: `${mediaId} (rehydrating-tvdb)` });
     await this.meta.ensureShowFullTvdb(tvdbId);
     // The remap phase takes the media write lock (long TTL: hundred-pair remaps run
     // many small transactions) so no hydration can interleave mid-transfer.
@@ -2703,6 +2704,7 @@ export class MetadataBackfillService {
       await this.prisma.mediaItem
         .update({ where: { id: mediaId }, data: { metadataRefreshedAt: null } })
         .catch(() => undefined);
+      this.trackRepair('structure-reconcile', { current: `${mediaId} (rehydrating-tmdb)` });
       await this.meta.ensureShowFull(Number(tmdb.value)).catch(() => undefined);
     }
 

@@ -42,7 +42,11 @@ function mockPrisma() {
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       count: jest.fn().mockResolvedValue(0),
     },
-    episode: { delete: jest.fn().mockResolvedValue({}), update: jest.fn().mockResolvedValue({}) },
+    episode: {
+      delete: jest.fn().mockResolvedValue({}),
+      deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+      update: jest.fn().mockResolvedValue({}),
+    },
     episodeExternalId: {
       create: jest.fn().mockResolvedValue({}),
       deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -273,12 +277,14 @@ describe('StructureRemapService', () => {
         ]),
       ]),
     );
-    prisma.userEpisodeStatus.count.mockResolvedValue(1); // stale row has user data
+    // Stale row has user data (batched EXISTS classifier).
+    prisma.$queryRaw.mockResolvedValue([{ id: 'old', has_data: true }]);
 
     const res = await service.remapShow('m1');
 
     expect(res).toMatchObject({ stale: 1, mapped: 0, unmapped: 1, episodesRemoved: 0 });
     expect(prisma.episode.delete).not.toHaveBeenCalled(); // kept — never lose watch data
+    expect(prisma.episode.deleteMany).not.toHaveBeenCalled();
     // No transfer ran (only the absoluteNumber backfill touches the DB in this test).
     expect(prisma.userEpisodeStatus.update).not.toHaveBeenCalled();
     expect(prisma.watchHistory.updateMany).not.toHaveBeenCalled();
@@ -304,7 +310,7 @@ describe('StructureRemapService', () => {
       episodesRemoved: 1,
       seasonsRemoved: 1,
     });
-    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'old' } });
+    expect(prisma.episode.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['old'] } } });
     expect(prisma.season.deleteMany).toHaveBeenCalledWith({
       where: { showId: 'sh1', episodes: { none: {} } },
     });

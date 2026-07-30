@@ -197,16 +197,30 @@ export class StructureRemapService {
     this.logger.log(`remap: backfilled absoluteNumber on ${updates.length} episode rows`);
   }
 
-  /** All episodes of a media's shows row (null when the media has no shows row). */
+  /** All episodes of a media's shows row (null when the media has no shows row).
+   *  Narrow select: only the fields the matcher needs — the default include drags the
+   *  fat per-locale JSONB columns (titles/overviews/stillUrls) for every episode into
+   *  memory, which is the difference between ~3MB and hundreds of MB on mega-dailies. */
   private async loadShowEpisodes(mediaId: string): Promise<(EpRow & { showId: string })[] | null> {    const show = await this.prisma.show.findUnique({
       where: { mediaId },
-      include: {
+      select: {
+        id: true,
         seasons: {
           orderBy: { number: 'asc' },
-          include: {
+          select: {
+            id: true,
+            number: true,
+            isSpecial: true,
             episodes: {
               orderBy: { number: 'asc' },
-              include: { externalIds: { select: { provider: true, value: true } } },
+              select: {
+                id: true,
+                number: true,
+                absoluteNumber: true,
+                title: true,
+                airDate: true,
+                externalIds: { select: { provider: true, value: true } },
+              },
             },
           },
         },
@@ -283,10 +297,9 @@ export class StructureRemapService {
       // Counts mirror the real run's decisions: mapped pairs, and among unmapped rows
       // how many would be KEPT (user data) vs deleted.
       stats.mapped = pairs.length;
-      for (const s of unmapped) {
-        if (await this.hasUserData(s.id)) stats.unmapped++;
-        else stats.episodesRemoved++;
-      }
+      const { withData } = await this.splitByUserData(unmapped.map((s) => s.id));
+      stats.unmapped = withData.size;
+      stats.episodesRemoved = unmapped.length - withData.size;
       return stats;
     }
 
@@ -314,21 +327,35 @@ export class StructureRemapService {
       }
       if (onProgress && (i + 1) % 25 === 0) onProgress(i + 1, pairs.length);
     }
+    // Final heartbeat: totals rarely divide by 25, so without this the UI sits on the
+    // last partial beat (e.g. 75/89) through the whole cleanup phase below.
+    if (onProgress && pairs.length > 0) onProgress(pairs.length, pairs.length);
 
-    // Unmapped rows: delete only when they carry NO user data; keep (and report) the rest.
+    // Unmapped rows: delete only when they carry NO user data; keep (and report) the
+    // rest. Batched — one EXISTS query classifies every row, one deleteMany clears
+    // the dataless ones. The old per-row hasUserData+delete issued ~6 queries per
+    // row, which is tens of thousands on mega-dailies whose structures barely
+    // overlap (Charlie Rose: ~5,800 unmapped) and dominated the per-show runtime.
+    const { withData } = await this.splitByUserData(unmapped.map((s) => s.id));
     const keptLabels: string[] = [];
+    const deleteIds: string[] = [];
     for (const s of unmapped) {
-      try {
-        if (await this.hasUserData(s.id)) {
-          stats.unmapped++;
-          keptLabels.push(`S${s.seasonNumber}E${s.number}`);
-        } else {
-          await this.prisma.episode.delete({ where: { id: s.id } });
-          stats.episodesRemoved++;
-        }
-      } catch (e) {
+      if (withData.has(s.id)) {
         stats.unmapped++;
-        this.logger.warn(`remap: failed to clean stale episode ${s.id}: ${(e as Error).message}`);
+        keptLabels.push(`S${s.seasonNumber}E${s.number}`);
+      } else {
+        deleteIds.push(s.id);
+      }
+    }
+    if (deleteIds.length > 0) {
+      try {
+        const removed = await this.prisma.episode.deleteMany({ where: { id: { in: deleteIds } } });
+        stats.episodesRemoved += removed.count;
+      } catch (e) {
+        // Conservative: on cleanup failure keep the rows (counted as unmapped, retried
+        // next run) — data loss is worse than a stale episode row.
+        stats.unmapped += deleteIds.length;
+        this.logger.warn(`remap: batched stale-episode cleanup failed: ${(e as Error).message}`);
       }
     }
     // One aggregated line instead of a warning per kept episode (long-running shows can
@@ -557,16 +584,23 @@ export class StructureRemapService {
     );
   }
 
-  /** Any user data attached to an episode row? (WatchHistory re-points/nulls are harmless.) */
-  private async hasUserData(episodeId: string): Promise<boolean> {
-    const [statuses, ratings, reactions, votes, comments] = await Promise.all([
-      this.prisma.userEpisodeStatus.count({ where: { episodeId } }),
-      this.prisma.rating.count({ where: { episodeId } }),
-      this.prisma.reaction.count({ where: { episodeId } }),
-      this.prisma.characterVote.count({ where: { episodeId } }),
-      this.prisma.comment.count({ where: { threadType: 'EPISODE', threadId: episodeId } }),
-    ]);
-    return statuses + ratings + reactions + votes + comments > 0;
+  /** Classify episode ids by whether ANY user data is attached — one set-based query
+   *  (EXISTS per data table) instead of 5 count queries per episode. */
+  private async splitByUserData(episodeIds: string[]): Promise<{ withData: Set<string> }> {
+    if (episodeIds.length === 0) return { withData: new Set() };
+    const rows = await this.prisma.$queryRaw<{ id: string; has_data: boolean }[]>(
+      Prisma.sql`
+        SELECT e.id, (
+          EXISTS (SELECT 1 FROM user_episode_status u WHERE u.episode_id = e.id)
+          OR EXISTS (SELECT 1 FROM ratings r WHERE r.episode_id = e.id)
+          OR EXISTS (SELECT 1 FROM reactions r WHERE r.episode_id = e.id)
+          OR EXISTS (SELECT 1 FROM character_votes v WHERE v.episode_id = e.id)
+          OR EXISTS (SELECT 1 FROM comments c WHERE c.thread_type = 'EPISODE' AND c.thread_id = e.id)
+        ) AS has_data
+        FROM episodes e
+        WHERE e.id IN (${Prisma.join(episodeIds)})`,
+    );
+    return { withData: new Set(rows.filter((r) => r.has_data).map((r) => r.id)) };
   }
 
   /** Recompute one user's progress cache for the show (specials excluded), mirroring
