@@ -1,0 +1,11 @@
+{
+  "movies": "Filme",
+  "bornDied": "{{born}} – {{died}}",
+  "biography": "Biografie",
+  "showMore": "Mehr anzeigen",
+  "failedToLoad": "Laden fehlgeschlagen.",
+  "tvShows": "Serien",
+  "noCredits": "Noch keine Einträge.",
+  "showLess": "Weniger anzeigen",
+  "bornOn": "Geboren: {{date}}"
+}

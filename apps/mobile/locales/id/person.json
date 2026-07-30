@@ -1,0 +1,11 @@
+{
+  "movies": "Film",
+  "bornDied": "{{born}} – {{died}}",
+  "biography": "Biografi",
+  "showMore": "Tampilkan lebih banyak",
+  "failedToLoad": "Gagal memuat.",
+  "tvShows": "Acara TV",
+  "noCredits": "Belum ada kredit.",
+  "showLess": "Tampilkan lebih sedikit",
+  "bornOn": "Lahir: {{date}}"
+}

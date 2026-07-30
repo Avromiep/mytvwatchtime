@@ -824,9 +824,31 @@ model CastMember {
   name       String
   profileUrl String? @map("profile_url")
   externalId String? @unique @map("external_id")
+  // Provider-namespaced person ids, resolved on first person-page view. Plain
+  // indexes (not unique): duplicate members heal over time via merge-on-view.
+  tmdbId     Int?    @map("tmdb_id")
+  tvdbId     Int?    @map("tvdb_id")
+  imdbId     String? @map("imdb_id")
+  // Details cache — English base columns; per-locale overrides in the JSON maps
+  // (same base+override invariant as MediaItem.titles/overviews).
+  birthDate  DateTime? @map("birth_date") @db.Date
+  deathDate  DateTime? @map("death_date") @db.Date
+  birthPlace String?   @map("birth_place")
+  biography  String?   @db.Text
+  names       Json?
+  biographies Json?
+  // App locales already attempted for details/credits (prevents refetch loops when
+  // the provider lacks a locale — the media pipeline's locale-parking equivalent).
+  detailsLocales Json?   @map("details_locales")
+  detailsSyncedAt DateTime? @map("details_synced_at")
+  // Acting-credits snapshot (PersonCreditsSnapshot: items + per-locale title maps).
+  credits          Json?
+  creditsSyncedAt  DateTime? @map("credits_synced_at")
 
   mediaCast MediaCast[]
 
+  @@index([tmdbId])
+  @@index([tvdbId])
   @@map("cast_members")
 }
 

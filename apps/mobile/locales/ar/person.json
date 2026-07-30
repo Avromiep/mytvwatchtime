@@ -1,0 +1,11 @@
+{
+  "movies": "أفلام",
+  "bornDied": "{{born}} – {{died}}",
+  "biography": "السيرة الذاتية",
+  "showMore": "عرض المزيد",
+  "failedToLoad": "فشل التحميل.",
+  "tvShows": "مسلسلات",
+  "noCredits": "لا توجد أعمال بعد.",
+  "showLess": "عرض أقل",
+  "bornOn": "من مواليد {{date}}"
+}

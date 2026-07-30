@@ -153,6 +153,40 @@ interface TvdbRemoteId {
   sourceName: string;
 }
 
+/** TVDB `/people/{id}/extended?meta=translations` payload (person details page). */
+export interface TvdbPersonPayload {
+  id: number;
+  name: string;
+  image?: string | null;
+  birth?: string | null;
+  death?: string | null;
+  birthPlace?: string | null;
+  remoteIds?: TvdbRemoteId[];
+  biographies?: { biography: string; language: string }[];
+  translations?: {
+    nameTranslations?: { name: string; overview?: string; language: string }[];
+  };
+  characters?: {
+    id: number;
+    name?: string | null;
+    peopleType?: string;
+    movieId?: number | null;
+    seriesId?: number | null;
+    movie?: { name?: string; image?: string | null; year?: string } | null;
+    series?: { name?: string; image?: string | null; year?: string } | null;
+  }[];
+}
+
+/** TVDB 3-letter language code → app locale (reverse of TVDB_3LETTER). */
+const TVDB_3LETTER_REVERSE: Record<string, string> = Object.fromEntries(
+  Object.entries(TVDB_3LETTER).map(([locale, code]) => [code, locale]),
+);
+export function tvdbLangToLocale(code3: string): string | undefined {
+  return TVDB_3LETTER_REVERSE[code3];
+}
+/** TVDB remoteId type 15 = TheMovieDB.com person id. */
+export const TVDB_REMOTE_TYPE_TMDB = 15;
+
 interface TvdbRelease {
   country: string;
   date: string;
@@ -232,8 +266,7 @@ export class TvdbProvider {
     return this.client.enabled;
   }
 
-  /** IMDB id from the extended record — one light call, no hydration. Used by the
-   *  rating backfill as the fallback cross-id when TMDB /find has no tvdb_id entry. */
+  /** IMDB id from the extended record — one light call, no hydration. Used by the   *  rating backfill as the fallback cross-id when TMDB /find has no tvdb_id entry. */
   async fetchImdbId(kind: 'show' | 'movie', tvdbId: number): Promise<string | null> {
     if (!this.client.enabled) return null;
     if (kind === 'show') {
@@ -249,6 +282,19 @@ export class TvdbProvider {
       (r) => (r.sourceName || '').toUpperCase() === 'IMDB',
     );
     return hit?.id || null;
+  }
+
+  /**
+   * Person extended record (birth/death/place, biographies + translations via
+   * meta=translations, remoteIds for TMDB cross-link, characters = filmography).
+   * Raw payload — normalization lives in people/normalized-person.ts.
+   */
+  async getPersonExtended(tvdbId: number): Promise<TvdbPersonPayload | null> {
+    if (!this.client.enabled) return null;
+    const res = await this.client.get<{ data: TvdbPersonPayload }>(`/people/${tvdbId}/extended`, {
+      meta: 'translations',
+    });
+    return res.data ?? null;
   }
 
   async searchShows(

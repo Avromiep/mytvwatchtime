@@ -112,7 +112,7 @@ function fakeTx(over: Record<string, any> = {}) {
       createMany: async () => ({}),
       create: async () => ({}),
     },
-    season: { findMany: async () => [], upsert: async () => ({ id: 'se-1' }) },
+    season: { findMany: async () => [], findUnique: async () => null, upsert: async () => ({ id: 'se-1' }) },
     episode: { upsert: async () => ({ id: 'ep-1' }) },
     episodeExternalId: { upsert: async () => ({}) },
     movie: { findUnique: async () => null, upsert: async () => ({}) },
@@ -125,6 +125,7 @@ function makeService(tx: any, externalFindFirst: jest.Mock, tvdbGetShow?: jest.M
     $transaction: async (fn: any) => fn(tx),
     mediaItem: { findUnique: async () => ({ metadataRefreshedAt: new Date() }) },
     externalId: { findFirst: externalFindFirst },
+    show: { findUnique: async () => ({ id: 'show-1' }) }, // syncSeasons root lookup
   };
   const tvdb = {
     enabled: true,
@@ -149,6 +150,7 @@ function makeTmdbService(tx: any, getShow: jest.Mock, externalFindFirst?: jest.M
     externalId: { findFirst: externalFindFirst ?? (async () => null) },
     // Read by airedSeasonSkipper on re-hydration — no stored seasons here.
     season: { findMany: async () => [] },
+    show: { findUnique: async () => ({ id: 'show-1' }) }, // syncSeasons root lookup
   };
   return new MediaMetadataService(
     prisma as any,

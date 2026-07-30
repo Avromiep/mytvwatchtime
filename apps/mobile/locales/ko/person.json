@@ -1,0 +1,11 @@
+{
+  "movies": "영화",
+  "bornDied": "{{born}} – {{died}}",
+  "biography": "약력",
+  "showMore": "더 보기",
+  "failedToLoad": "로드에 실패했습니다.",
+  "tvShows": "TV 프로그램",
+  "noCredits": "아직 크레딧이 없습니다.",
+  "showLess": "접기",
+  "bornOn": "출생: {{date}}"
+}

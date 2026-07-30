@@ -79,6 +79,7 @@ function fakePrisma() {
     },
     season: {
       findMany: async () => [],
+      findUnique: async () => null,
       upsert: async (a: any) => ({ id: `se-${a.where.showId_number.number}` }),
     },
     episode: {
@@ -95,6 +96,7 @@ function fakePrisma() {
     $transaction: async (fn: any) => fn(tx),
     mediaItem: { findUnique: async () => ({ metadataRefreshedAt: new Date() }) },
     externalId: { findFirst: async () => null }, // findMediaByExternal → no existing media
+    show: { findUnique: async () => ({ id: 'show-1' }) }, // syncSeasons root lookup
   };
   return { prisma, episodeExternalUpserts };
 }

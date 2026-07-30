@@ -18,8 +18,27 @@ import contact from './contact.json';
 import groups from './groups.json';
 import feed from './feed.json';
 import onboarding from './onboarding.json';
+import person from './person.json';
 export default {
-  common, auth, navigation, settings, shows, movies, explore,
-  profile, notifications, import: importNs, stats, showDetail, episode,
-  comments, lists, social, contact, groups, feed, onboarding,
+  common,
+  auth,
+  navigation,
+  settings,
+  shows,
+  movies,
+  explore,
+  profile,
+  notifications,
+  import: importNs,
+  stats,
+  showDetail,
+  episode,
+  comments,
+  lists,
+  social,
+  contact,
+  groups,
+  feed,
+  onboarding,
+  person,
 };

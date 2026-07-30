@@ -1,0 +1,11 @@
+{
+  "movies": "फ़िल्में",
+  "bornDied": "{{born}} – {{died}}",
+  "biography": "जीवनी",
+  "showMore": "और दिखाएँ",
+  "failedToLoad": "लोड करने में विफल।",
+  "tvShows": "टीवी शो",
+  "noCredits": "अभी कोई क्रेडिट नहीं।",
+  "showLess": "कम दिखाएँ",
+  "bornOn": "जन्म: {{date}}"
+}

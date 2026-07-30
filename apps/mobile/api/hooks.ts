@@ -31,6 +31,8 @@ import type {
   NotificationPreferencesDto,
   Paginated,
   PaginatedMyComments,
+  PersonCreditsPage,
+  PersonDetailResponse,
   ShowDetailDto,
   ShowStatsDto,
   StatsSummaryDto,
@@ -72,6 +74,8 @@ export const qk = {
   showEpisodes: (id: string) => ['showEpisodes', id] as const,
   episode: (id: string) => ['episode', id] as const,
   movie: (id: string) => ['movie', id] as const,
+  person: (id: string) => ['person', id] as const,
+  personCredits: (id: string, type: string) => ['personCredits', id, type] as const,
   search: (q: string, type?: string) => ['search', q, type ?? 'all'] as const,
   discover: () => ['discoverSections'] as const,
   discoverShows: (p: any) => ['discoverShows', p] as const,
@@ -217,6 +221,23 @@ export const useShow = (id: string) =>
     queryFn: () => api.get<ShowDetailDto>(`/shows/${id}`),
     enabled: !!id,
   });
+/** Person (cast) details page: localized details + capped movies/shows rails. */
+export const usePerson = (id: string) =>
+  useQuery({
+    queryKey: qk.person(id),
+    queryFn: () => api.get<PersonDetailResponse>(`/people/${id}`),
+    enabled: !!id,
+  });
+/** Full paginated filmography for the person page's "See all" grids. */
+export const usePersonCredits = (id: string, type: 'MOVIE' | 'SHOW') =>
+  useInfiniteQuery({
+    queryKey: qk.personCredits(id, type),
+    queryFn: ({ pageParam }) =>
+      api.get<PersonCreditsPage>(`/people/${id}/credits`, { type, page: pageParam }),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last.page < last.totalPages ? last.page + 1 : undefined),
+    enabled: !!id,
+  });
 export const useShowEpisodes = (id: string) =>
   useQuery({
     queryKey: qk.showEpisodes(id),
@@ -262,7 +283,12 @@ const filterParams = (f?: ExploreFilters) => ({
 /** Every filter value must be part of the query key — filters change the result set. */
 const filterKey = (f?: ExploreFilters) =>
   `${(f?.excludeGenres ?? []).join(',')}|${f?.sort ?? ''}|${f?.country ?? ''}|${f?.hideAnime ? 1 : 0}`;
-export const useSearch = (q: string, type?: MediaType, genre?: string | null, filters?: ExploreFilters) =>
+export const useSearch = (
+  q: string,
+  type?: MediaType,
+  genre?: string | null,
+  filters?: ExploreFilters,
+) =>
   useInfiniteQuery({
     queryKey: [...qk.search(q, type), genre ?? '', filterKey(filters)],
     queryFn: ({ pageParam = 1 }) =>
@@ -278,7 +304,11 @@ export const useSearch = (q: string, type?: MediaType, genre?: string | null, fi
     getNextPageParam: (last) => (last?.hasMore ? last.page + 1 : undefined),
     enabled: q.length > 1,
   });
-export const useDiscoverSections = (userId?: string, genre?: string | null, filters?: ExploreFilters) =>
+export const useDiscoverSections = (
+  userId?: string,
+  genre?: string | null,
+  filters?: ExploreFilters,
+) =>
   // User-scoped key: the server's anonymous fallback (topForYou = trending) must NEVER
   // share a cache entry with the personalized sections — otherwise a token-less early
   // request (cold start / expired token) shows trending as "Top shows for you" until
@@ -295,8 +325,7 @@ export const useDiscoverSections = (userId?: string, genre?: string | null, filt
 export const useFeed = () =>
   useInfiniteQuery({
     queryKey: qk.feed,
-    queryFn: ({ pageParam }) =>
-      api.get<FeedPageDto>('/feed', { cursor: pageParam, limit: 20 }),
+    queryFn: ({ pageParam }) => api.get<FeedPageDto>('/feed', { cursor: pageParam, limit: 20 }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
   });
@@ -861,9 +890,7 @@ const patchSeasonEpisodes = (
 ) =>
   patchPrefix(qc, 'showEpisodes', (data) =>
     mapItemsDeep(data, (s: any) =>
-      s?.id === seasonId
-        ? { ...s, episodes: (s.episodes ?? []).map((e: any) => fn(e)) }
-        : s,
+      s?.id === seasonId ? { ...s, episodes: (s.episodes ?? []).map((e: any) => fn(e)) } : s,
     ),
   );
 
@@ -990,7 +1017,8 @@ export const useRewatchEpisode = () => {
 export const useUnwatchEpisodeOnce = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.post<{ watchCount: number }>(`/episodes/${id}/unwatch-once`, {}),
+    mutationFn: (id: string) =>
+      api.post<{ watchCount: number }>(`/episodes/${id}/unwatch-once`, {}),
     onMutate: async (id: string) => {
       const bump = (n: any) => Math.max(1, (Number(n?.watchCount) || 1) - 1);
 
@@ -1394,7 +1422,11 @@ const filterItemsDeep = (data: any, pred: (item: any) => boolean): any => {
 };
 
 /** Snapshot every cache entry under a prefix so an optimistic patch can roll back. */
-const patchPrefix = (qc: ReturnType<typeof useQueryClient>, prefix: string, fn: (data: any) => any) => {
+const patchPrefix = (
+  qc: ReturnType<typeof useQueryClient>,
+  prefix: string,
+  fn: (data: any) => any,
+) => {
   const prev = qc.getQueriesData({ queryKey: [prefix] });
   prev.forEach(([key, data]: [any, any]) => {
     if (data !== undefined) qc.setQueryData(key, fn(data));
@@ -1413,12 +1445,12 @@ export const useToggleMovieWatchlist = () => {
       on ? api.post(`/movies/${id}/watchlist`, {}) : api.del(`/movies/${id}/watchlist`),
     onMutate: async ({ id, on }) => {
       const prevMovie = qc.getQueryData(qk.movie(id));
-      qc.setQueryData(qk.movie(id), (old: any) =>
-        old ? { ...old, inWatchlist: on } : old,
-      );
+      qc.setQueryData(qk.movie(id), (old: any) => (old ? { ...old, inWatchlist: on } : old));
       // Removing evicts the card from cached watchlist grids immediately; adding
       // is left to the refetch (no card payload available here).
-      const prevWatchlist = on ? undefined : patchPrefix(qc, 'watchlist', (d) => filterItemsDeep(d, (it: any) => it.id !== id));
+      const prevWatchlist = on
+        ? undefined
+        : patchPrefix(qc, 'watchlist', (d) => filterItemsDeep(d, (it: any) => it.id !== id));
       return { prevMovie, prevWatchlist };
     },
     onError: (_e, vars, ctx) => {
@@ -1983,7 +2015,11 @@ export const useToggleListLike = () => {
     onMutate: async (id: string) => {
       const prev = patchPrefix(qc, 'list', (d: any) =>
         d?.id === id
-          ? { ...d, isLiked: !d.isLiked, likeCount: Math.max(0, (d.likeCount ?? 0) + (d.isLiked ? -1 : 1)) }
+          ? {
+              ...d,
+              isLiked: !d.isLiked,
+              likeCount: Math.max(0, (d.likeCount ?? 0) + (d.isLiked ? -1 : 1)),
+            }
           : d,
       );
       return { prev };
@@ -2029,9 +2065,7 @@ export const useToggleTrackingPause = () => {
         : api.del<{ trackingPaused: boolean }>(`/shows/${id}/pause`),
     onMutate: async ({ id, paused }) => {
       const prevShow = qc.getQueryData(qk.show(id));
-      qc.setQueryData(qk.show(id), (old: any) =>
-        old ? { ...old, trackingPaused: paused } : old,
-      );
+      qc.setQueryData(qk.show(id), (old: any) => (old ? { ...old, trackingPaused: paused } : old));
       return { prevShow };
     },
     onError: (_e, vars, ctx) => {
@@ -2217,11 +2251,7 @@ export const useUserLists = (username: string) =>
     enabled: !!username,
   });
 
-const patchFollow = (
-  qc: ReturnType<typeof useQueryClient>,
-  userId: string,
-  following: boolean,
-) => {
+const patchFollow = (qc: ReturnType<typeof useQueryClient>, userId: string, following: boolean) => {
   // Public profile pages are keyed by username — match by the user's id inside.
   const prevProfiles = patchPrefix(qc, 'profile', (d: any) =>
     d?.id === userId

@@ -20,6 +20,7 @@ import { MediaMetadataModule } from './media-metadata/media-metadata.module';
 import { TrackingModule } from './tracking/tracking.module';
 import { CollectionsModule } from './collections/collections.module';
 import { ShowsModule } from './shows/shows.module';
+import { PeopleModule } from './people/people.module';
 import { MoviesModule } from './movies/movies.module';
 import { LibraryModule } from './library/library.module';
 import { StatsModule } from './stats/stats.module';
@@ -61,6 +62,7 @@ import { OnboardingModule } from './onboarding/onboarding.module';
     TrackingModule,
     CollectionsModule,
     ShowsModule,
+    PeopleModule,
     MoviesModule,
     LibraryModule,
     StatsModule,

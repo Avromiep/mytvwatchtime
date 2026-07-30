@@ -1,0 +1,11 @@
+{
+  "movies": "Filmler",
+  "bornDied": "{{born}} – {{died}}",
+  "biography": "Biyografi",
+  "showMore": "Daha fazla göster",
+  "failedToLoad": "Yükleme başarısız.",
+  "tvShows": "Diziler",
+  "noCredits": "Henüz kayıt yok.",
+  "showLess": "Daha az göster",
+  "bornOn": "Doğum: {{date}}"
+}

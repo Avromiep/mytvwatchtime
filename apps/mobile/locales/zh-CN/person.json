@@ -1,0 +1,11 @@
+{
+  "movies": "电影",
+  "bornDied": "{{born}} – {{died}}",
+  "biography": "简介",
+  "showMore": "展开更多",
+  "failedToLoad": "加载失败。",
+  "tvShows": "电视剧",
+  "noCredits": "暂无作品。",
+  "showLess": "收起",
+  "bornOn": "出生：{{date}}"
+}

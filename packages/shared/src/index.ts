@@ -1,6 +1,7 @@
 export * from './enums';
 export * from './common';
 export * from './media';
+export * from './person';
 export * from './auth';
 export * from './user';
 export * from './notifications';

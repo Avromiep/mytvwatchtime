@@ -71,6 +71,7 @@ import { ExternalReviewsService } from './external-reviews.service';
     MediaPromotionService,
     HydrationQueue,
     MetadataBackfillService,
+    CastDedupService,
   ],
 })
 export class MediaMetadataModule {}

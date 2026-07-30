@@ -108,6 +108,7 @@ function fakeTx(over: Record<string, any> = {}) {
     },
     season: {
       findMany: async () => over.txSeasons ?? [],
+      findUnique: async () => null,
       upsert: async (a: any) => {
         calls.seasonUpsert.push(a);
         return { id: 'se-1' };
@@ -140,6 +141,7 @@ function makeTmdbService(opts: {
       findFirst: jest.fn(async () => (opts.existing ? { media: opts.existing } : null)),
     },
     season: { findMany: jest.fn(async () => opts.storedSeasons ?? []) },
+    show: { findUnique: async () => ({ id: 'show-1' }) }, // syncSeasons root lookup
   };
   const svc = new MediaMetadataService(
     prisma as any,
@@ -228,8 +230,8 @@ describe('MediaMetadataService — locale parking on ensureShowFull', () => {
     expect(executeRaw).toHaveBeenCalledTimes(1);
     expect(executeRaw.mock.calls[0][1]).toBe('it');
     expect(executeRaw.mock.calls[0][3]).toBe('show-1');
-    // The single transaction is persistShow's — applyLocaleOverrides never ran.
-    expect(transaction).toHaveBeenCalledTimes(1);
+    // persistShow core tx + one per-season tx (fixture has 1 season) — applyLocaleOverrides never ran.
+    expect(transaction).toHaveBeenCalledTimes(2);
   });
 
   it('stale path: translations map covers the locale → localized fetch still happens', async () => {
@@ -253,8 +255,8 @@ describe('MediaMetadataService — locale parking on ensureShowFull', () => {
     expect(getShow.mock.calls.map((c) => c[1])).toEqual(['en-US', 'it']);
     // Covered locale → no parking stamp…
     expect(executeRaw).not.toHaveBeenCalled();
-    // …and applyLocaleOverrides ran (second transaction after persistShow's).
-    expect(transaction).toHaveBeenCalledTimes(2);
+    // …and applyLocaleOverrides ran (third transaction: persistShow core + 1 season tx + overrides).
+    expect(transaction).toHaveBeenCalledTimes(3);
   });
 
   it('stale path: already-parked locale → neither the fetch nor a re-stamp', async () => {
@@ -275,7 +277,7 @@ describe('MediaMetadataService — locale parking on ensureShowFull', () => {
 
     expect(getShow).toHaveBeenCalledTimes(1); // English base only
     expect(executeRaw).not.toHaveBeenCalled();
-    expect(transaction).toHaveBeenCalledTimes(1); // persistShow only
+    expect(transaction).toHaveBeenCalledTimes(2); // persistShow core + one per-season tx
   });
 
   it('fresh base: parked locale skips the localized fetch entirely', async () => {

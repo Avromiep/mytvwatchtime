@@ -31,6 +31,28 @@ export interface NormalizedProvider {
   name: string;
   logoUrl?: string | null;
 }
+/** TMDB `/person/{id}?append_to_response=combined_credits,external_ids` payload. */
+export interface TmdbPersonCredit {
+  id: number;
+  media_type: 'movie' | 'tv';
+  title?: string;
+  name?: string;
+  character?: string;
+  poster_path?: string | null;
+  release_date?: string;
+  first_air_date?: string;
+}
+export interface TmdbPersonPayload {
+  id: number;
+  name: string;
+  biography?: string;
+  birthday?: string | null;
+  deathday?: string | null;
+  place_of_birth?: string | null;
+  profile_path?: string | null;
+  external_ids?: { imdb_id?: string | null };
+  combined_credits?: { cast?: TmdbPersonCredit[] };
+}
 /** Provider entry inside the per-country blob — carries the TMDB provider id so
  *  availability alerts can match offers against subscribed providers. */
 export interface NormalizedBlobProvider extends NormalizedProvider {
@@ -369,6 +391,19 @@ export class TmdbProvider {
     };
   }
 
+  /**
+   * Person details + acting credits in ONE call (combined_credits + external_ids
+   * appends; the language param localizes both biography and credit titles).
+   * Raw payload — normalization lives in people/normalized-person.ts.
+   */
+  async getPerson(tmdbId: number, language?: string): Promise<TmdbPersonPayload> {
+    return this.tmdb.get<TmdbPersonPayload>(
+      `/person/${tmdbId}`,
+      { append_to_response: 'combined_credits,external_ids' },
+      language,
+    );
+  }
+
   private trailer(videos?: {
     results?: { site: string; type: string; key: string }[];
   }): string | null {
@@ -416,12 +451,14 @@ export class TmdbProvider {
     const CAP = 8;
     const mapList = (list: any[] | undefined): NormalizedBlobProvider[] => {
       const seen = new Set<number>();
-      return ((list ?? []) as {
-        provider_id: number;
-        provider_name: string;
-        logo_path?: string;
-        display_priority?: number;
-      }[])
+      return (
+        (list ?? []) as {
+          provider_id: number;
+          provider_name: string;
+          logo_path?: string;
+          display_priority?: number;
+        }[]
+      )
         .filter((p) => p.provider_name && !seen.has(p.provider_id) && seen.add(p.provider_id))
         .sort((a, b) => (a.display_priority ?? 999) - (b.display_priority ?? 999))
         .slice(0, CAP)

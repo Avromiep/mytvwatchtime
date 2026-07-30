@@ -24,20 +24,57 @@ import social from '../locales/en/social.json';
 import contact from '../locales/en/contact.json';
 import feed from '../locales/en/feed.json';
 import onboarding from '../locales/en/onboarding.json';
+import person from '../locales/en/person.json';
 
 export const DEFAULT_NS = 'common';
 export const NAMESPACES = [
-  'common', 'settings', 'navigation', 'auth', 'shows', 'movies', 'explore',
-  'profile', 'notifications', 'import', 'stats', 'showDetail', 'episode',
-  'comments', 'lists', 'social', 'contact', 'groups', 'feed', 'onboarding',
+  'common',
+  'settings',
+  'navigation',
+  'auth',
+  'shows',
+  'movies',
+  'explore',
+  'profile',
+  'notifications',
+  'import',
+  'stats',
+  'showDetail',
+  'episode',
+  'comments',
+  'lists',
+  'social',
+  'contact',
+  'groups',
+  'feed',
+  'onboarding',
+  'person',
 ] as const;
 
 i18n.use(initReactI18next).init({
   resources: {
     en: {
-      common, settings, navigation, auth, shows, movies, explore,
-      profile, notifications, import: importNs, stats, showDetail, episode,
-      comments, lists, social, contact, groups, feed, onboarding,
+      common,
+      settings,
+      navigation,
+      auth,
+      shows,
+      movies,
+      explore,
+      profile,
+      notifications,
+      import: importNs,
+      stats,
+      showDetail,
+      episode,
+      comments,
+      lists,
+      social,
+      contact,
+      groups,
+      feed,
+      onboarding,
+      person,
     },
   },
   lng: 'en',
@@ -50,7 +87,10 @@ i18n.use(initReactI18next).init({
 
 /** Resolve the active supported locale for a stored preference (uses device locales). */
 export function detectResolvedLocale(pref: LanguagePreference): SupportedLocale {
-  return resolveLocale(pref, Localization.getLocales?.().map((l: any) => l.languageTag ?? l.languageCode) ?? []);
+  return resolveLocale(
+    pref,
+    Localization.getLocales?.().map((l: any) => l.languageTag ?? l.languageCode) ?? [],
+  );
 }
 
 /** Load a locale's namespace bundles and switch to it. Metro-compatible: each locale is a
@@ -62,18 +102,42 @@ export async function loadLocale(locale: SupportedLocale): Promise<void> {
     let bundles: { default?: Record<string, any> } | Record<string, any> | null = null;
     try {
       switch (locale) {
-        case 'fr': bundles = require('../locales/fr'); break;
-        case 'es': bundles = require('../locales/es'); break;
-        case 'pt-BR': bundles = require('../locales/pt-BR'); break;
-        case 'de': bundles = require('../locales/de'); break;
-        case 'it': bundles = require('../locales/it'); break;
-        case 'ar': bundles = require('../locales/ar'); break;
-        case 'tr': bundles = require('../locales/tr'); break;
-        case 'hi': bundles = require('../locales/hi'); break;
-        case 'id': bundles = require('../locales/id'); break;
-        case 'ja': bundles = require('../locales/ja'); break;
-        case 'ko': bundles = require('../locales/ko'); break;
-        case 'zh-CN': bundles = require('../locales/zh-CN'); break;
+        case 'fr':
+          bundles = require('../locales/fr');
+          break;
+        case 'es':
+          bundles = require('../locales/es');
+          break;
+        case 'pt-BR':
+          bundles = require('../locales/pt-BR');
+          break;
+        case 'de':
+          bundles = require('../locales/de');
+          break;
+        case 'it':
+          bundles = require('../locales/it');
+          break;
+        case 'ar':
+          bundles = require('../locales/ar');
+          break;
+        case 'tr':
+          bundles = require('../locales/tr');
+          break;
+        case 'hi':
+          bundles = require('../locales/hi');
+          break;
+        case 'id':
+          bundles = require('../locales/id');
+          break;
+        case 'ja':
+          bundles = require('../locales/ja');
+          break;
+        case 'ko':
+          bundles = require('../locales/ko');
+          break;
+        case 'zh-CN':
+          bundles = require('../locales/zh-CN');
+          break;
         default:
           break;
       }
@@ -83,7 +147,8 @@ export async function loadLocale(locale: SupportedLocale): Promise<void> {
     if (bundles) {
       const mod = (bundles as any).default ?? bundles;
       for (const ns of NAMESPACES) {
-        if (mod[ns] && !i18n.hasResourceBundle(locale, ns)) i18n.addResourceBundle(locale, ns, mod[ns], true, true);
+        if (mod[ns] && !i18n.hasResourceBundle(locale, ns))
+          i18n.addResourceBundle(locale, ns, mod[ns], true, true);
       }
     }
   }

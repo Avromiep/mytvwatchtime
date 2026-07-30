@@ -1,10 +1,28 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ImageBackground, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  ImageBackground,
+  Linking,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../../components/Header';
 import { Carousel } from '../../components/cards';
-import { Button, Card, PosterImage, ProgressBar, Screen, SectionHeader, Spinner, T, useWatchMenu } from '../../components/primitives';
+import {
+  Button,
+  Card,
+  PosterImage,
+  ProgressBar,
+  Screen,
+  SectionHeader,
+  Spinner,
+  T,
+  useWatchMenu,
+} from '../../components/primitives';
 import { ReactionGrid, StarRatingControl, VotingSection } from '../../components/voting';
 import {
   qk,
@@ -48,15 +66,39 @@ export default function MovieDetailScreen() {
   const menu = useWatchMenu();
   const addToList = useAddToList();
   const [refreshing, setRefreshing] = useState(false);
-  const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await refetch();
+    setRefreshing(false);
+  }, [refetch]);
   const onVoteError = () => showError({ description: t('episode:voteFailed') });
 
-  if (isLoading || !movie || movie.id !== id) return <Screen><Header showBack /><Spinner /></Screen>;
+  if (isLoading || !movie || movie.id !== id)
+    return (
+      <Screen>
+        <Header showBack />
+        <Spinner />
+      </Screen>
+    );
 
   return (
     <Screen>
-      <ScrollView showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
-        <ImageBackground source={{ uri: movie.images.backdrop ?? movie.images.poster ?? undefined }} style={styles.backdrop} imageStyle={{ opacity: 0.6 }}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[tokens.primary]}
+            tintColor={tokens.primary}
+          />
+        }
+      >
+        <ImageBackground
+          source={{ uri: movie.images.backdrop ?? movie.images.poster ?? undefined }}
+          style={styles.backdrop}
+          imageStyle={{ opacity: 0.6 }}
+        >
           <View style={[styles.overlay, { backgroundColor: tokens.mediaScrim }]}>
             <Header
               showBack
@@ -66,17 +108,32 @@ export default function MovieDetailScreen() {
                   hitSlop={10}
                   accessibilityRole="button"
                   accessibilityLabel={t('common:moreOptions')}
-                  onPress={() => addToList.openMediaMenu({ id: movie.id, title: movie.title, kind: 'movie' })}
+                  onPress={() =>
+                    addToList.openMediaMenu({ id: movie.id, title: movie.title, kind: 'movie' })
+                  }
                 >
                   <Ionicons name="ellipsis-horizontal" size={24} color={tokens.mediaText} />
                 </Pressable>
               }
             />
             <View style={{ flexDirection: 'row', padding: spacing.lg }}>
-              <PosterImage uri={movie.images.poster} style={{ width: 100, height: 150, borderRadius: radius.md }} />
+              <PosterImage
+                uri={movie.images.poster}
+                style={{ width: 100, height: 150, borderRadius: radius.md }}
+              />
               <View style={{ flex: 1, marginLeft: spacing.md }}>
-                <T variant="title" style={{ fontSize: 22 }}>{movie.title}</T>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginTop: 6, gap: spacing.xs }}>
+                <T variant="title" style={{ fontSize: 22 }}>
+                  {movie.title}
+                </T>
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    marginTop: 6,
+                    gap: spacing.xs,
+                  }}
+                >
                   <T variant="caption" muted>
                     {[
                       movie.releaseYear ? String(movie.releaseYear) : null,
@@ -89,11 +146,15 @@ export default function MovieDetailScreen() {
                   {movie.rating ? (
                     <>
                       <Ionicons name="star" size={11} color={tokens.warning} />
-                      <T variant="caption" muted>{movie.rating.toFixed(1)}</T>
+                      <T variant="caption" muted>
+                        {movie.rating.toFixed(1)}
+                      </T>
                     </>
                   ) : null}
                 </View>
-                <T variant="caption" muted style={{ marginTop: spacing.sm }}>{movie.genres?.map((g: any) => g.name).join(' · ')}</T>
+                <T variant="caption" muted style={{ marginTop: spacing.sm }}>
+                  {movie.genres?.map((g: any) => g.name).join(' · ')}
+                </T>
               </View>
             </View>
           </View>
@@ -130,8 +191,15 @@ export default function MovieDetailScreen() {
                 style={styles.watchlistAction}
               />
             ) : null}
-            <Pressable onPress={() => favorite.mutate({ id, on: !movie.favorite, kind: 'movies' })} style={[styles.favBtn, { backgroundColor: tokens.surfaceElevated }]}>
-              <Ionicons name={movie.favorite ? 'heart' : 'heart-outline'} size={22} color={movie.favorite ? tokens.favorite : tokens.textPrimary} />
+            <Pressable
+              onPress={() => favorite.mutate({ id, on: !movie.favorite, kind: 'movies' })}
+              style={[styles.favBtn, { backgroundColor: tokens.surfaceElevated }]}
+            >
+              <Ionicons
+                name={movie.favorite ? 'heart' : 'heart-outline'}
+                size={22}
+                color={movie.favorite ? tokens.favorite : tokens.textPrimary}
+              />
             </Pressable>
           </View>
 
@@ -158,9 +226,21 @@ export default function MovieDetailScreen() {
           ) : null}
 
           <Card>
-            <T variant="h2" style={{ marginBottom: spacing.sm }}>{t('movies:overview')}</T>
-            <T variant="body" muted>{movie.overview ?? t('movies:noOverview')}</T>
-            {movie.trailerUrl ? <Button title={t('movies:watchTrailer')} variant="ghost" icon="play-circle-outline" style={{ marginTop: spacing.md }} onPress={() => Linking.openURL(movie.trailerUrl)} /> : null}
+            <T variant="h2" style={{ marginBottom: spacing.sm }}>
+              {t('movies:overview')}
+            </T>
+            <T variant="body" muted>
+              {movie.overview ?? t('movies:noOverview')}
+            </T>
+            {movie.trailerUrl ? (
+              <Button
+                title={t('movies:watchTrailer')}
+                variant="ghost"
+                icon="play-circle-outline"
+                style={{ marginTop: spacing.md }}
+                onPress={() => Linking.openURL(movie.trailerUrl!)}
+              />
+            ) : null}
           </Card>
 
           <Card>
@@ -178,10 +258,23 @@ export default function MovieDetailScreen() {
               <SectionHeader title={t('movies:cast')} />
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 {movie.cast.map((c: any) => (
-                  <View key={c.id} style={{ width: 80, marginRight: spacing.md, alignItems: 'center' }}>
-                    <PosterImage uri={c.profileUrl} style={{ width: 64, height: 64, borderRadius: 32 }} />
-                    <T variant="micro" style={{ textAlign: 'center', marginTop: 4 }} numberOfLines={2}>{c.name}</T>
-                  </View>
+                  <Pressable
+                    key={c.id}
+                    onPress={() => router.push(`/person/${c.id}` as any)}
+                    style={{ width: 80, marginRight: spacing.md, alignItems: 'center' }}
+                  >
+                    <PosterImage
+                      uri={c.profileUrl}
+                      style={{ width: 64, height: 64, borderRadius: 32 }}
+                    />
+                    <T
+                      variant="micro"
+                      style={{ textAlign: 'center', marginTop: 4 }}
+                      numberOfLines={2}
+                    >
+                      {c.name}
+                    </T>
+                  </Pressable>
                 ))}
               </ScrollView>
             </View>
@@ -208,8 +301,16 @@ export default function MovieDetailScreen() {
           ) : null}
 
           <Pressable onPress={() => router.push(`/comments?type=MOVIE&threadId=${id}`)}>
-            <Card style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <T variant="h2" style={{ color: tokens.primary }}>{t('common:comments')}</T>
+            <Card
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <T variant="h2" style={{ color: tokens.primary }}>
+                {t('common:comments')}
+              </T>
               <Ionicons name="chevron-forward" size={20} color={tokens.primary} />
             </Card>
           </Pressable>
@@ -229,5 +330,13 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row' },
   mainAction: { flex: 1 },
   watchlistAction: { flex: 1, marginLeft: spacing.sm },
-  favBtn: { marginLeft: spacing.sm, width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center', alignSelf: 'center' },
+  favBtn: {
+    marginLeft: spacing.sm,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+  },
 });

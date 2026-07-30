@@ -1,0 +1,11 @@
+{
+  "movies": "映画",
+  "bornDied": "{{born}} – {{died}}",
+  "biography": "略歴",
+  "showMore": "もっと見る",
+  "failedToLoad": "読み込みに失敗しました。",
+  "tvShows": "テレビ番組",
+  "noCredits": "クレジットはまだありません。",
+  "showLess": "閉じる",
+  "bornOn": "生年月日: {{date}}"
+}
