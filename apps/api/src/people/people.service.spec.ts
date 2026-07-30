@@ -342,6 +342,47 @@ describe('PeopleService.mergeDuplicates', () => {
     });
     expect(prisma.castMember.delete).toHaveBeenCalledWith({ where: { id: 'cm-legacy' } });
   });
+
+  it('fills the canonical row with ids resolved on the deleted dup (prod empty-credits regression)', async () => {
+    // Clicked row was resolved (TVDB_ → TMDB cross-link) but the canonical TMDB_-keyed
+    // row has no provider ids of its own: without the fill, the resolved ids die with
+    // the deleted dup and syncPerson silently skips → empty credits response.
+    const clicked = memberRow({
+      id: 'cm-tvdb',
+      externalId: 'TVDB_277850',
+      tmdbId: 64295,
+      tvdbId: 277850,
+      imdbId: 'nm2024927',
+    });
+    const canonical = memberRow({
+      id: 'cm-real',
+      externalId: 'TMDB_64295',
+      tmdbId: null,
+      tvdbId: null,
+      imdbId: null,
+    });
+    const { svc, prisma } = makeService({
+      prisma: {
+        castMember: {
+          findMany: jest.fn(async () => [{ ...canonical, _count: { mediaCast: 3 } }]),
+          findUnique: jest.fn(async (a: any) =>
+            a.where.id === 'cm-tvdb'
+              ? { ...clicked, _count: { mediaCast: 1 } }
+              : { ...canonical, tmdbId: 64295, tvdbId: 277850, imdbId: 'nm2024927' },
+          ),
+          update: jest.fn(async (a: any) => a.data),
+          delete: jest.fn(async () => ({})),
+        },
+        mediaCast: { findMany: jest.fn(async () => []) },
+      },
+    });
+    const out = await (svc as any).mergeDuplicates(clicked);
+    expect(prisma.castMember.update).toHaveBeenCalledWith({
+      where: { id: 'cm-real' },
+      data: { tmdbId: 64295, tvdbId: 277850, imdbId: 'nm2024927' },
+    });
+    expect(out.tmdbId).toBe(64295);
+  });
 });
 
 describe('PeopleService sync + serve', () => {

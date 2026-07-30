@@ -105,43 +105,99 @@ export function invalidateWidgetDataCache(): void {
   resultCache.clear();
 }
 
+// Periodic OS re-renders (updatePeriodMillis) run headless while the device may be
+// in Doze — background network is suspended and the fetch fails. Rendering the
+// error/empty state then would blank the widget until the next app open, so persist
+// the last successful payload and fall back to it on transient failures. A genuine
+// auth failure (401 after a failed refresh) still drops the cache (logout / expired
+// refresh token must not leave personal data on the home screen).
+const DISK_CACHE_KEYS = { watchNext: 'widget:lastGood.watchNext', upcoming: 'widget:lastGood.upcoming' } as const;
+
+async function readLastGood<T>(key: string): Promise<T | null> {
+  try {
+    const raw = await AsyncStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeLastGood(key: string, value: unknown): Promise<void> {
+  try {
+    await AsyncStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // best effort
+  }
+}
+
+async function dropLastGood(key: string): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(key);
+  } catch {
+    // best effort
+  }
+}
+
+/** Fetch with last-good fallback: ok persists the payload, auth drops it, error
+ *  replays the last persisted payload instead of blanking the widget. */
+async function fetchWithFallback<T>(
+  diskKey: string,
+  fetcher: () => Promise<WidgetFetchState<T>>,
+): Promise<WidgetFetchState<T>> {
+  const state = await fetcher();
+  if (state.status === 'ok') {
+    await writeLastGood(diskKey, state.data);
+    return state;
+  }
+  if (state.status === 'auth') {
+    await dropLastGood(diskKey);
+    return state;
+  }
+  const lastGood = await readLastGood<T>(diskKey);
+  return lastGood ? { status: 'ok', data: lastGood } : state;
+}
+
 /** Watch Next widget data: strictly the WATCH_NEXT bucket, deduped by episode id
  *  (mirrors the app's Shows tab dedupe). */
 export async function fetchWatchNextItems(): Promise<WidgetFetchState<WatchNextItemDto[]>> {
   await ensureWidgetLocale();
-  return cached('watchNext', () =>
-    toState(async () => {
-      const res = await api.get<WatchNextResponseDto>('/me/watch-next');
-      const seen = new Set<string>();
-      return (res.items ?? [])
-        .filter((it) => {
-          if (it.bucket !== WatchNextBucket.WATCH_NEXT) return false;
-          const k = it.episode?.id;
-          if (!k || seen.has(k)) return false;
-          seen.add(k);
-          return true;
-        })
-        // Compact widget rows show only the first of a joined multi-network string.
-        .map((it) => ({ ...it, network: firstNetwork(it.network) }));
-    }),
+  return fetchWithFallback(DISK_CACHE_KEYS.watchNext, () =>
+    cached('watchNext', () =>
+      toState(async () => {
+        const res = await api.get<WatchNextResponseDto>('/me/watch-next');
+        const seen = new Set<string>();
+        return (res.items ?? [])
+          .filter((it) => {
+            if (it.bucket !== WatchNextBucket.WATCH_NEXT) return false;
+            const k = it.episode?.id;
+            if (!k || seen.has(k)) return false;
+            seen.add(k);
+            return true;
+          })
+          // Compact widget rows show only the first of a joined multi-network string.
+          .map((it) => ({ ...it, network: firstNetwork(it.network) }));
+      }),
+    ),
   );
 }
 
 /** Upcoming widget data: only the near-term groups (Today / Tomorrow / This week). */
 export async function fetchUpcomingGroups(): Promise<WidgetFetchState<UpcomingGroupDto[]>> {
   await ensureWidgetLocale();
-  return cached('upcoming', () =>
-    toState(async () => {
-      const res = await api.get<{ groups: UpcomingGroupDto[] }>('/me/upcoming');
-      const wanted = new Set<string>(UPCOMING_NEAR_TERM_BUCKETS);
-      return (res.groups ?? [])
-        .filter((g) => wanted.has(g.key) && g.items?.length)
-        // Compact widget rows show only the first of a joined multi-network string.
-        .map((g) => ({
-          ...g,
-          items: g.items.map((it) => ({ ...it, network: firstNetwork(it.network) })),
-        }));
-    }),
+  return fetchWithFallback(DISK_CACHE_KEYS.upcoming, () =>
+    cached('upcoming', () =>
+      toState(async () => {
+        const res = await api.get<{ groups: UpcomingGroupDto[] }>('/me/upcoming');
+        const wanted = new Set<string>(UPCOMING_NEAR_TERM_BUCKETS);
+        return (res.groups ?? [])
+          .filter((g) => wanted.has(g.key) && g.items?.length)
+          // Compact widget rows show only the first of a joined multi-network string.
+          .map((g) => ({
+            ...g,
+            items: g.items.map((it) => ({ ...it, network: firstNetwork(it.network) })),
+          }));
+      }),
+    ),
   );
 }
 

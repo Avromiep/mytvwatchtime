@@ -10,10 +10,12 @@ enum WidgetAPIError: Error {
 /// Direct API access for the WidgetKit timeline. Auth tokens live in the SHARED
 /// KEYCHAIN ACCESS GROUP (first keychain-access-groups entitlement entry on both the
 /// app and this extension) — never in UserDefaults. The app writes them via
-/// expo-secure-store (service "app", accounts "tvwatch.access"/"tvwatch.refresh");
-/// when this widget refreshes on a 401 it writes the rotated tokens back to the same
-/// keychain items, so the app picks them up on next open. Non-secret config
-/// (baseUrl/locale/labels) and cached payloads use the App Group container.
+/// expo-secure-store, whose item layout is service "app:no-auth" / "app:auth" /
+/// legacy "app" (account+generic = key); this widget searches all variants in the
+/// same priority order as expo-secure-store's get(). When this widget refreshes on a
+/// 401 it writes the rotated tokens back to the same keychain items, so the app picks
+/// them up on next open. Non-secret config (baseUrl/locale/labels) and cached
+/// payloads use the App Group container.
 final class WidgetAPI {
   static let shared = WidgetAPI()
 
@@ -32,31 +34,49 @@ final class WidgetAPI {
 
   // MARK: - Shared keychain (mirrors expo-secure-store's item layout)
 
-  private func keychainQuery(account: String) -> [String: Any] {
+  // expo-secure-store writes with service "app:no-auth" (requireAuthentication=false,
+  // the app's default) and reads variants in this exact priority order; "app" is the
+  // legacy service kept for tokens written by older app versions.
+  private static let keychainServices = ["app:no-auth", "app:auth", "app"]
+
+  private func keychainQuery(account: String, service: String) -> [String: Any] {
     [
       kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: "app",
+      kSecAttrService as String: service,
       kSecAttrAccount as String: Data(account.utf8),
       kSecAttrGeneric as String: Data(account.utf8),
     ]
   }
 
   private func keychainRead(_ account: String) -> String? {
-    var query = keychainQuery(account: account)
-    query[kSecMatchLimit as String] = kSecMatchLimitOne
-    query[kSecReturnData as String] = kCFBooleanTrue
-    var item: CFTypeRef?
-    guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-          let data = item as? Data else { return nil }
-    return String(data: data, encoding: .utf8)
+    for service in WidgetAPI.keychainServices {
+      var query = keychainQuery(account: account, service: service)
+      query[kSecMatchLimit as String] = kSecMatchLimitOne
+      query[kSecReturnData as String] = kCFBooleanTrue
+      var item: CFTypeRef?
+      if SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+         let data = item as? Data,
+         let value = String(data: data, encoding: .utf8) {
+        return value
+      }
+    }
+    return nil
   }
 
   private func keychainWrite(_ account: String, _ value: String) {
     let data = Data(value.utf8)
-    let query = keychainQuery(account: account)
-    let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-    if status == errSecItemNotFound {
-      var add = query
+    // Update every existing variant so no stale copy can shadow the fresh token
+    // (expo-secure-store's get() returns the first variant hit in priority order).
+    var updated = false
+    for service in WidgetAPI.keychainServices {
+      let query = keychainQuery(account: account, service: service)
+      if SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecSuccess {
+        updated = true
+      }
+    }
+    if !updated {
+      // Nothing on disk yet — add under expo-secure-store's default write target.
+      var add = keychainQuery(account: account, service: WidgetAPI.keychainServices[0])
       add[kSecValueData as String] = data
       add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
       SecItemAdd(add as CFDictionary, nil)

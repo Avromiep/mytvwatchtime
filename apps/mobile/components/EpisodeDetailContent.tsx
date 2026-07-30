@@ -295,8 +295,9 @@ export function EpisodeDetailContent({
                 nestedScrollEnabled
               >
                 {ep.cast.map((c: any) => (
-                  <View
+                  <Pressable
                     key={c.creditId}
+                    onPress={() => router.push(`/person/${c.id}` as any)}
                     style={{ width: 84, marginRight: spacing.md, alignItems: 'center' }}
                   >
                     <PosterImage
@@ -315,7 +316,7 @@ export function EpisodeDetailContent({
                         {c.character}
                       </T>
                     ) : null}
-                  </View>
+                  </Pressable>
                 ))}
               </ScrollView>
             </View>

@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, ScrollView, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
 import type { PersonCreditDto } from '@tvwatch/shared';
 import { Header } from '../../../components/Header';
 import {
@@ -129,14 +131,47 @@ export default function PersonScreen() {
 
   return (
     <Screen>
-      <Header showBack title={person.name} />
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingTop: 0 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <PosterImage
-            uri={person.profileUrl}
-            style={{ width: 96, height: 96, borderRadius: 48 }}
+      <ScrollView contentContainerStyle={{ paddingBottom: spacing.lg }}>
+        {/* Hero: slim blurred banner fading into the page background */}
+        <View style={{ height: 140 }}>
+          <Image
+            source={person.profileUrl ? { uri: person.profileUrl } : undefined}
+            style={[StyleSheet.absoluteFill, { backgroundColor: tokens.surfaceElevated }]}
+            contentFit="cover"
+            blurRadius={40}
+            cachePolicy="memory-disk"
+            recyclingKey={person.profileUrl ?? 'fallback'}
           />
-          <View style={{ flex: 1, marginLeft: spacing.lg }}>
+          <LinearGradient
+            // eslint-disable-next-line local/no-hardcoded-colors -- intentional dark media scrim over blurred artwork (both themes)
+            colors={['rgba(0,0,0,0.55)', 'rgba(0,0,0,0.15)', tokens.background]}
+            locations={[0, 0.55, 1]}
+            style={StyleSheet.absoluteFill}
+          >
+            <Header showBack tone="media" />
+          </LinearGradient>
+        </View>
+
+        {/* Compact identity row: ringed headshot straddling the hero edge + name/meta */}
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'flex-end',
+            marginTop: -48,
+            paddingHorizontal: spacing.lg,
+          }}
+        >
+          <View
+            style={{
+              borderRadius: radius.lg,
+              borderWidth: 3,
+              borderColor: tokens.background,
+              overflow: 'hidden',
+            }}
+          >
+            <PosterImage uri={person.profileUrl} style={{ width: 84, height: 126 }} />
+          </View>
+          <View style={{ flex: 1, marginLeft: spacing.md, paddingBottom: 2 }}>
             <T variant="title" numberOfLines={2}>
               {person.name}
             </T>
@@ -161,32 +196,34 @@ export default function PersonScreen() {
           </View>
         </View>
 
-        {person.biography ? (
-          <Card style={{ marginTop: spacing.lg }}>
-            <T variant="h2">{t('person:biography')}</T>
-            <T
-              variant="body"
-              numberOfLines={bioExpanded ? undefined : 5}
-              style={{ marginTop: spacing.sm }}
-            >
-              {person.biography}
-            </T>
-            <Pressable onPress={() => setBioExpanded((v) => !v)} hitSlop={6}>
-              <T variant="caption" style={{ color: tokens.primary, marginTop: spacing.xs }}>
-                {bioExpanded ? t('person:showLess') : t('person:showMore')}
+        <View style={{ paddingHorizontal: spacing.lg }}>
+          {person.biography ? (
+            <Card style={{ marginTop: spacing.lg }}>
+              <T variant="h2">{t('person:biography')}</T>
+              <T
+                variant="body"
+                numberOfLines={bioExpanded ? undefined : 5}
+                style={{ marginTop: spacing.sm }}
+              >
+                {person.biography}
               </T>
-            </Pressable>
-          </Card>
-        ) : null}
+              <Pressable onPress={() => setBioExpanded((v) => !v)} hitSlop={6}>
+                <T variant="caption" style={{ color: tokens.primary, marginTop: spacing.xs }}>
+                  {bioExpanded ? t('person:showLess') : t('person:showMore')}
+                </T>
+              </Pressable>
+            </Card>
+          ) : null}
 
-        {rail(data.movies, 'movies', t('person:movies'), data.movieCount)}
-        {rail(data.shows, 'shows', t('person:tvShows'), data.showCount)}
+          {rail(data.movies, 'movies', t('person:movies'), data.movieCount)}
+          {rail(data.shows, 'shows', t('person:tvShows'), data.showCount)}
 
-        {!data.movies.length && !data.shows.length ? (
-          <T variant="body" muted style={{ marginTop: spacing.lg, textAlign: 'center' }}>
-            {t('person:noCredits')}
-          </T>
-        ) : null}
+          {!data.movies.length && !data.shows.length ? (
+            <T variant="body" muted style={{ marginTop: spacing.lg, textAlign: 'center' }}>
+              {t('person:noCredits')}
+            </T>
+          ) : null}
+        </View>
       </ScrollView>
     </Screen>
   );

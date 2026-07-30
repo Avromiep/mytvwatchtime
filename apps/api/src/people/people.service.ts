@@ -220,6 +220,17 @@ export class PeopleService {
     const dups = candidates.filter((c) => c.id !== canonical.id);
     if (!dups.length) return canonical;
 
+    // The canonical row may carry no provider ids of its own (e.g. it was keyed by
+    // externalId only) — without this fill the ids resolved on the clicked row would
+    // die with the deleted dup and the credits sync below would silently skip.
+    const fill: Prisma.CastMemberUpdateInput = {};
+    if (canonical.tmdbId == null && member.tmdbId != null) fill.tmdbId = member.tmdbId;
+    if (canonical.tvdbId == null && member.tvdbId != null) fill.tvdbId = member.tvdbId;
+    if (canonical.imdbId == null && member.imdbId != null) fill.imdbId = member.imdbId;
+    if (Object.keys(fill).length) {
+      await this.prisma.castMember.update({ where: { id: canonical.id }, data: fill });
+    }
+
     for (const dup of dups) {
       this.logger.log(
         `person merge: ${dup.id} (${dup.externalId ?? 'no-ext'}, ${dup._count.mediaCast} credits) -> ${canonical.id} (${canonical.externalId ?? 'no-ext'})`,
