@@ -1,4 +1,5 @@
 import { MetadataBackfillService } from './metadata-backfill.service';
+import { CastDedupService } from './cast-dedup.service';
 
 // Cast-dedup: grouping confidence, canonical selection, and the vote-preserving
 // merge flow (votes re-pointed BEFORE any duplicate row is deleted).
@@ -23,6 +24,7 @@ function makeSvc(prisma: any) {
     {} as any, // tvdb provider
     {} as any, // tmdb provider
     {} as any, // structureRemap
+    new CastDedupService(),
   );
 }
 
@@ -49,7 +51,7 @@ const row = (partial: Partial<Row> & { id: string }): Row => ({
 });
 
 describe('cast dedup grouping', () => {
-  const svc = makeSvc({});
+  const svc = new CastDedupService();
 
   it('groups rows sharing a cast member as HIGH confidence', () => {
     const groups = (svc as any).groupDuplicateCast([
@@ -155,7 +157,7 @@ describe('cast dedup grouping', () => {
 });
 
 describe('cast dedup canonical selection', () => {
-  const svc = makeSvc({});
+  const svc = new CastDedupService();
 
   it('prefers the row carrying votes', () => {
     const canonical = (svc as any).pickCanonicalCastRow([
@@ -313,5 +315,47 @@ describe('mergeMediaCastDuplicates', () => {
     const prisma: any = { $transaction: jest.fn(async (fn: any) => fn(tx)) };
     const svc = makeSvc(prisma);
     await expect(svc.mergeCastPair('m1', 'keep', 'missing')).rejects.toThrow('Expected 2 cast rows');
+  });
+});
+
+describe('CastDedupService.mergeInline (hydration self-heal)', () => {
+  const svc = new CastDedupService();
+
+  function mockTx(rows: any[]) {
+    return {
+      mediaCast: {
+        findMany: jest.fn().mockResolvedValue(rows),
+        update: jest.fn().mockResolvedValue({}),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      mediaItem: { findUnique: jest.fn().mockResolvedValue({ title: 'Show' }) },
+      castMember: { delete: jest.fn().mockResolvedValue({}) },
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      $queryRaw: jest.fn().mockResolvedValue([]),
+    } as any;
+  }
+
+  it('merges HIGH groups inside the open transaction', async () => {
+    const tx = mockTx([
+      row({ id: 'a', character: 'Matt Murdock', castMemberId: 'cm-1', _count: { characterVotes: 2 }, castMember: { id: 'cm-1', name: 'Charlie Cox', externalId: 'TMDB_475230' } }),
+      row({ id: 'b', character: 'Matt Murdock / Daredevil', castMemberId: 'cm-2', castMember: { id: 'cm-2', name: 'Charlie Cox', externalId: 'TMDB_475230' } }),
+    ]);
+    const out = await svc.mergeInline(tx, 'm1');
+    expect(out.merged).toBe(1);
+    expect(out.votesMoved).toBe(1);
+    expect(tx.mediaCast.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'a' } }), // vote-carrying row survives
+    );
+  });
+
+  it('is a no-op (and skips the title lookup) when there are no duplicates', async () => {
+    const tx = mockTx([
+      row({ id: 'a', character: 'Goku', castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'Masako Nozawa', externalId: 'TMDB_100' } }),
+      row({ id: 'b', character: 'Vegeta', castMemberId: 'cm-2', castMember: { id: 'cm-2', name: 'Ryo Horikawa', externalId: 'TMDB_101' } }),
+    ]);
+    const out = await svc.mergeInline(tx, 'm1');
+    expect(out).toEqual({ merged: 0, votesMoved: 0 });
+    expect(tx.mediaItem.findUnique).not.toHaveBeenCalled();
+    expect(tx.$executeRaw).not.toHaveBeenCalled();
   });
 });

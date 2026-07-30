@@ -17,6 +17,7 @@ import { TvdbProvider } from './providers/tvdb.provider';
 import { TvmazeProvider } from './providers/tvmaze.provider';
 import { HydrationQueue } from './hydration/hydration.queue';
 import { ExternalReviewsService } from './external-reviews.service';
+import { CastDedupService } from './cast-dedup.service';
 import { slugify } from './util/slugify';
 import { EN_CONTENT_VERIFIER_VERSION } from './util/en-content-verifier';
 
@@ -39,6 +40,7 @@ export class MediaMetadataService {
     private readonly hydration: HydrationQueue,
     private readonly redis: RedisService,
     private readonly externalReviews?: ExternalReviewsService,
+    private readonly castDedup?: CastDedupService,
   ) {}
 
   /**
@@ -2196,6 +2198,14 @@ export class MediaMetadataService {
         characterVotes: { none: {} },
       },
     });
+    // Self-heal INSIDE the hydration transaction: merge any duplicate cast rows this
+    // sync created or retained (cross-namespace person ids, name variants) instead of
+    // leaving them for the weekly batch repair — hydrations and character-id
+    // backfills would otherwise keep growing duplicates between cron runs. Optional
+    // chaining: some test harnesses construct the service with a reduced dep set.
+    if (this.castDedup) {
+      await this.castDedup.mergeInline(tx, mediaId);
+    }
   }
 }
 

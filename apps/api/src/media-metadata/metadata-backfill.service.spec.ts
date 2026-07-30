@@ -1,5 +1,6 @@
 import { ExternalProvider, ProviderEntityKind } from '@tvwatch/shared';
 import { MetadataBackfillService } from './metadata-backfill.service';
+import { CastDedupService } from './cast-dedup.service';
 import { StructureRemapService } from './structure-remap.service';
 import { ProviderError } from './providers/shared/provider-errors';
 import { ProviderThrottled } from './providers/shared/provider-http';
@@ -96,6 +97,7 @@ describe('MetadataBackfillService — backfill anime routing (isAnimeMedia)', ()
       {} as any,
       {} as any,
       {} as any,
+      new CastDedupService(),
     );
     return { service, prisma };
   }
@@ -172,6 +174,7 @@ describe('MetadataBackfillService.repairNonEnglishBase', () => {
       {} as any,
       {} as any,
       {} as any,
+      new CastDedupService(),
     );
     return { service, prisma, meta };
   }
@@ -332,6 +335,7 @@ describe('MetadataBackfillService.repairTvdbIdConflicts', () => {
       {} as any,
       tmdbProvider as any,
       {} as any,
+      new CastDedupService(),
     );
     return { service, prisma };
   }
@@ -422,6 +426,7 @@ describe('MetadataBackfillService', () => {
       tvdb,
       tmdbProvider,
       structureRemap,
+      new CastDedupService(),
     );
   });
 
@@ -1034,6 +1039,7 @@ describe('MetadataBackfillService — recommendations backfill', () => {
       {} as any,
       tmdbProvider,
       {} as any,
+      new CastDedupService(),
     );
     return { service, prisma, tmdbProvider };
   }
@@ -1180,6 +1186,7 @@ describe('MetadataBackfillService — repair progress tracking', () => {
       {} as any,
       {} as any,
       {} as any,
+      new CastDedupService(),
     );
   }
 
@@ -1263,6 +1270,7 @@ describe('MetadataBackfillService — repair progress tracking', () => {
       {} as any,
       {} as any,
       {} as any,
+      new CastDedupService(),
     );
 
     await service.repairNonEnglishBase();
@@ -1302,6 +1310,7 @@ describe('MetadataBackfillService.backfillRatings', () => {
       tvdb as any,
       tmdbProvider as any,
       {} as any,
+      new CastDedupService(),
     );
     return { service, prisma, tmdbProvider, tvdb };
   }
@@ -1384,6 +1393,7 @@ describe('MetadataBackfillService.repairNonEnglishContent', () => {
       {} as any,
       tmdbProvider as any,
       {} as any,
+      new CastDedupService(),
     );
     return { service, prisma, meta, redis };
   }
@@ -1596,6 +1606,7 @@ describe('MetadataBackfillService.repairBannerPosters', () => {
       {} as any,
       {} as any,
       {} as any,
+      new CastDedupService(),
     );
 
     const res = await service.repairBannerPosters();
@@ -1634,6 +1645,7 @@ describe('MetadataBackfillService.repairBannerPosters', () => {
       {} as any,
       {} as any,
       {} as any,
+      new CastDedupService(),
     );
 
     const res = await service.repairBannerPosters();
@@ -1696,6 +1708,7 @@ describe('MetadataBackfillService.repairProviderDuplicateMovies', () => {
       {} as any,
       tmdbProvider as any,
       {} as any,
+      new CastDedupService(),
     );
     const mergeSpy = jest
       .spyOn(service as any, 'mergeDuplicateMovieRows')

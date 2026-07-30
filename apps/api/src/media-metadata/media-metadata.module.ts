@@ -21,6 +21,7 @@ import { HydrationQueue } from './hydration/hydration.queue';
 import { HydrationProcessor } from './hydration/hydration.processor';
 import { MetadataBackfillService } from './metadata-backfill.service';
 import { StructureRemapService } from './structure-remap.service';
+import { CastDedupService } from './cast-dedup.service';
 import { ExternalReviewsService } from './external-reviews.service';
 
 @Module({
@@ -40,6 +41,7 @@ import { ExternalReviewsService } from './external-reviews.service';
     HydrationProcessor,
     MetadataBackfillService,
     StructureRemapService,
+    CastDedupService,
     TmdbClient,
     TmdbProvider,
     TvdbClient,

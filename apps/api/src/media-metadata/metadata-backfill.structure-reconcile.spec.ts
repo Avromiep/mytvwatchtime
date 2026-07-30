@@ -1,4 +1,5 @@
 import { MetadataBackfillService } from './metadata-backfill.service';
+import { CastDedupService } from './cast-dedup.service';
 import { StructureRemapService } from './structure-remap.service';
 
 // repairTmdbStructureShow: the reverse (TMDB-canonical) structure repair — gating,
@@ -58,6 +59,7 @@ function make(opts: {
     {} as any,
     {} as any,
     structureRemap,
+    new CastDedupService(),
   );
   return { svc, prisma, meta, structureRemap };
 }
