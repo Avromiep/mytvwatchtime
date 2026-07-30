@@ -249,7 +249,8 @@ export class OnboardingService {
 
     // Rebuild the denormalized show status from aggregates (import-style) rather
     // than bumpShowCount deltas — correct for arbitrary partial progress and
-    // aired-only totals. Watching un-drops the show (manual-marking parity).
+    // aired-only totals. Onboarding EXPLICITLY un-drops the show (the user just
+    // chose to track it) — ordinary episode watches no longer do that.
     await this.rebuildShowStatus(userId, media.id, now);
     // Library convention: a watched show is a tracked show, so it also lands in
     // the watchlist (merge-only — never removes, never double-counts).

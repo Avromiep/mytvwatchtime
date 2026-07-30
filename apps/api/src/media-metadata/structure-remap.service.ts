@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { ExternalProvider } from '@tvwatch/shared';
+import { ExternalProvider, ProviderEntityKind } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { slugify } from './util/slugify';
 
@@ -8,6 +8,9 @@ export interface RemapStats {
   stale: number;
   mapped: number;
   unmapped: number;
+  /** Pairs whose transfer transaction FAILED (kept both rows, will be retried —
+   *  deliberately NOT counted in `unmapped`, which feeds the convergence stamps). */
+  transferFailed: number;
   statusesMoved: number;
   historiesMoved: number;
   ratingsMoved: number;
@@ -33,12 +36,16 @@ interface EpRow {
   isSpecial: boolean;
   hasTmdb: boolean;
   hasTvdb: boolean;
+  /** Actual provider id values (needed to MOVE the cross-link onto the target row). */
+  tmdbValue: string | null;
+  tvdbValue: string | null;
 }
 
 const ZERO: RemapStats = {
   stale: 0,
   mapped: 0,
   unmapped: 0,
+  transferFailed: 0,
   statusesMoved: 0,
   historiesMoved: 0,
   ratingsMoved: 0,
@@ -75,20 +82,31 @@ export class StructureRemapService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * After a TVDB hydration of a formerly TMDB-structured show: union upsert keeps stale
-   * rows that never got linked to TVDB (e.g. Re:ZERO TMDB S1E26-77 vs TVDB S2-S4, or
-   * Dragon Ball's flattened TMDB S1 = 153 rows whose TMDB ids were lost entirely).
-   * Stale = has NO TVDB episode external id; fresh = has one. Maps them onto the fresh
-   * rows. dryRun computes matches/counts without any writes.
+   * After a canonical-provider hydration of a formerly mixed show: union upsert keeps
+   * stale rows that never got linked to the canonical provider (e.g. Re:ZERO TMDB
+   * S1E26-77 vs TVDB S2-S4; Dragon Ball's flattened TMDB S1 whose ids were never
+   * written; daily shows carrying a stray second provider structure).
+   * canonical 'tvdb' (anime / stamped): stale = no TVDB id, fresh = has TVDB id.
+   * canonical 'tmdb' (everything else): stale = no TMDB id, fresh = has TMDB id.
+   * Maps stale rows onto the fresh ones; dryRun computes matches/counts without writes.
    */
-  async remapShow(mediaId: string, opts?: { dryRun?: boolean }): Promise<RemapStats> {
+  async remapShow(
+    mediaId: string,
+    opts?: {
+      dryRun?: boolean;
+      canonical?: 'tvdb' | 'tmdb';
+      onProgress?: (done: number, total: number) => void;
+    },
+  ): Promise<RemapStats> {
     const dryRun = opts?.dryRun === true;
+    const canonical = opts?.canonical ?? 'tvdb';
+    const hasCanonical = (e: EpRow) => (canonical === 'tvdb' ? e.hasTvdb : e.hasTmdb);
     const episodes = await this.loadShowEpisodes(mediaId);
     if (episodes === null) return { ...ZERO, dryRun };
 
-    const stale = episodes.filter((e) => !e.hasTvdb);
+    const stale = episodes.filter((e) => !hasCanonical(e));
     if (stale.length === 0) return { ...ZERO, dryRun };
-    const fresh = episodes.filter((e) => e.hasTvdb);
+    const fresh = episodes.filter(hasCanonical);
     // No canonical rows to map onto — never delete into the void.
     if (fresh.length === 0) return { ...ZERO, dryRun };
 
@@ -101,7 +119,7 @@ export class StructureRemapService {
       await this.backfillAbsoluteNumbers(episodes, dryRun);
     }
 
-    const stats = await this.transferMatches(stale, fresh, mediaId, dryRun);
+    const stats = await this.transferMatches(stale, fresh, mediaId, dryRun, opts?.onProgress);
 
     // Seasons left empty by the cleanup are not part of the fresh structure — drop them.
     const showId = episodes[0]?.showId;
@@ -113,7 +131,7 @@ export class StructureRemapService {
     }
 
     this.logger.log(
-      `remapShow(${mediaId})${dryRun ? ' [dry-run]' : ''}: ${stats.mapped}/${stats.stale} mapped, ${stats.unmapped} unmapped/kept, ` +
+      `remapShow(${mediaId})${dryRun ? ' [dry-run]' : ''} [canonical=${canonical}]: ${stats.mapped}/${stats.stale} mapped, ${stats.unmapped} unmapped/kept, ${stats.transferFailed} transfer-failed, ` +
         `${stats.episodesRemoved} episodes + ${stats.seasonsRemoved} seasons removed, ` +
         `${stats.statusesMoved} statuses, ${stats.historiesMoved} history, ${stats.ratingsMoved} ratings, ` +
         `${stats.reactionsMoved} reactions, ${stats.votesMoved} votes, ${stats.commentsMoved} comments, ` +
@@ -188,7 +206,7 @@ export class StructureRemapService {
           include: {
             episodes: {
               orderBy: { number: 'asc' },
-              include: { externalIds: { select: { provider: true } } },
+              include: { externalIds: { select: { provider: true, value: true } } },
             },
           },
         },
@@ -210,6 +228,8 @@ export class StructureRemapService {
           isSpecial: s.isSpecial,
           hasTmdb: providers.has(ExternalProvider.TMDB),
           hasTvdb: providers.has(ExternalProvider.THE_TVDB),
+          tmdbValue: e.externalIds.find((x) => x.provider === ExternalProvider.TMDB)?.value ?? null,
+          tvdbValue: e.externalIds.find((x) => x.provider === ExternalProvider.THE_TVDB)?.value ?? null,
           showId: show.id,
         });
       }
@@ -219,12 +239,15 @@ export class StructureRemapService {
 
   /** Match stale→fresh, transfer user data per pair, clean up unmapped rows, and
    *  recompute progress caches on the target show for every affected user.
-   *  dryRun computes matches and kept/deleted counts without any writes. */
+   *  dryRun computes matches and kept/deleted counts without any writes.
+   *  onProgress fires every 25 pairs (long remaps of mega shows would otherwise look
+   *  stalled to the repair-progress watcher). */
   private async transferMatches(
     stale: EpRow[],
     fresh: EpRow[],
     targetMediaId: string,
     dryRun = false,
+    onProgress?: (done: number, total: number) => void,
   ): Promise<RemapStats> {
     const stats: RemapStats = { ...ZERO, stale: stale.length, matchRules: {}, dryRun };
     const claimed = new Set<string>();
@@ -268,7 +291,8 @@ export class StructureRemapService {
     }
 
     const affectedUsers = new Set<string>();
-    for (const p of pairs) {
+    for (let i = 0; i < pairs.length; i++) {
+      const p = pairs[i];
       try {
         const moved = await this.transferPair(p.from, p.to, affectedUsers);
         stats.mapped++;
@@ -281,11 +305,14 @@ export class StructureRemapService {
         stats.episodesRemoved++;
       } catch (e) {
         // Keep both rows on failure — data loss is worse than a stale episode row.
-        stats.unmapped++;
+        // Counted separately from `unmapped` so the convergence stamps do NOT park
+        // this row: it stays stale and is retried on the next run.
+        stats.transferFailed++;
         this.logger.warn(
           `remap transfer failed for episode ${p.from.id} → ${p.to.id}: ${(e as Error).message}`,
         );
       }
+      if (onProgress && (i + 1) % 25 === 0) onProgress(i + 1, pairs.length);
     }
 
     // Unmapped rows: delete only when they carry NO user data; keep (and report) the rest.
@@ -484,6 +511,37 @@ export class StructureRemapService {
           where: { threadType: 'EPISODE', threadId: from.id },
           data: { threadId: to.id },
         });
+
+        // Move provider cross-links the target lacks onto it, with their REAL values
+        // (delete from the stale row first so the (provider, kind, value) unique index
+        // can't collide inside the same transaction). Best-effort per id: a value
+        // already claimed by a third row is logged, not fatal.
+        const idMoves: { provider: ExternalProvider; value: string }[] = [];
+        if (from.tmdbValue && !to.hasTmdb) {
+          idMoves.push({ provider: ExternalProvider.TMDB, value: from.tmdbValue });
+        }
+        if (from.tvdbValue && !to.hasTvdb) {
+          idMoves.push({ provider: ExternalProvider.THE_TVDB, value: from.tvdbValue });
+        }
+        for (const m of idMoves) {
+          try {
+            await tx.episodeExternalId.deleteMany({
+              where: { episodeId: from.id, provider: m.provider },
+            });
+            await tx.episodeExternalId.create({
+              data: {
+                episodeId: to.id,
+                provider: m.provider,
+                providerEntityKind: ProviderEntityKind.EPISODE,
+                value: m.value,
+              },
+            });
+          } catch (e) {
+            this.logger.warn(
+              `remap: could not move ${m.provider} episode id ${m.value} from ${from.id} to ${to.id}: ${(e as Error).message}`,
+            );
+          }
+        }
 
         await tx.episode.delete({ where: { id: from.id } });
         return {

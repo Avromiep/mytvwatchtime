@@ -920,7 +920,7 @@ export class LibraryService {
     for (const s of statuses) {
       // Dropped shows (removed from the watchlist) stay out of every bucket even
       // though their watch history is kept — same rule as watchNext/trackedMediaIds.
-      // They return when the show is re-added or an episode is watched again.
+      // They return only when the show is explicitly re-added to the watchlist.
       if (s.dropped) continue;
       const w = s.watchedCount ?? 0;
       const airedTotal = airedMap.get(s.mediaId) ?? 0;

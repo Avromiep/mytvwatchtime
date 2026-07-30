@@ -906,8 +906,9 @@ model UserShowStatus {
   lastWatchedAt DateTime? @map("last_watched_at")
   /// Set when the user removes the show from their watchlist — treats it as
   /// "dropped": hidden from watch-next and upcoming even though watch history
-  /// is kept. Cleared when the show is re-added to the watchlist or an episode
-  /// is watched again.
+  /// is kept. Cleared ONLY by explicitly re-adding the show to the watchlist —
+  /// watching an episode does NOT clear it (stray rewatches must not resurrect
+  /// deliberately removed shows; same philosophy as pausedAt).
   dropped      Boolean  @default(false) @map("dropped")
   /// Set when the user pauses tracking — hidden from watch-next/upcoming and no
   /// episode/watchlist notifications, while watch history and progress are kept.

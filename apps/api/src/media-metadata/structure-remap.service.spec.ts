@@ -43,6 +43,10 @@ function mockPrisma() {
       count: jest.fn().mockResolvedValue(0),
     },
     episode: { delete: jest.fn().mockResolvedValue({}), update: jest.fn().mockResolvedValue({}) },
+    episodeExternalId: {
+      create: jest.fn().mockResolvedValue({}),
+      deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
     season: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
     userShowStatus: { upsert: jest.fn().mockResolvedValue({}) },
     $queryRaw: jest.fn().mockResolvedValue([]),
@@ -535,5 +539,68 @@ describe('StructureRemapService', () => {
     expect(prisma.episode.update).not.toHaveBeenCalled();
     expect(prisma.watchHistory.updateMany).not.toHaveBeenCalled();
     expect(prisma.season.deleteMany).not.toHaveBeenCalled();
+  });
+
+  // ---- Reverse direction (canonical='tmdb'): daily shows with a stray TVDB structure ----
+
+  it('canonical=tmdb: stale = rows WITHOUT a TMDB id; TVDB-linked rows are the anchor', async () => {
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('s1', 1, [
+          // Canonical TMDB rows (fresh in reverse direction).
+          ep({ id: 'tmdb-e1', number: 1, title: 'Pilot', absoluteNumber: 1, airDate: D, externalIds: [{ provider: 'TMDB' }] }),
+          // Stray TVDB-only duplicate of the same episode (stale in reverse direction).
+          ep({ id: 'tvdb-e1', number: 1, title: 'Pilot', absoluteNumber: 1, airDate: D, externalIds: [{ provider: 'THE_TVDB' }] }),
+        ]),
+      ]),
+    );
+
+    const res = await service.remapShow('m1', { canonical: 'tmdb' });
+
+    expect(res.stale).toBe(1);
+    expect(res.mapped).toBe(1);
+    expect(res.episodesRemoved).toBe(1);
+    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'tvdb-e1' } });
+    expect(prisma.episode.delete).not.toHaveBeenCalledWith({ where: { id: 'tmdb-e1' } });
+  });
+
+  it('canonical=tmdb with default (tvdb) direction would treat the TMDB rows as stale instead', async () => {
+    // Sanity guard for the direction parameter: same fixture, default canonical.
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('s1', 1, [
+          ep({ id: 'tmdb-e1', number: 1, title: 'Pilot', absoluteNumber: 1, externalIds: [{ provider: 'TMDB' }] }),
+          ep({ id: 'tvdb-e1', number: 1, title: 'Pilot', absoluteNumber: 1, externalIds: [{ provider: 'THE_TVDB' }] }),
+        ]),
+      ]),
+    );
+    const res = await service.remapShow('m1'); // default canonical = tvdb
+    expect(res.stale).toBe(1);
+    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'tmdb-e1' } });
+  });
+
+  it('moves the stale row’s REAL provider id value onto the target row', async () => {
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('s1', 1, [
+          ep({ id: 'fresh', number: 1, title: 'Same', absoluteNumber: 5, externalIds: [{ provider: 'THE_TVDB', value: 'tvdb-555' }] }),
+          ep({ id: 'stale', number: 5, title: 'Same', absoluteNumber: 5, externalIds: [{ provider: 'TMDB', value: 'tmdb-777' }] }),
+        ]),
+      ]),
+    );
+
+    const res = await service.remapShow('m1');
+    expect(res.mapped).toBe(1);
+    expect(prisma.episodeExternalId.deleteMany).toHaveBeenCalledWith({
+      where: { episodeId: 'stale', provider: 'TMDB' },
+    });
+    expect(prisma.episodeExternalId.create).toHaveBeenCalledWith({
+      data: {
+        episodeId: 'fresh',
+        provider: 'TMDB',
+        providerEntityKind: 'EPISODE',
+        value: 'tmdb-777',
+      },
+    });
   });
 });

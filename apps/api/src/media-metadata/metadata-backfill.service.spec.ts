@@ -572,7 +572,10 @@ describe('MetadataBackfillService', () => {
       mockCandidates([animeShow()]);
       structureRemap.remapShow.mockResolvedValue({ stale: 52, mapped: 50, unmapped: 2 });
       const res = await service.rehydrateAnimeFromTvdb();
-      expect(structureRemap.remapShow).toHaveBeenCalledWith('m1');
+      expect(structureRemap.remapShow).toHaveBeenCalledWith(
+        'm1',
+        expect.objectContaining({ onProgress: expect.any(Function) }),
+      );
       expect(res.remapped).toBe(50);
     });
 
@@ -625,7 +628,10 @@ describe('MetadataBackfillService', () => {
         data: { metadataRefreshedAt: null },
       });
       expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
-      expect(structureRemap.remapShow).toHaveBeenCalledWith('m1');
+      expect(structureRemap.remapShow).toHaveBeenCalledWith(
+        'm1',
+        expect.objectContaining({ onProgress: expect.any(Function) }),
+      );
       // Kept-unmapped count + matcher version + canonical structure provider persisted
       // (kept rows alone never re-arm the repair; an older matcher version does).
       expect(prisma.mediaItem.update).toHaveBeenCalledWith({

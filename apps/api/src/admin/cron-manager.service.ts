@@ -77,12 +77,12 @@ const DEFAULTS: { name: string; label: string; schedule: string }[] = [
   },
   {
     name: 'cast_dedup',
-    label: 'Cast Dedup Report',
+    label: 'Cast Dedup Repair',
     schedule: '0 14 * * 1',
   },
   {
     name: 'structure_reconcile',
-    label: 'Structure Reconcile Report',
+    label: 'Structure Reconcile Repair',
     schedule: '30 14 * * 1',
   },
   {
@@ -188,18 +188,19 @@ export class CronManagerService implements OnModuleInit {
       fn: () => this.metadataBackfill.repairRecommendations(500),
     });
     this.handlers.set('cast_dedup', {
-      label: 'Cast Dedup Report',
+      label: 'Cast Dedup Repair',
       defaultSchedule: '0 14 * * 1',
-      // Report mode only: recurring visibility into duplicate-cast recurrence.
-      // Repairs are deliberate admin actions (POST /admin/cast-dedup/run?mode=...).
-      fn: () => this.metadataBackfill.repairCastDuplicates({ mode: 'report', limit: 5000 }),
+      // Bounded automatic repair: merges HIGH-confidence duplicate cast groups (votes
+      // re-pointed before any delete). Converges — merged groups stop being candidates.
+      fn: () => this.metadataBackfill.repairCastDuplicates({ mode: 'repair', limit: 500 }),
     });
     this.handlers.set('structure_reconcile', {
-      label: 'Structure Reconcile Report',
+      label: 'Structure Reconcile Repair',
       defaultSchedule: '30 14 * * 1',
-      // Report mode only: recurring visibility into mixed-provider structures.
-      // Repairs are deliberate admin actions (POST /admin/structure-reconcile/run?mode=...).
-      fn: () => this.metadataBackfill.reconcileStructures({ mode: 'report', limit: 1000 }),
+      // Bounded automatic repair (heavy per title: provider rehydration + per-episode
+      // transfers). Canonical is deterministic (anime/stamp ⇒ TVDB, else TMDB);
+      // converged titles leave the candidate list, so the batch drains over weeks.
+      fn: () => this.metadataBackfill.reconcileStructures({ mode: 'repair', limit: 50 }),
     });
     this.handlers.set('movie_countries_backfill', {
       label: 'Movie Countries Backfill',

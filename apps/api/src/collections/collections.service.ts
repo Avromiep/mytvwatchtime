@@ -68,7 +68,7 @@ export class CollectionsService {
       });
       // Removing a show from the watchlist marks it "dropped": watch history is
       // kept, but the show is hidden from watch-next / upcoming until it is
-      // re-added to the watchlist or an episode is watched again.
+      // explicitly re-added to the watchlist (rewatching does NOT resurface it).
       await this.prisma.userShowStatus.updateMany({
         where: { userId, mediaId, dropped: false },
         data: { dropped: true },

@@ -106,7 +106,7 @@ const light: Tokens = {
   textSecondary: '#3A4250',
   textMuted: '#6B7280',
   textDim: '#9AA3B2',
-  primary: '#FFD60A',
+  primary: '#C9AC00',
   primaryForeground: '#0F1115',
   primaryMuted: '#C9AC00',
   primarySoft: '#FEF3C7',

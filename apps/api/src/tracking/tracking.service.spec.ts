@@ -214,3 +214,46 @@ describe('TrackingService.rewatchSeason', () => {
     expect(events.emit).not.toHaveBeenCalled();
   });
 });
+
+/** Dropped (removed-from-watchlist) is sticky: rewatches must NOT resurface the show. */
+describe('TrackingService dropped semantics', () => {
+  const make = (existing: any) => {
+    const prisma = {
+      userShowStatus: {
+        findUnique: jest.fn().mockResolvedValue(existing),
+        update: jest.fn().mockResolvedValue({}),
+        upsert: jest.fn().mockResolvedValue({}),
+      },
+      episode: { count: jest.fn().mockResolvedValue(12) },
+    };
+    const svc = new TrackingService(
+      prisma as any,
+      { emit: jest.fn() } as any,
+      { delByPattern: jest.fn(), del: jest.fn() } as any,
+    );
+    return { svc, prisma };
+  };
+
+  it('watching an episode of a dropped show does NOT clear the dropped flag', async () => {
+    const { svc, prisma } = make({ id: 'uss1', watchedCount: 3, totalCount: 12, dropped: true });
+    await (svc as any).bumpShowCount('u1', 'media-1', 1, new Date());
+    expect(prisma.userShowStatus.update).toHaveBeenCalledWith({
+      where: { id: 'uss1' },
+      data: expect.not.objectContaining({ dropped: false }),
+    });
+    // Count still bumps — history is kept, the show just stays hidden.
+    expect(prisma.userShowStatus.update).toHaveBeenCalledWith({
+      where: { id: 'uss1' },
+      data: expect.objectContaining({ watchedCount: 4 }),
+    });
+  });
+
+  it('a positive delta on a non-dropped show writes no dropped field either', async () => {
+    const { svc, prisma } = make({ id: 'uss1', watchedCount: 3, totalCount: 12, dropped: false });
+    await (svc as any).bumpShowCount('u1', 'media-1', 1);
+    expect(prisma.userShowStatus.update).toHaveBeenCalledWith({
+      where: { id: 'uss1' },
+      data: expect.not.objectContaining({ dropped: expect.anything() }),
+    });
+  });
+});

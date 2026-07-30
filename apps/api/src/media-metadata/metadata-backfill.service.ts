@@ -450,9 +450,8 @@ export class MetadataBackfillService {
         castDuplicateRows: 0,
         castDuplicateVotes: 0,
       })),
-      // Shows whose stored structure contradicts the canonical provider (mixed TVDB +
-      // TMDB-only episodes, or TVDB-canonical shows with unlinked rows) — reconciled by
-      // the structure-reconcile job. Same set-based shape as findDualStructureShows.
+      // Shows whose stored structure contradicts their canonical provider — same
+      // canonical-aware, set-based shape as findDualStructureShows.
       this.prisma
         .$queryRaw<{ c: bigint }[]>`
         WITH flags AS (
@@ -464,20 +463,37 @@ export class MetadataBackfillService {
         ),
         per_show AS (
           SELECT sh.media_id,
-            count(*) FILTER (WHERE f.has_tvdb) AS fresh,
-            count(*) FILTER (WHERE NOT COALESCE(f.has_tvdb, false)) AS unlinked,
-            count(*) FILTER (WHERE COALESCE(f.has_tmdb, false) AND NOT COALESCE(f.has_tvdb, false)) AS tmdb_only
+            count(*) FILTER (WHERE COALESCE(f.has_tmdb, false)) AS tmdb,
+            count(*) FILTER (WHERE COALESCE(f.has_tvdb, false)) AS tvdb,
+            count(*) FILTER (WHERE COALESCE(f.has_tmdb, false) AND NOT COALESCE(f.has_tvdb, false)) AS tmdb_only,
+            count(*) FILTER (WHERE COALESCE(f.has_tvdb, false) AND NOT COALESCE(f.has_tmdb, false)) AS tvdb_only,
+            count(*) FILTER (WHERE NOT COALESCE(f.has_tmdb, false) AND NOT COALESCE(f.has_tvdb, false)) AS no_ids
           FROM episodes e
           JOIN seasons s ON s.id = e.season_id
           JOIN shows sh ON sh.id = s.show_id
           LEFT JOIN flags f ON f.episode_id = e.id
           GROUP BY sh.media_id
+        ),
+        resolved AS (
+          SELECT p.*,
+            -- Anime FIRST (mirrors the repair routing); the stamp only breaks the tie
+            -- for non-anime. A pre-repair TMDB hydration can wrongly stamp an anime
+            -- 'tmdb' — the stamp must never outrank the anime policy.
+            CASE WHEN mi.content_classification = 'ANIME' OR sh.keywords @> '"anime"'::jsonb
+                 THEN 'tvdb'
+                 ELSE COALESCE(mi.metadata_provenance->>'structureProvider', 'tmdb') END AS canonical,
+            mi.metadata_provenance AS prov
+          FROM per_show p
+          JOIN media_items mi ON mi.id = p.media_id
+          JOIN shows sh ON sh.media_id = p.media_id
         )
         SELECT count(*)::bigint AS c
-        FROM per_show p
-        JOIN media_items mi ON mi.id = p.media_id
-        WHERE (p.fresh > 0 AND p.tmdb_only > 0)
-           OR (mi.metadata_provenance->>'structureProvider' = 'tvdb' AND p.unlinked > 0)`
+        FROM resolved r
+        WHERE (CASE WHEN r.canonical = 'tvdb' THEN r.tvdb ELSE r.tmdb END) > 0
+          AND (CASE WHEN r.canonical = 'tvdb' THEN r.tmdb_only + r.no_ids ELSE r.tvdb_only + r.no_ids END)
+            > COALESCE((CASE WHEN r.canonical = 'tvdb'
+                            THEN r.prov->>'animeTvdbKeptUnmapped'
+                            ELSE r.prov->>'structureKeptUnmapped' END)::int, 0)`
         .catch(() => [{ c: BigInt(0) }]),
     ]);
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
@@ -1055,7 +1071,11 @@ export class MetadataBackfillService {
     // many small transactions) so no hydration can interleave mid-transfer.
     const remap = await this.withCastDedupLock(
       mediaId,
-      () => this.structureRemap.remapShow(mediaId),
+      () =>
+        this.structureRemap.remapShow(mediaId, {
+          onProgress: (done, total) =>
+            this.trackRepair('structure-reconcile', { current: `${mediaId} (${done}/${total})` }),
+        }),
       10 * 60 * 1000,
     );
     // Remember the kept-unmapped count so kept rows alone never re-arm this repair.
@@ -2207,6 +2227,18 @@ export class MetadataBackfillService {
           FROM media_cast mc JOIN cast_members cm ON cm.id = mc.cast_member_id
           GROUP BY mc.media_id, lower(cm.name), btrim(lower(split_part(COALESCE(mc.character, ''), '/', 1)))
           HAVING count(*) > 1
+        UNION
+        -- Same actor, DIFFERENT character strings, mixed provider origins (at least one
+        -- TVDB-sourced row and at least one TMDB-sourced row) — the "Juliette" vs
+        -- "Juliette Nichols" cross-provider case. The in-memory grouping applies the
+        -- word-prefix rule precisely; this is the coarse candidate filter.
+        SELECT mc.media_id, 'sim:' || lower(cm.name)
+          FROM media_cast mc JOIN cast_members cm ON cm.id = mc.cast_member_id
+          GROUP BY mc.media_id, lower(cm.name)
+          HAVING count(*) > 1
+            AND count(DISTINCT lower(COALESCE(mc.character, ''))) > 1
+            AND bool_or(mc.character_external_id IS NOT NULL OR starts_with(COALESCE(cm.external_id, ''), 'TVDB_'))
+            AND bool_or(mc.character_external_id IS NULL AND starts_with(COALESCE(cm.external_id, ''), 'TMDB_'))
       ) x
       GROUP BY media_id
       LIMIT ${limit}`;
@@ -2240,6 +2272,14 @@ export class MetadataBackfillService {
             FROM media_cast mc JOIN cast_members cm ON cm.id = mc.cast_member_id
             GROUP BY mc.media_id, lower(cm.name), btrim(lower(split_part(COALESCE(mc.character, ''), '/', 1)))
             HAVING count(*) > 1
+          UNION
+          SELECT mc.media_id, 'sim:' || lower(cm.name)
+            FROM media_cast mc JOIN cast_members cm ON cm.id = mc.cast_member_id
+            GROUP BY mc.media_id, lower(cm.name)
+            HAVING count(*) > 1
+              AND count(DISTINCT lower(COALESCE(mc.character, ''))) > 1
+              AND bool_or(mc.character_external_id IS NOT NULL OR starts_with(COALESCE(cm.external_id, ''), 'TVDB_'))
+              AND bool_or(mc.character_external_id IS NULL AND starts_with(COALESCE(cm.external_id, ''), 'TMDB_'))
         ) x GROUP BY media_id
       ) y`;
     const [rows] = await this.prisma.$queryRaw<{ c: bigint }[]>`
@@ -2772,6 +2812,9 @@ export class MetadataBackfillService {
         .toLowerCase()
         .normalize('NFKD')
         .replace(/\p{Mark}/gu, '')
+        // Quote-style differences ("Dwight 'The General'" vs "Dwight “The General”")
+        // must not block an otherwise-identical name.
+        .replace(/[‘’‚‛“”„‟"']/g, '')
         .replace(/\s+/g, ' ')
         .trim();
     for (const r of rows) {
@@ -2799,6 +2842,34 @@ export class MetadataBackfillService {
         union(ids[0], ids[k]);
         highEdge.add(ids[0]);
         highEdge.add(ids[k]);
+      }
+    }
+    // Cross-provider SIMILAR names: same actor, character names where one contains
+    // the other at a word boundary ("Juliette" vs "Juliette Nichols", "Daemon
+    // Targaryen" vs "Prince Daemon Targaryen" — TMDB often shortens / TVDB uses the
+    // full or titled name). Merged only when the two rows come from DIFFERENT
+    // providers; same-provider near-duplicates may be two genuine roles (one actor
+    // voicing "Goku" and "Goku Jr.") and are kept.
+    const tvdbish = (r: (typeof rows)[number]) =>
+      (r.castMember.externalId ?? '').startsWith('TVDB_') || r.characterExternalId != null;
+    const similar = (a: string, b: string) =>
+      a.length > 0 &&
+      b.length > 0 &&
+      a !== b &&
+      (a.startsWith(b + ' ') ||
+        b.startsWith(a + ' ') ||
+        a.endsWith(' ' + b) ||
+        b.endsWith(' ' + a));
+    for (let i = 0; i < rows.length; i++) {
+      for (let j = i + 1; j < rows.length; j++) {
+        const a = rows[i];
+        const b = rows[j];
+        if (norm(a.castMember.name) !== norm(b.castMember.name)) continue;
+        if (!similar(norm(a.character ?? ''), norm(b.character ?? ''))) continue;
+        if (tvdbish(a) === tvdbish(b)) continue;
+        union(a.id, b.id);
+        highEdge.add(a.id);
+        highEdge.add(b.id);
       }
     }
     const byRoot = new Map<string, typeof rows>();
@@ -2851,13 +2922,90 @@ export class MetadataBackfillService {
   /** Prevents concurrent structure-reconcile batches. */
   private structureReconcileRunning = false;
 
-  /** Shows whose stored structure contradicts the canonical provider:
-   *  - mixed: TVDB-linked and TMDB-only episodes coexist (union-hydration contamination);
-   *  - tvdb-canonical (anime repair / stamp) with episodes that never got linked to
-   *    TVDB (TMDB ids lost entirely — the Dragon Ball case).
-   *  Pure TMDB-structured shows (no stamp, no TVDB episode ids) are NOT candidates.
-   *  Set-based: ONE aggregate pass over episode_external_ids, then a join — the
-   *  per-episode correlated-EXISTS version hung on prod-sized catalogs. */
+  /**
+   * Repair a TMDB-canonical show (non-anime dual structure): best-effort TMDB
+   * rehydration to complete episode linking (union — never deletes), then remap stray
+   * provider-foreign rows onto the TMDB structure. Idempotent: converged shows stamp
+   * structureKeptUnmapped + the matcher version and skip until new contamination or a
+   * matcher bump arrives.
+   */
+  private async repairTmdbStructureShow(
+    mediaId: string,
+  ): Promise<{ fixed: boolean; remapped: number }> {
+    const notFixed = { fixed: false, remapped: 0 };
+    // Cheap stale count first (correlated EXISTS per candidate row — single-digit ms).
+    const staleRows = Number(
+      (
+        await this.prisma.$queryRaw<{ c: bigint }[]>`
+        SELECT count(*)::bigint AS c
+        FROM episodes e
+        JOIN seasons s ON s.id = e.season_id
+        JOIN shows sh ON sh.id = s.show_id
+        WHERE sh.media_id = ${mediaId}
+          AND NOT EXISTS (
+            SELECT 1 FROM episode_external_ids x
+            WHERE x.episode_id = e.id AND x.provider = 'TMDB'
+          )`
+      )[0]?.c ?? 0,
+    );
+    if (staleRows === 0) return notFixed;
+
+    const media = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      include: { externalIds: true },
+    });
+    if (!media) return notFixed;
+    const provenance = { ...((media.metadataProvenance as any) ?? {}) } as Record<string, any>;
+    // Convergence gate: rows KEPT by a previous remap (unmapped, carrying user data)
+    // still look stale — don't rehydrate + re-remap for zero effect until new
+    // contamination arrives or the matcher improves.
+    const keptBefore = provenance.structureKeptUnmapped;
+    const remapVersion = provenance.structureRemapVersion ?? 1;
+    if (
+      typeof keptBefore === 'number' &&
+      staleRows <= keptBefore &&
+      remapVersion >= StructureRemapService.MATCHER_VERSION
+    ) {
+      return notFixed;
+    }
+
+    const tmdb = media.externalIds.find(
+      (e) => e.provider === ExternalProvider.TMDB && e.providerEntityKind === ProviderEntityKind.SERIES,
+    );
+    if (tmdb) {
+      // Force a fresh pull (stale gate would skip a recently-refreshed show).
+      await this.prisma.mediaItem
+        .update({ where: { id: mediaId }, data: { metadataRefreshedAt: null } })
+        .catch(() => undefined);
+      await this.meta.ensureShowFull(Number(tmdb.value)).catch(() => undefined);
+    }
+
+    const remap = await this.withCastDedupLock(
+      mediaId,
+      () =>
+        this.structureRemap.remapShow(mediaId, {
+          canonical: 'tmdb',
+          onProgress: (done, total) =>
+            this.trackRepair('structure-reconcile', { current: `${mediaId} (${done}/${total})` }),
+        }),
+      10 * 60 * 1000,
+    );
+    if (remap.stale === 0 && !tmdb) return notFixed; // nothing to anchor to
+    provenance.structureProvider = 'tmdb';
+    provenance.structureKeptUnmapped = remap.unmapped;
+    provenance.structureRemapVersion = StructureRemapService.MATCHER_VERSION;
+    await this.prisma.mediaItem.update({
+      where: { id: mediaId },
+      data: { metadataProvenance: provenance as any },
+    });
+    return { fixed: true, remapped: remap.mapped };
+  }
+
+  /** Shows whose stored structure contradicts their canonical provider — the
+   *  structure-reconcile job's candidate list. Canonical: structureProvider stamp,
+   *  else anime (classification or 'anime' keyword) ⇒ TVDB, else TMDB. Stale = episodes
+   *  NOT linked to the canonical provider; converged shows (kept-unmapped stamp covers
+   *  the remaining stale count) are excluded. Set-based single pass. */
   private async findDualStructureShows(limit: number): Promise<
     { mediaId: string; stale: number; fresh: number }[]
   > {
@@ -2873,37 +3021,55 @@ export class MetadataBackfillService {
       ),
       per_show AS (
         SELECT sh.media_id,
-          count(*) FILTER (WHERE f.has_tvdb) AS fresh,
-          count(*) FILTER (WHERE NOT COALESCE(f.has_tvdb, false)) AS unlinked,
-          count(*) FILTER (WHERE COALESCE(f.has_tmdb, false) AND NOT COALESCE(f.has_tvdb, false)) AS tmdb_only
+          count(*) FILTER (WHERE COALESCE(f.has_tmdb, false)) AS tmdb,
+          count(*) FILTER (WHERE COALESCE(f.has_tvdb, false)) AS tvdb,
+          count(*) FILTER (WHERE COALESCE(f.has_tmdb, false) AND NOT COALESCE(f.has_tvdb, false)) AS tmdb_only,
+          count(*) FILTER (WHERE COALESCE(f.has_tvdb, false) AND NOT COALESCE(f.has_tmdb, false)) AS tvdb_only,
+          count(*) FILTER (WHERE NOT COALESCE(f.has_tmdb, false) AND NOT COALESCE(f.has_tvdb, false)) AS no_ids
         FROM episodes e
         JOIN seasons s ON s.id = e.season_id
         JOIN shows sh ON sh.id = s.show_id
         LEFT JOIN flags f ON f.episode_id = e.id
         GROUP BY sh.media_id
+      ),
+      resolved AS (
+        SELECT p.*,
+          COALESCE(mi.metadata_provenance->>'structureProvider',
+            CASE WHEN mi.content_classification = 'ANIME' OR sh.keywords @> '"anime"'::jsonb
+                 THEN 'tvdb' ELSE 'tmdb' END) AS canonical,
+          mi.metadata_provenance AS prov
+        FROM per_show p
+        JOIN media_items mi ON mi.id = p.media_id
+        JOIN shows sh ON sh.media_id = p.media_id
       )
-      SELECT p.media_id,
-        (CASE WHEN mi.metadata_provenance->>'structureProvider' = 'tvdb' THEN p.unlinked ELSE p.tmdb_only END)::bigint AS stale,
-        p.fresh::bigint AS fresh
-      FROM per_show p
-      JOIN media_items mi ON mi.id = p.media_id
-      WHERE (p.fresh > 0 AND p.tmdb_only > 0)
-         OR (mi.metadata_provenance->>'structureProvider' = 'tvdb' AND p.unlinked > 0)
+      SELECT r.media_id,
+        (CASE WHEN r.canonical = 'tvdb' THEN r.tmdb_only + r.no_ids ELSE r.tvdb_only + r.no_ids END)::bigint AS stale,
+        (CASE WHEN r.canonical = 'tvdb' THEN r.tvdb ELSE r.tmdb END)::bigint AS fresh
+      FROM resolved r
+      WHERE (CASE WHEN r.canonical = 'tvdb' THEN r.tvdb ELSE r.tmdb END) > 0
+        AND (CASE WHEN r.canonical = 'tvdb' THEN r.tmdb_only + r.no_ids ELSE r.tvdb_only + r.no_ids END)
+          > COALESCE((CASE WHEN r.canonical = 'tvdb'
+                          THEN r.prov->>'animeTvdbKeptUnmapped'
+                          ELSE r.prov->>'structureKeptUnmapped' END)::int, 0)
       ORDER BY stale DESC
       LIMIT ${limit}`;
     return rows.map((r) => ({ mediaId: r.media_id, stale: Number(r.stale), fresh: Number(r.fresh) }));
   }
 
   /**
-   * Detect and reconcile titles whose stored season/episode structure mixes providers
-   * (e.g. a flattened TMDB structure surviving next to the canonical TVDB split — the
-   * "Dragon Ball" case). Canonical provider: anime ⇒ TVDB (existing policy); otherwise
-   * the structureProvider stamp written at first hydration.
+   * Detect and reconcile titles whose stored season/episode structure contradicts the
+   * canonical provider — mixed structures from union hydration (e.g. Dragon Ball's
+   * flattened TMDB structure next to the TVDB split; daily shows carrying a stray
+   * second provider structure).
    *
-   * Modes: report (detection + counts only), dry-run (matcher runs, nothing is
-   * written), repair (anime titles go through the full TVDB repair: resolve id →
-   * hydrate → absolute-number-aware remap → stamps; non-anime titles are reported for
-   * a deliberate provider decision, never auto-switched).
+   * Canonical provider (deterministic, no manual decisions): anime (classification or
+   * keyword) or a TVDB stamp ⇒ TVDB; everything else ⇒ TMDB (the usual first-hydration
+   * provider). Repair rehydrates from the canonical provider (union — never deletes),
+   * then remaps stale rows onto it, transferring ALL user data; ambiguous rows are
+   * kept, never deleted. Converged titles stamp kept-unmapped + matcher version and
+   * leave the candidate list until new contamination arrives.
+   *
+   * Modes: report (detection + counts only), dry-run (matcher only), repair.
    */
   async reconcileStructures(opts?: {
     mode?: 'report' | 'dry-run' | 'repair';
@@ -3009,37 +3175,42 @@ export class MetadataBackfillService {
           };
 
           if (mode === 'dry-run') {
+            const canonical = anime || structureProvider === 'tvdb' ? 'tvdb' : 'tmdb';
             if (fresh !== 0) {
-              const remap = await this.structureRemap.remapShow(mediaId, { dryRun: true });
+              const remap = await this.structureRemap.remapShow(mediaId, {
+                dryRun: true,
+                canonical,
+              });
               entry.remap = {
                 mapped: remap.mapped,
                 unmapped: remap.unmapped,
                 matchRules: remap.matchRules,
               };
-              entry.action = remap.mapped > 0 ? 'would-remap' : 'no-matches';
+              entry.action = remap.mapped > 0 ? `would-remap-${canonical}` : 'no-matches';
             } else {
-              entry.action = anime ? 'would-hydrate-tvdb' : 'needs-review';
+              entry.action = anime ? 'would-hydrate-tvdb' : 'would-hydrate-tmdb';
             }
-            if (!anime) needsReview++;
           } else if (mode === 'repair') {
-            // Anime titles AND titles already stamped TVDB-canonical go through the
-            // full TVDB repair (a stamped non-anime title was deliberately switched
-            // before). Anything else is reported for a deliberate provider decision.
+            // Deterministic canonical provider: anime / TVDB-stamped ⇒ TVDB repair;
+            // everything else ⇒ TMDB repair (TMDB is the usual first-hydration
+            // provider and its structure is what these shows were built from).
             if (anime || structureProvider === 'tvdb') {
               const { fixed, remapped: moved } = await this.fixAnimeShowFromTvdb(mediaId);
-              entry.action = fixed ? 'repaired' : 'no-stale-rows';
+              entry.action = fixed ? 'repaired-tvdb' : 'converged';
               if (fixed) {
                 repaired++;
                 remapped += moved;
               }
             } else {
-              // Non-anime dual structures: never auto-switch a provider — reported for
-              // a deliberate admin decision (the stamp documents current ownership).
-              entry.action = 'needs-review';
-              needsReview++;
+              const { fixed, remapped: moved } = await this.repairTmdbStructureShow(mediaId);
+              entry.action = fixed ? 'repaired-tmdb' : 'converged';
+              if (fixed) {
+                repaired++;
+                remapped += moved;
+              }
             }
-          } else if (!anime) {
-            needsReview++;
+          } else {
+            entry.action = anime || structureProvider === 'tvdb' ? 'tvdb-canonical' : 'tmdb-canonical';
           }
           empty.titles.push(entry);
         } catch (e) {

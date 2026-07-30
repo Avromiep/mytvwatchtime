@@ -516,14 +516,14 @@ export class TrackingService {
             },
           })
         : (existing.totalCount ?? 0);
-      // Watching an episode again un-drops the show (resurfaces it in
-      // watch-next / upcoming). Only a positive delta (a watch, not an unwatch)
-      // clears the dropped flag.
-      const unDrop = delta > 0 && existing.dropped ? { dropped: false } : {};
+      // Removed-from-watchlist (dropped) is STICKY: watching an episode does NOT
+      // resurface the show in watch-next/upcoming — only an explicit re-add to the
+      // watchlist clears the flag (same philosophy as pausedAt, and prevents stray
+      // rewatches from silently resurrecting deliberately removed shows).
       const last = lastWatchedAt ? { lastWatchedAt } : {};
       await this.prisma.userShowStatus.update({
         where: { id: existing.id },
-        data: { watchedCount: nextWatched, totalCount: total, ...unDrop, ...last },
+        data: { watchedCount: nextWatched, totalCount: total, ...last },
       });
     };
 

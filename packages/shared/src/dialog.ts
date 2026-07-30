@@ -34,7 +34,9 @@ export interface ShowDialogOptions {
 
 export interface InfoDialogOptions {
   title?: string;
-  description: string;
+  /** Optional body text — title-only info dialogs render fine (the host shows the
+   *  description block only when present). */
+  description?: string;
 }
 
 export interface ConfirmDialogOptions {

@@ -90,10 +90,54 @@ describe('cast dedup grouping', () => {
     expect(groups[0].rows).toHaveLength(2);
   });
 
-  it('does not group same-name actors playing genuinely different characters', () => {
+  it('merges cross-provider similar characters ("Juliette" vs "Juliette Nichols") as HIGH', () => {
+    const groups = (svc as any).groupDuplicateCast([
+      row({ id: 'a', character: 'Juliette', castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'Rebecca Ferguson', externalId: 'TMDB_100' } }),
+      row({ id: 'b', character: 'Juliette Nichols', castMemberId: 'cm-2', characterExternalId: 555, castMember: { id: 'cm-2', name: 'Rebecca Ferguson', externalId: 'TVDB_200' } }),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].confidence).toBe('HIGH');
+    expect(groups[0].rows).toHaveLength(2);
+  });
+
+  it('merges leading-title variants ("Daemon Targaryen" vs "Prince Daemon Targaryen") cross-provider', () => {
+    const groups = (svc as any).groupDuplicateCast([
+      row({ id: 'a', character: 'Daemon Targaryen', castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'Matt Smith', externalId: 'TMDB_1' } }),
+      row({ id: 'b', character: 'Prince Daemon Targaryen', castMemberId: 'cm-2', characterExternalId: 7, castMember: { id: 'cm-2', name: 'Matt Smith', externalId: 'TVDB_2' } }),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].confidence).toBe('HIGH');
+  });
+
+  it('merges quote-style variants ("Dwight \'The General\'" vs curly quotes) as identical', () => {
+    const groups = (svc as any).groupDuplicateCast([
+      row({ id: 'a', character: "Dwight 'The General' Manfredi", castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'Sylvester Stallone', externalId: 'TMDB_1' } }),
+      row({ id: 'b', character: 'Dwight “The General” Manfredi', castMemberId: 'cm-2', characterExternalId: 7, castMember: { id: 'cm-2', name: 'Sylvester Stallone', externalId: 'TVDB_2' } }),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].confidence).toBe('HIGH');
+  });
+
+  it('keeps same-provider similar names (may be two genuine roles, e.g. "Goku" vs "Goku Jr.")', () => {
+    const groups = (svc as any).groupDuplicateCast([
+      row({ id: 'a', character: 'Goku', characterExternalId: 1, castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'Masako Nozawa', externalId: 'TVDB_10' } }),
+      row({ id: 'b', character: 'Goku Jr.', characterExternalId: 2, castMemberId: 'cm-2', castMember: { id: 'cm-2', name: 'Masako Nozawa', externalId: 'TVDB_10' } }),
+    ]);
+    expect(groups).toHaveLength(0);
+  });
+
+  it('keeps same-name actors playing genuinely different characters (Goku vs Gohan)', () => {
     const groups = (svc as any).groupDuplicateCast([
       row({ id: 'a', character: 'Goku', castMember: { id: 'cm-1', name: 'Masako Nozawa', externalId: 'TMDB_100' } }),
       row({ id: 'b', character: 'Gohan', castMemberId: 'cm-2', castMember: { id: 'cm-2', name: 'Masako Nozawa', externalId: 'TVDB_200' } }),
+    ]);
+    expect(groups).toHaveLength(0);
+  });
+
+  it('keeps cross-provider pairs whose character names merely share a word ("Red" vs "Blue Ranger")', () => {
+    const groups = (svc as any).groupDuplicateCast([
+      row({ id: 'a', character: 'Red Ranger', castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'Actor One', externalId: 'TMDB_1' } }),
+      row({ id: 'b', character: 'Blue Ranger', castMemberId: 'cm-2', characterExternalId: 9, castMember: { id: 'cm-2', name: 'Actor One', externalId: 'TVDB_2' } }),
     ]);
     expect(groups).toHaveLength(0);
   });
