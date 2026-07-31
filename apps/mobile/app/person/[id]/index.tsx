@@ -1,12 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, View } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { Ionicons } from '@expo/vector-icons';
-import { Image } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import type { PersonCreditDto } from '@tvwatch/shared';
 import { Header } from '../../../components/Header';
+import { PersonHeader } from '../../../components/PersonHeader';
 import {
   Card,
   EmptyState,
@@ -20,7 +18,6 @@ import { qk, usePerson } from '../../../api/hooks';
 import { useAppearance } from '../../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../../theme/theme';
-import { formatAirDate } from '../../../lib/format';
 
 export const PERSON_CREDIT_WIDTH = 110;
 
@@ -99,8 +96,6 @@ export default function PersonScreen() {
     );
   }
   const { person } = data;
-  const born = person.birthDate ? formatAirDate(person.birthDate) : null;
-  const died = person.deathDate ? formatAirDate(person.deathDate) : null;
 
   const rail = (
     credits: PersonCreditDto[],
@@ -132,69 +127,7 @@ export default function PersonScreen() {
   return (
     <Screen>
       <ScrollView contentContainerStyle={{ paddingBottom: spacing.lg }}>
-        {/* Hero: slim blurred banner fading into the page background */}
-        <View style={{ height: 140 }}>
-          <Image
-            source={person.profileUrl ? { uri: person.profileUrl } : undefined}
-            style={[StyleSheet.absoluteFill, { backgroundColor: tokens.surfaceElevated }]}
-            contentFit="cover"
-            blurRadius={40}
-            cachePolicy="memory-disk"
-            recyclingKey={person.profileUrl ?? 'fallback'}
-          />
-          <LinearGradient
-            // eslint-disable-next-line local/no-hardcoded-colors -- intentional dark media scrim over blurred artwork (both themes)
-            colors={['rgba(0,0,0,0.55)', 'rgba(0,0,0,0.15)', tokens.background]}
-            locations={[0, 0.55, 1]}
-            style={StyleSheet.absoluteFill}
-          >
-            <Header showBack tone="media" />
-          </LinearGradient>
-        </View>
-
-        {/* Compact identity row: ringed headshot straddling the hero edge + name/meta */}
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'flex-end',
-            marginTop: -48,
-            paddingHorizontal: spacing.lg,
-          }}
-        >
-          <View
-            style={{
-              borderRadius: radius.lg,
-              borderWidth: 3,
-              borderColor: tokens.background,
-              overflow: 'hidden',
-            }}
-          >
-            <PosterImage uri={person.profileUrl} style={{ width: 84, height: 126 }} />
-          </View>
-          <View style={{ flex: 1, marginLeft: spacing.md, paddingBottom: 2 }}>
-            <T variant="title" numberOfLines={2}>
-              {person.name}
-            </T>
-            {born ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: spacing.xs }}>
-                <Ionicons name="calendar-outline" size={13} color={tokens.textMuted} />
-                <T variant="caption" muted style={{ marginLeft: 4 }}>
-                  {died
-                    ? t('person:bornDied', { born: born ?? '', died })
-                    : t('person:bornOn', { date: born })}
-                </T>
-              </View>
-            ) : null}
-            {person.birthPlace ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
-                <Ionicons name="location-outline" size={13} color={tokens.textMuted} />
-                <T variant="caption" muted numberOfLines={2} style={{ marginLeft: 4, flex: 1 }}>
-                  {person.birthPlace}
-                </T>
-              </View>
-            ) : null}
-          </View>
-        </View>
+        <PersonHeader person={person} />
 
         <View style={{ paddingHorizontal: spacing.lg }}>
           {person.biography ? (
