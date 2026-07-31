@@ -9,6 +9,7 @@ import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
 import { ProviderConfigService } from '../media-metadata/providers/shared/provider-config.service';
 import { AnnouncementService, resolveAction } from '../notifications/announcement.service';
 import { BroadcastService } from '../notifications/broadcast.service';
+import { PushService } from '../notifications/push.service';
 import { ContactService } from '../contact/contact.service';
 import {
   CreateAnnouncementDto,
@@ -29,6 +30,7 @@ export class AdminService {
     private readonly config: ConfigService,
     private readonly announcements: AnnouncementService,
     private readonly broadcasts: BroadcastService,
+    private readonly push: PushService,
     private readonly contact: ContactService,
     private readonly providerConfig: ProviderConfigService,
     private readonly redis: RedisService,
@@ -325,40 +327,26 @@ export class AdminService {
     const devices = await this.prisma.device.findMany({ where: { userId, active: true } });
     if (devices.length === 0) return { sent: false, devices: 0 };
 
-    const expoToken = this.config.get<string>('push.expoAccessToken');
-    if (!expoToken)
-      return { sent: false, devices: devices.length, error: 'No Expo token configured' };
-
-    const tokens = devices
-      .filter((d) => d.token.startsWith('ExponentPushToken'))
-      .map((d) => d.token);
-    if (tokens.length === 0)
-      return { sent: false, devices: devices.length, error: 'No Expo push tokens' };
-
-    const res = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${expoToken}` },
-      body: JSON.stringify(
-        tokens.map((to) => ({
-          to,
-          title: movie ? 'Test Movie Notification' : '🔔 Test Notification',
-          body: movie
-            ? `Tap to open ${movie.title}`
-            : `This is a test push from admin for ${user.username}`,
-          data: movie
-            ? { type: 'admin_test', link: `tvwatchtime://movie/${movie.id}` }
-            : { type: 'admin_test' },
-          sound: 'default',
-        })),
-      ),
+    // Route through the same delivery pipeline broadcasts/announcements use
+    // (web push, FCM, Expo, relay) — the old Expo-only fetch could never surface
+    // web-push failures, so a "successful" test proved nothing for web devices.
+    const result = await this.push.sendToDevices(devices, {
+      title: movie ? 'Test Movie Notification' : '🔔 Test Notification',
+      body: movie
+        ? `Tap to open ${movie.title}`
+        : `This is a test push from admin for ${user.username}`,
+      data: movie
+        ? { type: 'admin_test', link: `tvwatchtime://movie/${movie.id}` }
+        : { type: 'admin_test' },
     });
 
     await this.audit(adminId, 'test_push', 'user', userId, {
-      devices: tokens.length,
-      success: res.ok,
+      devices: devices.length,
+      pushed: result.sent,
+      failed: result.failed,
       movieId: movie?.id,
     });
-    return { sent: res.ok, devices: tokens.length, movie };
+    return { sent: result.sent > 0, devices: devices.length, pushed: result.sent, failed: result.failed, movie };
   }
 
   // ---------------- Hydration Jobs ----------------

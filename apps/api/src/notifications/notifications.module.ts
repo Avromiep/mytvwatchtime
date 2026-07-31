@@ -11,6 +11,6 @@ import { MediaMetadataModule } from '../media-metadata/media-metadata.module';
   imports: [MediaMetadataModule],
   controllers: [NotificationsController],
   providers: [NotificationService, PushService, NotificationScheduler, AnnouncementService, BroadcastService],
-  exports: [NotificationService, NotificationScheduler, AnnouncementService, BroadcastService],
+  exports: [NotificationService, NotificationScheduler, AnnouncementService, BroadcastService, PushService],
 })
 export class NotificationsModule {}

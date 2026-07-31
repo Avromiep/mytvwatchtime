@@ -20,6 +20,9 @@ export class PushService implements OnModuleInit {
   private readonly logger = new Logger(PushService.name);
   private fcm?: admin.messaging.Messaging;
   private readonly expoToken?: string;
+  /** False when VAPID setup was skipped — every web push would go out unsigned
+   *  and fail with a bare 401 ("Received unexpected response code"). */
+  private vapidConfigured = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -39,11 +42,16 @@ export class PushService implements OnModuleInit {
         const wp = require('web-push');
         if (wp && typeof wp.setVAPIDDetails === 'function') {
           wp.setVAPIDDetails(vapidSubject || 'mailto:noreply@tvwatchtime.org', vapidPublic, vapidPrivate);
+          this.vapidConfigured = true;
           this.logger.log('Web push VAPID configured');
         }
       } catch (e) {
         this.logger.warn(`Web push VAPID setup skipped: ${(e as Error).message}`);
       }
+    } else {
+      this.logger.warn(
+        'Web push VAPID keys not set (VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY) — web push deliveries will fail',
+      );
     }
 
     // Firebase FCM setup
@@ -144,6 +152,15 @@ export class PushService implements OnModuleInit {
         wp = null;
       }
       if (wp && typeof wp.sendNotification === 'function') {
+        if (!this.vapidConfigured) {
+          // Unsigned sends fail 401 at the push service — skip the per-device loop
+          // and say WHY once per call instead of spamming one warn per device.
+          this.logger.warn(
+            `Web push skipped for ${webDevices.length} device(s): VAPID not configured ` +
+              '(check VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT)',
+          );
+          failed += webDevices.length;
+        } else {
         for (const device of webDevices) {
           try {
             await wp.sendNotification(
@@ -155,10 +172,17 @@ export class PushService implements OnModuleInit {
             if (e.statusCode === 410 || e.statusCode === 404) {
               await this.prisma.device.update({ where: { id: device.id }, data: { active: false } });
             } else {
-              this.logger.warn(`Web push failed: ${(e as Error).message?.slice(0, 200)}`);
+              // web-push's message ("Received unexpected response code") hides the
+              // actual cause — log the status code and response body too. 401/403
+              // means VAPID mismatch (rotated keys or wrong subject): affected
+              // browsers must resubscribe (the web app self-heals on next start).
+              const status = e.statusCode ? ` [${e.statusCode}]` : '';
+              const body = e.body ? ` — ${String(e.body).slice(0, 160)}` : '';
+              this.logger.warn(`Web push failed${status}: ${(e as Error).message?.slice(0, 120)}${body}`);
             }
             failed++;
           }
+        }
         }
       } else {
         failed += webDevices.length;
@@ -166,81 +190,150 @@ export class PushService implements OnModuleInit {
     }
 
     if (mobileDevices.length === 0) return { sent, failed };
-    const tokens = mobileDevices.map((d) => d.token);
 
-    // Mode priority: FCM > Expo direct > Relay > skip
-    if (this.fcm) {
-      try {
-        const res = await this.fcm.sendEachForMulticast({
-          tokens,
-          notification: { title: msg.title, body: msg.body, imageUrl: msg.imageUrl ?? undefined },
-          data: stringifyValues(msg.data ?? {}),
-          android: { priority: 'high' },
-        });
-        sent += res.successCount;
-        failed += res.failureCount;
-      } catch (e) {
-        this.logger.warn(`FCM multicast failed: ${(e as Error).message?.slice(0, 200)}`);
-        failed += tokens.length;
-      }
-      return { sent, failed };
-    }
+    // Route by token TYPE, not by configured-provider priority. The app registers
+    // Expo push tokens (ExponentPushToken[...]) which are invalid as FCM tokens —
+    // pushed through FCM every one fails (the "N pushed, M failed" broadcast bug:
+    // only native FCM devices ever received anything).
+    const expoDevices = mobileDevices.filter((d) => d.token.startsWith('ExponentPushToken'));
+    const fcmDevices = mobileDevices.filter((d) => !d.token.startsWith('ExponentPushToken'));
 
-    if (this.expoToken) {
-      const expoTokens = tokens.filter((t) => t.startsWith('ExponentPushToken'));
-      if (expoTokens.length === 0) return { sent, failed };
-      try {
-        const res = await fetch('https://exp.host/--/api/v2/push/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.expoToken}` },
-          body: JSON.stringify(expoTokens.map((to) => ({ to, title: msg.title, body: msg.body, data: msg.data, sound: 'default' }))),
-        });
-        if (res.ok) {
-          const tickets = (await res.json()) as { data?: { status: string }[] };
-          const arr = tickets.data ?? [];
-          for (const t of arr) (t?.status === 'ok' ? sent++ : failed++);
-          // Any tokens without a ticket entry count as failed
-          const accounted = arr.length;
-          if (expoTokens.length > accounted) failed += expoTokens.length - accounted;
-        } else {
-          failed += expoTokens.length;
+    if (expoDevices.length > 0) {
+      const pushMode = this.config.get<string>('metadata.pushMode') || 'expo';
+      const relayUrl = this.config.get<string>('metadata.relayUrl');
+      if (pushMode === 'relay' && relayUrl) {
+        // Relay mode — self-hosted backends forwarding Expo tokens to the public relay
+        for (const device of expoDevices) {
+          try {
+            const r = await fetch(`${relayUrl}/push/relay`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: device.token, title: msg.title, body: msg.body, data: msg.data }),
+            });
+            if (r.ok) sent++;
+            else failed++;
+          } catch (e) {
+            this.logger.warn(`Relay push failed for ${device.token.slice(0, 20)}...: ${(e as Error).message}`);
+            failed++;
+          }
         }
-      } catch (e) {
-        this.logger.warn(`Expo batch push failed: ${(e as Error).message?.slice(0, 200)}`);
-        failed += expoTokens.length;
-      }
-      return { sent, failed };
-    }
-
-    // Relay mode — for self-hosted backends without their own Expo token
-    const pushMode = this.config.get<string>('metadata.pushMode') || 'expo';
-    const relayUrl = this.config.get<string>('metadata.relayUrl');
-    if (pushMode === 'relay' && relayUrl) {
-      for (const token of tokens) {
+      } else {
+        // Direct Expo Push API. The access token is recommended but optional —
+        // Expo accepts unauthenticated sends unless the project enforces it.
         try {
-          const r = await fetch(`${relayUrl}/push/relay`, {
+          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+          if (this.expoToken) headers.Authorization = `Bearer ${this.expoToken}`;
+          const res = await fetch('https://exp.host/--/api/v2/push/send', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token, title: msg.title, body: msg.body, data: msg.data }),
+            headers,
+            body: JSON.stringify(
+              expoDevices.map((d) => ({ to: d.token, title: msg.title, body: msg.body, data: msg.data, sound: 'default' })),
+            ),
           });
-          if (r.ok) sent++;
-          else failed++;
+          if (!res.ok) {
+            failed += expoDevices.length;
+            this.logger.warn(`Expo batch push failed: HTTP ${res.status}`);
+          } else {
+            const tickets = (await res.json()) as { data?: { status: string; id?: string; message?: string }[] };
+            const arr = tickets.data ?? [];
+            const okReceipts: { deviceId: string; receiptId: string }[] = [];
+            let ticketFailures = 0;
+            expoDevices.forEach((device, i) => {
+              const t = arr[i];
+              if (t?.status === 'ok') {
+                sent++;
+                if (t.id) okReceipts.push({ deviceId: device.id, receiptId: t.id });
+              } else {
+                failed++;
+                ticketFailures++;
+              }
+            });
+            if (ticketFailures > 0) {
+              const firstBad = arr.find((t) => t?.status !== 'ok');
+              this.logger.warn(
+                `Expo push: ${ticketFailures}/${expoDevices.length} ticket(s) failed` +
+                  (firstBad?.message ? ` (first: ${firstBad.message.slice(0, 120)})` : ''),
+              );
+            }
+            // Best-effort receipt check: deactivate tokens Expo reports as gone
+            // so stale devices stop inflating send counts.
+            if (okReceipts.length > 0) {
+              try {
+                const receiptRes = await fetch('https://exp.host/--/api/v2/push/getReceipts', {
+                  method: 'POST',
+                  headers,
+                  body: JSON.stringify({ ids: okReceipts.map((r) => r.receiptId) }),
+                });
+                if (receiptRes.ok) {
+                  const receipts = (await receiptRes.json()) as {
+                    data?: Record<string, { status: string; details?: { error?: string } }>;
+                  };
+                  const stale = okReceipts.filter(
+                    (r) => receipts.data?.[r.receiptId]?.details?.error === 'DeviceNotRegistered',
+                  );
+                  if (stale.length > 0) {
+                    await this.prisma.device.updateMany({
+                      where: { id: { in: stale.map((r) => r.deviceId) } },
+                      data: { active: false },
+                    });
+                    this.logger.log(`Deactivated ${stale.length} stale device(s) (DeviceNotRegistered)`);
+                  }
+                }
+              } catch {
+                // receipt cleanup is best-effort
+              }
+            }
+          }
         } catch (e) {
-          this.logger.warn(`Relay push failed for ${token.slice(0, 20)}...: ${(e as Error).message}`);
-          failed++;
+          this.logger.warn(`Expo batch push failed: ${(e as Error).message?.slice(0, 200)}`);
+          failed += expoDevices.length;
         }
       }
-      return { sent, failed };
     }
 
-    this.logger.debug('No push delivery method configured (no FCM, no Expo token, no relay)');
-    failed += mobileDevices.length;
+    if (fcmDevices.length > 0) {
+      if (!this.fcm) {
+        this.logger.warn(`Skipping ${fcmDevices.length} native FCM device(s): Firebase not configured`);
+        failed += fcmDevices.length;
+      } else {
+        const fcmTokens = fcmDevices.map((d) => d.token);
+        try {
+          const res = await this.fcm.sendEachForMulticast({
+            tokens: fcmTokens,
+            notification: { title: msg.title, body: msg.body, imageUrl: msg.imageUrl ?? undefined },
+            data: stringifyValues(msg.data ?? {}),
+            android: { priority: 'high' },
+          });
+          sent += res.successCount;
+          failed += res.failureCount;
+          if (res.failureCount > 0) {
+            // Per-token failures are otherwise invisible — surface the first reason.
+            const firstErr = res.responses.find((r) => !r.success)?.error;
+            this.logger.warn(
+              `FCM multicast: ${res.failureCount}/${fcmTokens.length} failed` +
+                (firstErr ? ` (first: ${firstErr.code ?? firstErr.message})` : ''),
+            );
+          }
+        } catch (e) {
+          this.logger.warn(`FCM multicast failed: ${(e as Error).message?.slice(0, 200)}`);
+          failed += fcmTokens.length;
+        }
+      }
+    }
+
     return { sent, failed };
   }
 }
 
-function stringifyValues(obj: Record<string, unknown>): Record<string, string> {
+export function stringifyValues(obj: Record<string, unknown>): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(obj)) out[k] = typeof v === 'string' ? v : JSON.stringify(v);
+  for (const [k, v] of Object.entries(obj)) {
+    // FCM rejects data maps containing ANY non-string value — including undefined
+    // (JSON.stringify(undefined) === undefined). Broadcasts with no action carry
+    // undefined actionType/actionTarget/actionParams; without this guard the whole
+    // multicast throws client-side and every mobile token in the batch fails.
+    if (v == null) continue;
+    out[k] = typeof v === 'string' ? v : JSON.stringify(v);
+  }
   return out;
 }

@@ -37,8 +37,8 @@ export default function UserDetailPage() {
       const movieId = testPushMovieId.trim();
       const res = await api.post(`/admin/users/${id}/test-push`, movieId ? { movieId } : {});
       setPushResult(
-        res.data?.sent
-          ? `Push sent to ${res.data.devices} device(s)${res.data.movie?.title ? ` for ${res.data.movie.title}` : ''}`
+        res.data?.devices
+          ? `Push: ${res.data.pushed ?? 0}/${res.data.devices} delivered, ${res.data.failed ?? 0} failed${res.data.movie?.title ? ` (${res.data.movie.title})` : ''}`
           : 'No registered devices',
       );
     } catch (e: any) {
