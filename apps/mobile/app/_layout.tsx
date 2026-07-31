@@ -24,10 +24,18 @@ if (Platform.OS !== 'web') {
 }
 
 const queryClient = new QueryClient({
-  // refetchOnWindowFocus stays on for native (app-foreground refresh) but off on web:
-  // every browser alt-tab refocus would otherwise storm all mounted queries
-  // (watchNext, 4× 500-item lists, stats, …) at once.
-  defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: Platform.OS !== 'web' } },
+  // 5-min staleTime: server caches are invalidated on every user action (watch,
+  // watchlist, pause, import), so data stays correct without constant refetches.
+  // refetchOnWindowFocus stays on for native (app-foreground refresh of stale
+  // queries) but off on web: every browser alt-tab refocus would otherwise storm
+  // all mounted queries (watchNext, 4× 500-item lists, stats, …) at once.
+  defaultOptions: {
+    queries: {
+      staleTime: 5 * 60_000,
+      retry: 1,
+      refetchOnWindowFocus: Platform.OS !== 'web',
+    },
+  },
 });
 
 function Gate() {

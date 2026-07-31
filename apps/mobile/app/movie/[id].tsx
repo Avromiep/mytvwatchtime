@@ -47,7 +47,7 @@ export default function MovieDetailScreen() {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['movies', 'common', 'episode']);
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { data: movie, isLoading, refetch } = useMovie(id);
+  const { data: movie, isLoading, isPlaceholderData, refetch } = useMovie(id);
   const qc = useQueryClient();
   // Canonicalize numeric-TMDB-id URLs (Similar rail): seed the detail cache under the
   // INTERNAL id and replace the route, so every hook/mutation (votes, favorite,
@@ -160,6 +160,11 @@ export default function MovieDetailScreen() {
           </View>
         </ImageBackground>
 
+        {isPlaceholderData ? (
+          // Seeded hero from the list cache (title/artwork/year/rating) — body
+          // waits for the real detail payload so partial fields never flash.
+          <Spinner />
+        ) : (
         <View style={{ paddingHorizontal: spacing.lg, gap: spacing.lg, marginTop: spacing.md }}>
           <View style={styles.actions}>
             <Button
@@ -315,6 +320,7 @@ export default function MovieDetailScreen() {
             </Card>
           </Pressable>
         </View>
+        )}
         <View style={{ height: 40 }} />
       </ScrollView>
       {addToList.reassignModal}

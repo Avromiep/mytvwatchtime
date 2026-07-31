@@ -46,6 +46,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (stored) {
         setUser(stored);
         setAnalyticsUser(stored.id);
+        // Render the app from the stored user IMMEDIATELY — the /me refresh
+        // below continues in the background. Gating the whole app on that
+        // network round trip added seconds to every cold start.
+        setLoading(false);
       }
       const access = await tokenStorage.getAccess();
       if (access) {
@@ -66,7 +70,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Push current tokens/base URL to the home-screen widgets (iOS App Group;
       // re-render on Android) after any silent refresh above settled.
       void syncWidgetCredentials();
-      setLoading(false);
+      // No stored user: we waited for /me to know whether a session exists.
+      if (!stored) setLoading(false);
     })();
   }, []);
 

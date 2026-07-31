@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { ActivityIndicator, Dimensions, FlatList, ScrollView, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
@@ -7,7 +7,7 @@ import { Header } from '../components/Header';
 import { PosterCard, cardProgress, cardYear } from '../components/cards';
 import { Chip, EmptyState, Screen, Spinner } from '../components/primitives';
 import { useAllFavorites, useAllWatchlist, useGenres } from '../api/hooks';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAppearance } from '../context/PreferencesProvider';
 import { spacing } from '../theme/theme';
@@ -84,46 +84,29 @@ export default function MoreScreen() {
   const cardW = Math.floor((containerW - spacing.md * (cols - 1)) / cols);
 
   // --- Pagination for server-paged sections ---
-  const [page, setPage] = useState(1);
-  const [allItems, setAllItems] = useState<any[]>([]);
-  const [hasMore, setHasMore] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-
-  const pageQuery = useQuery({
-    queryKey: ['more-page', pagedPath, page, genre ?? '', x ?? '', s ?? '', c ?? '', a ?? ''],
-    queryFn: () =>
+  // useInfiniteQuery owns the page list: refetches REPLACE page data in place,
+  // so pages never duplicate and the FlatList never remounts mid-scroll (the
+  // previous manual page/allItems accumulation re-appended the current page on
+  // every refetch and reset scroll to the top). Filter changes are just a new
+  // query key — no reset effects.
+  const pageQuery = useInfiniteQuery({
+    queryKey: ['more', pagedPath, genre ?? '', x ?? '', s ?? '', c ?? '', a ?? ''],
+    queryFn: ({ pageParam }) =>
       api.get<{ items: any[]; hasMore: boolean }>(pagedPath!, {
-        page,
+        page: pageParam,
         genre: genre || undefined,
         ...exploreFilters,
       }),
+    initialPageParam: 1,
+    getNextPageParam: (last, pages) => (last.hasMore ? pages.length + 1 : undefined),
     enabled: !!pagedPath,
     staleTime: 60000,
   });
 
-  useEffect(() => {
-    if (!pagedPath || !pageQuery.data) return;
-    const newItems = pageQuery.data.items ?? [];
-    setAllItems((prev) => (page === 1 ? newItems : [...prev, ...newItems]));
-    setHasMore(pageQuery.data.hasMore ?? false);
-    setLoadingMore(false);
-  }, [pageQuery.data, page, pagedPath]);
-
-  // Reset when tab or genre filter changes
-  useEffect(() => {
-    if (pagedPath) {
-      setAllItems([]);
-      setPage(1);
-      setHasMore(true);
-      setLoadingMore(false);
-    }
-  }, [tab, genre]);
-
   const loadMore = useCallback(() => {
-    if (!hasMore || loadingMore || pageQuery.isFetching) return;
-    setLoadingMore(true);
-    setPage((p) => p + 1);
-  }, [hasMore, loadingMore, pageQuery.isFetching]);
+    if (!pageQuery.hasNextPage || pageQuery.isFetchingNextPage) return;
+    pageQuery.fetchNextPage();
+  }, [pageQuery]);
 
   // --- Collection hooks (auto-paged to the end — see-alls show exactly what the user has) ---
   const watchlistShows = useAllWatchlist(MediaType.SHOW, genre);
@@ -135,8 +118,8 @@ export default function MoreScreen() {
   let items: any[] = [];
   let loading = false;
   if (pagedPath) {
-    items = allItems;
-    loading = page === 1 && allItems.length === 0 && pageQuery.isLoading;
+    items = pageQuery.data?.pages.flatMap((p) => p.items ?? []) ?? [];
+    loading = pageQuery.isLoading;
   } else {
     switch (tab) {
       case 'watchlist-shows':
@@ -174,11 +157,18 @@ export default function MoreScreen() {
     .filter(Boolean)
     .join('|');
   const [postersReady, setPostersReady] = useState(false);
+  // Gate ONLY the first paint. Re-gating whenever the first rows' data changed
+  // (refetch, appended page) flipped postersReady back to false, which unmounted
+  // the FlatList → visible flicker and scroll reset to the top. Appended pages
+  // load their posters inline instead.
+  const postersGatedRef = useRef(false);
   useEffect(() => {
     if (!preloadKey) {
       setPostersReady(true);
       return;
     }
+    if (postersGatedRef.current) return;
+    postersGatedRef.current = true;
     let alive = true;
     setPostersReady(false);
     // Fail-safe: never trap the grid behind a stalled prefetch.
@@ -240,7 +230,7 @@ export default function MoreScreen() {
           onEndReached={pagedPath ? loadMore : undefined}
           onEndReachedThreshold={0.5}
           ListFooterComponent={
-            pagedPath && loadingMore ? (
+            pagedPath && pageQuery.isFetchingNextPage ? (
               <ActivityIndicator color={tokens.primary} style={{ padding: spacing.lg }} />
             ) : null
           }

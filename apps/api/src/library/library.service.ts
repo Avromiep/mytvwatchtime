@@ -29,6 +29,15 @@ const WATCH_NEXT_HISTORY_LIMIT = 10;
 const UPCOMING_PAST_PAGE_SIZE = 10;
 const UPCOMING_PAST_MAX_PAGE_SIZE = 50;
 
+/**
+ * Watch-next cache lifetime (seconds). Long enough that tab revisits and client
+ * refetch storms hit Redis instead of recomputing (the recompute runs several
+ * raw aggregate queries plus locale-overrides); correctness on user actions is
+ * guaranteed by the explicit `watchnext:{userId}:*` invalidation in
+ * tracking/collections/import/onboarding, not by this TTL.
+ */
+const WATCH_NEXT_CACHE_TTL_S = 300;
+
 @Injectable()
 export class LibraryService {
   constructor(
@@ -93,13 +102,16 @@ export class LibraryService {
   }
 
   /**
-   * Full watch-list computation (uncapped rails), cached per user+lang for 30s.
+   * Full watch-list computation (uncapped rails), cached per user+lang for 5 min.
    * Both watchNext (capped presentation payload) and watchNextBucket (per-rail
    * pagination for the "See more" buttons) derive from this one computation.
    * Key carries a v2 infix AFTER the userId (the cached shape changed from
    * {items} to per-bucket arrays) — it must stay inside the
    * `watchnext:{userId}:*` invalidation pattern shared by tracking/collections/
-   * import/onboarding, or removed/paused shows linger until the TTL.
+   * import/onboarding, or removed/paused shows linger until the TTL. Freshness
+   * on user actions (mark watched, watchlist add/pause/remove, import) comes
+   * from that explicit invalidation, NOT from a short TTL — language changes
+   * need no invalidation because the language is part of the key.
    */
   private async computeWatchNext(userId: string) {
     const cacheKey = `watchnext:${userId}:v2:${currentLanguage()}`;
@@ -360,7 +372,7 @@ export class LibraryService {
     };
     const allItems = [...historyL, ...watchNextL, ...startWatchingL, ...notRecentlyL];
     await this.localizeEpisodeTitles(allItems);
-    await this.redis.set(cacheKey, result, 30);
+    await this.redis.set(cacheKey, result, WATCH_NEXT_CACHE_TTL_S);
     return result;
   }
 
@@ -387,7 +399,7 @@ export class LibraryService {
   /**
    * Offset pagination over a capped watch-list rail (START_WATCHING / NOT_RECENTLY)
    * for the section "See more" buttons — reads the same cached computation as
-   * watchNext, so page fetches are cheap within the 30s window.
+   * watchNext, so page fetches are cheap within the cache TTL window.
    */
   async watchNextBucket(
     userId: string,
@@ -509,7 +521,7 @@ export class LibraryService {
     const result = { items };
     result.items = await this.localizeItems(result.items, (i) => i.showId);
     await this.localizeEpisodeTitles(result.items);
-    await this.redis.set(cacheKey, result, 30);
+    await this.redis.set(cacheKey, result, WATCH_NEXT_CACHE_TTL_S);
     return result;
   }
 

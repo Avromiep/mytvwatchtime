@@ -65,30 +65,43 @@ export class ShowsService {
       const isAnimation = media.genres.some(
         (g) => g.genre.slug === 'animation' || g.genre.name?.toLowerCase() === 'animation',
       );
-      let animeFixed = false;
-      if (isAnimation && this.tvdb?.enabled) {
-        animeFixed = await this.metadataBackfill
-          .fixAnimeShowFromTvdb(media.id)
-          .then((r) => r.fixed)
-          .catch(() => false);
-      }
-      if (!animeFixed && needsHydration) {
-        if (isAnimation && this.tvdb?.enabled && tvdbExt) {
-          // Degrade gracefully on hydration failure (don't 500 the detail page).
-          await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
-        } else if (!isAnimation && this.tmdb.enabled && tmdbExt) {
-          // Degrade gracefully on hydration failure (don't 500 the detail page).
-          await this.meta
-            .ensureShowFull(Number(tmdbExt.value), undefined, { skipAiredSeasons: true })
-            .catch(() => undefined);
-        } else if (this.tvdb?.enabled && tvdbExt) {
-          // TVDB-only hydration: degrade gracefully on rate-limit/outage (don't 500 the page).
-          await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
+      const refresh = async () => {
+        let animeFixed = false;
+        if (isAnimation && this.tvdb?.enabled) {
+          animeFixed = await this.metadataBackfill
+            .fixAnimeShowFromTvdb(media.id)
+            .then((r) => r.fixed)
+            .catch(() => false);
         }
+        if (!animeFixed && needsHydration) {
+          if (isAnimation && this.tvdb?.enabled && tvdbExt) {
+            // Degrade gracefully on hydration failure (don't 500 the detail page).
+            await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
+          } else if (!isAnimation && this.tmdb.enabled && tmdbExt) {
+            // Degrade gracefully on hydration failure (don't 500 the detail page).
+            await this.meta
+              .ensureShowFull(Number(tmdbExt.value), undefined, { skipAiredSeasons: true })
+              .catch(() => undefined);
+          } else if (this.tvdb?.enabled && tvdbExt) {
+            // TVDB-only hydration: degrade gracefully on rate-limit/outage (don't 500 the page).
+            await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
+          }
+        }
+        await this.meta.ensureAirtimes(id).catch(() => undefined);
+        // Classify on every detail view (cheap + deduped per hydration version).
+        await this.meta.scheduleClassification(id).catch(() => undefined);
+      };
+      if (!media.metadataRefreshedAt) {
+        // Never hydrated: block the first view or the page renders empty.
+        await refresh();
+      } else {
+        // Stale-while-revalidate: answer from last-known data immediately and
+        // refresh in the background — awaiting rate-limited TMDb/TVDB hydration
+        // here added seconds to every show open. The episodes endpoint still
+        // awaits the (coalesced) anime repair, so season structure stays
+        // consistent; this payload converges on the next view.
+        void refresh().catch(() => undefined);
       }
-      await this.meta.ensureAirtimes(id).catch(() => undefined);
-      // Classify on every detail view (cheap + deduped per hydration version).
-      await this.meta.scheduleClassification(id).catch(() => undefined);
       return this.withShowInteractions(await this.meta.getShowDetail(id, userId), userId);
     }
     return this.withShowInteractions(await this.meta.getShowDetail(id, userId), userId);

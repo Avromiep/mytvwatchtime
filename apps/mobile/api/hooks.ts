@@ -122,6 +122,10 @@ export const usePausedWatchNext = () =>
 /**
  * "See more" paging for the capped watch-list rails (START_WATCHING / NOT_RECENTLY):
  * the first 10 ship inside the main watch-next payload, so pages start at offset 10.
+ * Same contract as useWatchNextHistory: `enabled: false` — nothing loads on mount;
+ * the "See more" button's fetchNextPage fetches pages even while disabled. The
+ * WatchList screen previously mounted TWO of these eagerly, doubling the requests
+ * (and server recomputes) on every Shows-tab open.
  */
 export const useWatchNextBucket = (bucket: 'START_WATCHING' | 'NOT_RECENTLY') =>
   useInfiniteQuery({
@@ -134,6 +138,7 @@ export const useWatchNextBucket = (bucket: 'START_WATCHING' | 'NOT_RECENTLY') =>
       }),
     initialPageParam: 10,
     getNextPageParam: (last) => (last.hasMore ? last.nextOffset : undefined),
+    enabled: false,
   });
 export const useUpcoming = () =>
   useQuery({
@@ -215,12 +220,73 @@ export const useRecentWatched = () =>
     initialPageParam: 1,
     getNextPageParam: (last) => (last?.hasMore ? last.page + 1 : undefined),
   });
-export const useShow = (id: string) =>
-  useQuery({
+/**
+ * Depth-limited scan of every cached list payload (watch-next, watchlist,
+ * history, favorites, search, trending, discover…) for a media card matching
+ * `id`, used as placeholderData so detail screens render the tapped title and
+ * artwork instantly while the network refetches. Cards either carry `id`
+ * (MediaCardDto) or `showId` (WatchNextItemDto). Runs only while the detail
+ * query has no cached data of its own — a few thousand cheap property reads,
+ * far better than a blank full-screen spinner on every navigation.
+ */
+function findMediaSeed(qc: ReturnType<typeof useQueryClient>, id: string): any | undefined {
+  const scan = (v: any, depth: number): any | undefined => {
+    if (!v || typeof v !== 'object' || depth > 4) return undefined;
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        const hit = scan(item, depth + 1);
+        if (hit) return hit;
+      }
+      return undefined;
+    }
+    if ((v.id === id && v.title) || (v.showId === id && v.showTitle)) return v;
+    for (const key of ['items', 'pages', 'data', 'results', 'shows', 'movies', 'sections']) {
+      const hit = scan(v[key], depth + 1);
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+  for (const [, data] of qc.getQueriesData({})) {
+    const hit = scan(data, 0);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/** Minimal detail-DTO shell from a list card: enough for the hero (title,
+ *  artwork, year, rating); the screens gate body sections on isPlaceholderData. */
+const mediaSeedToDetail = (seed: any) => ({
+  id: seed.id ?? seed.showId,
+  title: seed.title ?? seed.showTitle,
+  yearStart: seed.year ?? undefined,
+  releaseYear: seed.year ?? undefined,
+  rating: seed.rating ?? undefined,
+  images: { poster: seed.posterUrl ?? null, backdrop: seed.backdropUrl ?? null },
+});
+
+/**
+ * Detail screens keep their cached payload for 24h (vs the 5-min default):
+ * reopening a previously viewed show/movie renders the cached detail INSTANTLY
+ * and refetches in the background (stale-while-revalidate), instead of
+ * blocking on a full-screen spinner for every >5-min revisit. The server
+ * answers stale-metadata shows from last-known data and hydrates TMDb/TVDB in
+ * the background, so the fresh payload lands quickly and swaps in smoothly.
+ */
+const DETAIL_GC_TIME = 24 * 60 * 60 * 1000;
+
+export const useShow = (id: string) => {
+  const qc = useQueryClient();
+  return useQuery({
     queryKey: qk.show(id),
     queryFn: () => api.get<ShowDetailDto>(`/shows/${id}`),
     enabled: !!id,
+    gcTime: DETAIL_GC_TIME,
+    placeholderData: () => {
+      const seed = id ? findMediaSeed(qc, id) : undefined;
+      return seed ? (mediaSeedToDetail(seed) as unknown as ShowDetailDto) : undefined;
+    },
   });
+};
 /** Person (cast) details page: localized details + capped movies/shows rails. */
 export const usePerson = (id: string) =>
   useQuery({
@@ -243,12 +309,14 @@ export const useShowEpisodes = (id: string) =>
     queryKey: qk.showEpisodes(id),
     queryFn: () => api.get<any[]>(`/shows/${id}/episodes`),
     enabled: !!id,
+    gcTime: DETAIL_GC_TIME,
   });
 export const useEpisode = (id: string) =>
   useQuery({
     queryKey: qk.episode(id),
     queryFn: () => api.get<EpisodeDetailDto>(`/episodes/${id}`),
     enabled: !!id,
+    gcTime: DETAIL_GC_TIME,
   });
 // Ordered ids of the episode's season siblings — powers the episode pager without
 // downloading the show's entire season structure.
@@ -258,12 +326,19 @@ export const useEpisodeSiblings = (id: string) =>
     queryFn: () => api.get<{ seasonId: string; episodeIds: string[] }>(`/episodes/${id}/siblings`),
     enabled: !!id,
   });
-export const useMovie = (id: string) =>
-  useQuery({
+export const useMovie = (id: string) => {
+  const qc = useQueryClient();
+  return useQuery({
     queryKey: qk.movie(id),
     queryFn: () => api.get<MovieDetailDto>(`/movies/${id}`),
     enabled: !!id,
+    gcTime: DETAIL_GC_TIME,
+    placeholderData: () => {
+      const seed = id ? findMediaSeed(qc, id) : undefined;
+      return seed ? (mediaSeedToDetail(seed) as unknown as MovieDetailDto) : undefined;
+    },
   });
+};
 // Server-paginated search (20/page): the API keeps the merged ordering in a short-lived
 // cache and expands it on demand, so onEndReached reveals results beyond the first page.
 /** Explore filter values shared by search / sections / trending (see explore.tsx). */

@@ -51,7 +51,10 @@ import { OnboardingModule } from './onboarding/onboarding.module';
       validationSchema: envValidation.validationSchema,
       validationOptions: { ...envValidation },
     }),
-    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 60 }]),
+    // Generous global cap: screens legitimately fan out 6-8 queries on mount
+    // (plus foreground refetches); a tight limit turned those into 429 backoff
+    // on the critical render path. Abuse protection stays, UX stays fast.
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 300 }]),
     ScheduleModule.forRoot(),
     EventEmitterModule.forRoot({ wildcard: true }),
     PrismaModule,

@@ -68,7 +68,7 @@ export default function ShowDetailScreen() {
   const { t } = useTranslation(['showDetail', 'common', 'episode']);
   const { id } = useLocalSearchParams<{ id: string }>();
   const qc = useQueryClient();
-  const { data: show, isLoading, refetch } = useShow(id);
+  const { data: show, isLoading, isPlaceholderData, refetch } = useShow(id);
   // Canonicalize numeric-TMDB-id URLs (Similar rail): seed the detail cache under the
   // INTERNAL id and replace the route, so every hook/mutation (votes, favorite,
   // watchlist, episodes, comments) keys on one consistent id — no alias drift.
@@ -316,7 +316,15 @@ export default function ShowDetailScreen() {
           />
         </View>
 
-        {tab === 'episodes' ? <EpisodesTab showId={id} /> : <AboutTab show={show} id={id} />}
+        {tab === 'episodes' ? (
+          <EpisodesTab showId={id} />
+        ) : isPlaceholderData ? (
+          // Seeded hero from the list cache (title/artwork) — body waits for
+          // the real detail payload so partial fields never flash.
+          <Spinner />
+        ) : (
+          <AboutTab show={show} id={id} />
+        )}
         <View style={{ height: 40 }} />
       </ScrollView>
       {/* useAddToList contract: the calling screen renders the reassign modal
