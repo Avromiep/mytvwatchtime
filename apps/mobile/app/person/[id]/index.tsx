@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
+import { Ionicons } from '@expo/vector-icons';
 import type { PersonCreditDto } from '@tvwatch/shared';
 import { Header } from '../../../components/Header';
 import { PersonHeader } from '../../../components/PersonHeader';
@@ -35,6 +36,7 @@ export function PersonCreditCard({
   width?: number;
   style?: object;
 }) {
+  const { tokens } = useAppearance();
   const target = credit.mediaId ?? (credit.tmdbId != null ? String(credit.tmdbId) : null);
   const open = () => {
     if (!target) return;
@@ -48,6 +50,27 @@ export function PersonCreditCard({
     >
       <View style={{ borderRadius: radius.md, overflow: 'hidden' }}>
         <PosterImage uri={credit.posterUrl} style={{ width, height: width * 1.5 }} transition={0} />
+        {/* Same star badge as PosterCard. */}
+        {credit.rating != null && credit.rating > 0 ? (
+          <View
+            style={{
+              position: 'absolute',
+              top: 4,
+              left: 4,
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: tokens.mediaScrim,
+              borderRadius: radius.sm,
+              paddingHorizontal: 4,
+              paddingVertical: 2,
+            }}
+          >
+            <Ionicons name="star" size={10} color={tokens.warning} />
+            <T variant="micro" style={{ color: tokens.mediaText, marginLeft: 2 }}>
+              {credit.rating.toFixed(1)}
+            </T>
+          </View>
+        ) : null}
       </View>
       <T variant="caption" numberOfLines={2} style={{ marginTop: 6 }}>
         {credit.title}

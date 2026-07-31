@@ -98,6 +98,7 @@ describe('normalized-person', () => {
               character: 'Bruce Wayne',
               poster_path: '/p.jpg',
               release_date: '2022-03-04',
+              vote_average: 7.7,
             },
             {
               id: 2,
@@ -133,8 +134,10 @@ describe('normalized-person', () => {
       year: 2022,
       character: 'Bruce Wayne',
       posterUrl: 'img:w185:/p.jpg',
+      rating: 7.7,
     });
     expect(items[2].year).toBeNull();
+    expect(items[2].rating).toBeNull(); // no vote_average in the payload
   });
 
   it('normalizes TVDB characters: Actor only (drops Guest Star), both kinds', () => {
@@ -505,8 +508,9 @@ describe('PeopleService sync + serve', () => {
             title: 'The Batman',
             posterUrl: 'snap.jpg',
             year: 2022,
+            rating: 8.0, // snapshot vote_average — the linked MediaItem's 7.7 wins
           },
-          { key: 'tmdb:50:SHOW', tmdbId: 50, type: 'SHOW', title: 'Kind-Guard Show' },
+          { key: 'tmdb:50:SHOW', tmdbId: 50, type: 'SHOW', title: 'Kind-Guard Show', rating: 6.5 },
         ],
         locales: { fr: { 'tmdb:414906:MOVIE': 'Le Batman' } },
       },
@@ -523,8 +527,9 @@ describe('PeopleService sync + serve', () => {
         posterUrl: 'media-poster.jpg',
         posterUrls: null,
         titles: { fr: 'The Batman (film)' },
+        rating: 7.7,
       },
-      { id: 'media-wrong-kind', type: 'MOVIE', posterUrl: null, posterUrls: null, titles: null }, // credit says SHOW
+      { id: 'media-wrong-kind', type: 'MOVIE', posterUrl: null, posterUrls: null, titles: null, rating: null }, // credit says SHOW
     ]);
     const credits = await runInLanguage('fr', () => (svc as any).resolveCredits(row, 'fr'));
     expect(credits).toHaveLength(2);
@@ -534,22 +539,24 @@ describe('PeopleService sync + serve', () => {
       tmdbId: 414906,
       title: 'The Batman (film)',
       posterUrl: 'media-poster.jpg',
+      rating: 7.7,
     });
-    // Wrong-kind link: NOT resolved — falls back to the snapshot locale title
-    expect(credits[1]).toMatchObject({ mediaId: null, tmdbId: 50, title: 'Kind-Guard Show' });
+    // Wrong-kind link: NOT resolved — falls back to the snapshot locale title and
+    // the snapshot's provider vote_average
+    expect(credits[1]).toMatchObject({ mediaId: null, tmdbId: 50, title: 'Kind-Guard Show', rating: 6.5 });
   });
 
   it('unresolved credits keep snapshot locale titles and null mediaId', async () => {
     const row = memberRow({
       tmdbId: 11288,
       credits: {
-        items: [{ key: 'tmdb:1:MOVIE', tmdbId: 1, type: 'MOVIE', title: 'Cosmopolis' }],
+        items: [{ key: 'tmdb:1:MOVIE', tmdbId: 1, type: 'MOVIE', title: 'Cosmopolis', rating: 5.9 }],
         locales: { fr: { 'tmdb:1:MOVIE': 'Cosmopolis FR' } },
       },
     });
     const { svc } = makeService();
     const credits = await runInLanguage('fr', () => (svc as any).resolveCredits(row, 'fr'));
-    expect(credits[0]).toMatchObject({ mediaId: null, tmdbId: 1, title: 'Cosmopolis FR' });
+    expect(credits[0]).toMatchObject({ mediaId: null, tmdbId: 1, title: 'Cosmopolis FR', rating: 5.9 });
   });
 
   it('provider failure serves the cached row (no throw)', async () => {

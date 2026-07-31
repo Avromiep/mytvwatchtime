@@ -256,11 +256,22 @@ function EpisodeCardImpl({
         <Pressable
           onPress={() => router.push(`/show/${item.showId}` as any)}
           hitSlop={6}
-          style={{ flex: 1, minWidth: 0 }}
+          style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'flex-end' }}
         >
-          <T variant="caption" numberOfLines={1} style={{ fontWeight: '700', color: tokens.primary }}>
+          {/* flexShrink lets a long title truncate while the chevron stays visible.
+              includeFontPadding:false (Android) removes the extra top font padding;
+              flex-end aligns the chevron with the bottom of the text. */}
+          <T
+            variant="caption"
+            numberOfLines={1}
+            style={[
+              { fontWeight: '700', color: tokens.primary, flexShrink: 1 },
+              Platform.OS === 'android' ? { includeFontPadding: false } : null,
+            ]}
+          >
             {item.showTitle}
           </T>
+          <Ionicons name="chevron-forward" size={12} color={tokens.primary} style={{ marginLeft: 2 }} />
         </Pressable>
         {item.network ? (
           <T variant="micro" muted style={{ marginLeft: spacing.sm }}>

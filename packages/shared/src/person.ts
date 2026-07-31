@@ -34,6 +34,10 @@ export interface PersonCreditDto {
   posterUrl?: string | null;
   year?: number | null;
   character?: string | null;
+  /** Provider vote average (1..10): the linked MediaItem's rating wins; credits
+   *  without an internal item fall back to the snapshot's provider vote_average
+   *  (TMDB only, present after the person's next credits re-sync). */
+  rating?: number | null;
 }
 
 export interface PersonDetailResponse {
@@ -64,6 +68,10 @@ export interface PersonCreditSnapshotItem {
   posterUrl?: string | null;
   year?: number | null;
   character?: string | null;
+  /** Provider vote average (1..10) captured at sync time — TMDB combined_credits
+   *  only (TVDB person payloads carry none). Fallback rating when the credit
+   *  doesn't resolve to an internal MediaItem. Absent in pre-rating snapshots. */
+  rating?: number | null;
 }
 
 export interface PersonCreditsSnapshot {

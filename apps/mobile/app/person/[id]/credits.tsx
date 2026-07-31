@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { ActivityIndicator, Dimensions, FlatList, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import type { PersonCreditDto } from '@tvwatch/shared';
 import { Header } from '../../../components/Header';
 import { PosterCard } from '../../../components/cards';
@@ -26,10 +27,32 @@ function useColumns() {
 /** PosterCard lookalike for the rare credit with no resolvable route id at all —
  *  renders the same dimensions, just non-tappable. */
 function StaticCreditCard({ credit, width }: { credit: PersonCreditDto; width: number }) {
+  const { tokens } = useAppearance();
   return (
     <View style={{ width, marginRight: spacing.md }}>
       <View style={{ borderRadius: radius.md, overflow: 'hidden' }}>
         <PosterImage uri={credit.posterUrl} style={{ width, height: width * 1.5 }} transition={0} />
+        {/* Same star badge as PosterCard. */}
+        {credit.rating != null && credit.rating > 0 ? (
+          <View
+            style={{
+              position: 'absolute',
+              top: 4,
+              left: 4,
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: tokens.mediaScrim,
+              borderRadius: radius.sm,
+              paddingHorizontal: 4,
+              paddingVertical: 2,
+            }}
+          >
+            <Ionicons name="star" size={10} color={tokens.warning} />
+            <T variant="micro" style={{ color: tokens.mediaText, marginLeft: 2 }}>
+              {credit.rating.toFixed(1)}
+            </T>
+          </View>
+        ) : null}
       </View>
       <T variant="caption" numberOfLines={2} style={{ marginTop: 6 }}>
         {credit.title}
@@ -117,6 +140,7 @@ export default function PersonCreditsScreen() {
                     kind={kind}
                     title={credit.title}
                     poster={credit.posterUrl}
+                    rating={credit.rating}
                     year={credit.year}
                     width={cardW}
                     style={{ marginRight: spacing.md }}

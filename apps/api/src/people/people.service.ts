@@ -432,7 +432,7 @@ export class PeopleService {
     const mediaRows = mediaIds.length
       ? await this.prisma.mediaItem.findMany({
           where: { id: { in: mediaIds } },
-          select: { id: true, type: true, posterUrl: true, posterUrls: true, titles: true },
+          select: { id: true, type: true, posterUrl: true, posterUrls: true, titles: true, rating: true },
         })
       : [];
     const mediaById = new Map(mediaRows.map((m) => [m.id, m]));
@@ -452,6 +452,7 @@ export class PeopleService {
         posterUrl: string | null;
         posterUrls: unknown;
         titles: unknown;
+        rating: number | null;
       }
     >,
     locale: string,
@@ -477,6 +478,9 @@ export class PeopleService {
       posterUrl: localizedPoster ?? resolved?.posterUrl ?? item.posterUrl ?? null,
       year: item.year ?? null,
       character: item.character ?? null,
+      // Linked MediaItem rating wins (fresher, canonical); snapshot provider
+      // vote_average covers credits with no internal item.
+      rating: resolved?.rating ?? item.rating ?? null,
     };
   }
 

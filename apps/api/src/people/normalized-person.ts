@@ -43,6 +43,7 @@ export function normalizeTmdbCredits(
       posterUrl: img(c.poster_path, 'w185'),
       year: yearOf(c.media_type === 'movie' ? c.release_date : c.first_air_date),
       character: c.character || null,
+      rating: c.vote_average ?? null,
     });
   }
   return sortCredits([...out.values()]);
