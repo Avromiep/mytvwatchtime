@@ -5,7 +5,10 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import * as WebBrowser from 'expo-web-browser';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/react-query';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 
 WebBrowser.maybeCompleteAuthSession();
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -71,6 +74,10 @@ function Gate() {
     const inAuthGroup = segs[0] === '(auth)';
     if (!user && !inAuthGroup) {
       queryClient.clear();
+      // Detail payloads are per-user (userProgress, inWatchlist, votes) — drop
+      // the persisted cache too or the next account on this device would
+      // restore the previous user's state.
+      void queryPersister.removeClient();
       router.replace('/(auth)/login');
     } else if (user && needsPasswordChange && segs[1] !== 'change-password') {
       router.replace('/(auth)/change-password');
@@ -132,11 +139,46 @@ function RootShell() {
   );
 }
 
+/**
+ * Detail payloads persist to AsyncStorage so a previously viewed show/movie/
+ * episode reopens INSTANTLY after an app restart (stale-while-revalidate:
+ * cached render, background refetch, smooth in-place update). Only small
+ * detail queries persist — big rails (watch-next, 500-item collections,
+ * search/discover) refetch fast and serializing them on every cache write
+ * would hammer AsyncStorage. maxAge matches the 24h gcTime on detail queries.
+ */
+const queryPersister = createAsyncStoragePersister({
+  storage: AsyncStorage,
+  throttleTime: 2000,
+});
+const PERSISTED_QUERY_ROOTS = new Set([
+  'show',
+  'movie',
+  'episode',
+  'showEpisodes',
+  'episodeSiblings',
+  'person',
+]);
+
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <GestureHandlerRootView style={{ flex: 1 }}>
-        <QueryClientProvider client={queryClient}>
+        <PersistQueryClientProvider
+          client={queryClient}
+          persistOptions={{
+            persister: queryPersister,
+            maxAge: 24 * 60 * 60 * 1000,
+            // Bump when a persisted payload's shape changes — stale restores
+            // are dropped instead of crashing against a new client.
+            buster: 'v1',
+            dehydrateOptions: {
+              shouldDehydrateQuery: (q) =>
+                q.state.status === 'success' &&
+                PERSISTED_QUERY_ROOTS.has(q.queryKey[0] as string),
+            },
+          }}
+        >
           <AuthProvider>
             <PreferencesProvider>
               <DialogProvider>
@@ -145,7 +187,7 @@ export default function RootLayout() {
               </DialogProvider>
             </PreferencesProvider>
           </AuthProvider>
-        </QueryClientProvider>
+        </PersistQueryClientProvider>
       </GestureHandlerRootView>
     </SafeAreaProvider>
   );

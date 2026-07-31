@@ -1,11 +1,11 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { ActivityIndicator, Dimensions, FlatList, ScrollView, View } from 'react-native';
+import { ActivityIndicator, Dimensions, ScrollView, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
 import { MediaType } from '@tvwatch/shared';
 import { Header } from '../components/Header';
 import { PosterCard, cardProgress, cardYear } from '../components/cards';
-import { Chip, EmptyState, Screen, Spinner } from '../components/primitives';
+import { Chip, EmptyState, Screen, Spinner, AnimatedFlatList } from '../components/primitives';
 import { useAllFavorites, useAllWatchlist, useGenres } from '../api/hooks';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -142,9 +142,13 @@ export default function MoreScreen() {
   }
 
   // --- Chunk into rows ---
+  // Row keys carry the first card's id (not just the index): when a refreshed
+  // page inserts/removes items, Reanimated can slide surviving rows and fade
+  // new ones in — index-keyed rows would silently swap content in place.
   const rows: { key: string; cards: any[] }[] = [];
   for (let i = 0; i < items.length; i += cols) {
-    rows.push({ key: `row_${i}`, cards: items.slice(i, i + cols) });
+    const slice = items.slice(i, i + cols);
+    rows.push({ key: `row_${slice[0]?.id ?? i}_${i}`, cards: slice });
   }
 
   // Gate the grid on the first screenful of posters: every cell mounts at once and,
@@ -213,7 +217,7 @@ export default function MoreScreen() {
       {loading || !postersReady ? (
         <Spinner />
       ) : (
-        <FlatList
+        <AnimatedFlatList
           key={cols}
           data={rows}
           keyExtractor={(r) => r.key}

@@ -1,6 +1,5 @@
 import React, { useRef } from 'react';
 import {
-  FlatList,
   Platform,
   Pressable,
   StyleProp,
@@ -22,6 +21,7 @@ import {
   T,
   WatchButton,
   useWatchMenu,
+  AnimatedFlatList,
 } from './primitives';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
@@ -209,7 +209,9 @@ export function Carousel({ title, action, onAction, data, kind, width = 120 }: {
       <View style={{ paddingHorizontal: spacing.lg }}>
         <SectionHeader title={title} action={action} onAction={onAction} />
       </View>
-      <FlatList
+      {/* AnimatedFlatList: refreshed rails morph (insert/reorder/remove)
+          instead of swapping wholesale under the user's finger. */}
+      <AnimatedFlatList
         horizontal
         data={data}
         showsHorizontalScrollIndicator={false}

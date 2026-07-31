@@ -1,7 +1,8 @@
 import React, { useCallback } from 'react';
-import { Pressable, StyleSheet, Text, View, ViewStyle, TextStyle, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { Pressable, StyleSheet, Text, View, ViewStyle, TextStyle, ActivityIndicator, TouchableOpacity, FlatList, FlatListProps } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
+import Animated, { LinearTransition } from 'react-native-reanimated';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing, typography } from '../theme/theme';
 import { useAppearance } from '../context/PreferencesProvider';
@@ -9,6 +10,28 @@ import { showDialog, showConfirm } from '../lib/dialog';
 
 /** The bundled app icon, used as a default avatar placeholder. */
 export const APP_ICON = require('../assets/icon.png');
+
+// Animated.FlatList's layout-animation prop types don't compose with a spread
+// FlatListProps<T>; cast once here so callers keep full FlatList typing.
+const ReanimatedFlatListBase = Animated.FlatList as React.ComponentType<any>;
+
+/**
+ * FlatList with Reanimated layout transitions: when a refreshed payload
+ * reorders/inserts/removes items (e.g. cached rail A B C D → server X A B Y),
+ * new items fade in, removed ones fade out, and survivors SLIDE to their new
+ * positions instead of the whole list swapping under the user's finger.
+ * Initial mount never animates (skipEnteringExitingAnimations) so a screenful
+ * of cards doesn't cascade in on first paint.
+ */
+export function AnimatedFlatList<T>(props: FlatListProps<T>) {
+  return (
+    <ReanimatedFlatListBase
+      itemLayoutAnimation={LinearTransition.duration(250)}
+      skipEnteringExitingAnimations
+      {...props}
+    />
+  );
+}
 
 type TextProps = React.ComponentProps<typeof Text> & { variant?: keyof typeof typography; muted?: boolean; dim?: boolean };
 export function T({ variant = 'body', muted, dim, style, ...rest }: TextProps) {
