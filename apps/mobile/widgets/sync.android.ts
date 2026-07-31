@@ -1,5 +1,12 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { requestWidgetUpdate } from 'react-native-android-widget';
-import { WIDGET_KINDS, invalidateWidgetDataCache } from './data';
+import {
+  WIDGET_KINDS,
+  fetchUpcomingGroups,
+  fetchWatchNextItems,
+  getWidgetLabels,
+  invalidateWidgetDataCache,
+} from './data';
 import { renderUpcomingWidget, renderWatchNextWidget } from './android/render';
 
 // Android widgets run in this app's process (headless JS) and read tokens from the
@@ -13,9 +20,29 @@ const UPDATE_THROTTLE_MS = 5000;
 let lastUpdate = 0;
 let trailing: ReturnType<typeof setTimeout> | null = null;
 
+// Skip no-op re-renders: the widget library downloads every remote bitmap uncached,
+// so pushing an identical payload visibly reloads every image (most noticeable as
+// the trailing throttle edge firing ~5s after the leading update). Hash the payload
+// plus the localized labels (also part of the rendered tree) and only re-render
+// when something actually changed.
+const HASH_KEY = 'widget:lastPayloadHash';
+
+async function currentPayloadHash(): Promise<string> {
+  const [watchNext, upcoming] = await Promise.all([fetchWatchNextItems(), fetchUpcomingGroups()]);
+  return JSON.stringify({ watchNext, upcoming, labels: getWidgetLabels() });
+}
+
 async function runUpdate(): Promise<void> {
   lastUpdate = Date.now();
   invalidateWidgetDataCache();
+  let hash: string | null = null;
+  try {
+    hash = await currentPayloadHash();
+    const lastHash = await AsyncStorage.getItem(HASH_KEY);
+    if (lastHash === hash) return;
+  } catch {
+    // hashing failed (storage/network) — fall through and render anyway
+  }
   await Promise.allSettled([
     requestWidgetUpdate({
       widgetName: WIDGET_KINDS.watchNext,
@@ -26,6 +53,13 @@ async function runUpdate(): Promise<void> {
       renderWidget: (info) => renderUpcomingWidget(info),
     }),
   ]);
+  if (hash) {
+    try {
+      await AsyncStorage.setItem(HASH_KEY, hash);
+    } catch {
+      // best effort
+    }
+  }
 }
 
 async function updateAll(): Promise<void> {

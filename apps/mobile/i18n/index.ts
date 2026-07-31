@@ -51,6 +51,66 @@ export const NAMESPACES = [
   'person',
 ] as const;
 
+// i18next v4 resolves plural suffixes (_one/_other/...) through Intl.PluralRules.
+// Hermes on Android can ship without it; i18next then silently downgrades to the
+// v3 suffix scheme (_plural/...), our locale files only define v4 suffixes, and
+// every pluralized string renders its raw key (e.g. "pastMonthsAgo"). Shim the
+// minimal cardinal select() for the locales we ship when the API is missing.
+const PLURAL_RULES: Record<string, { categories: string[]; select: (n: number) => string }> = {
+  en: { categories: ['one', 'other'], select: (n) => (n === 1 ? 'one' : 'other') },
+  de: { categories: ['one', 'other'], select: (n) => (n === 1 ? 'one' : 'other') },
+  es: { categories: ['one', 'other'], select: (n) => (n === 1 ? 'one' : 'other') },
+  it: { categories: ['one', 'other'], select: (n) => (n === 1 ? 'one' : 'other') },
+  pt: { categories: ['one', 'other'], select: (n) => (n === 1 ? 'one' : 'other') },
+  fr: { categories: ['one', 'other'], select: (n) => (n === 0 || n === 1 ? 'one' : 'other') },
+  hi: { categories: ['one', 'other'], select: (n) => (n === 0 || n === 1 ? 'one' : 'other') },
+  ar: {
+    categories: ['zero', 'one', 'two', 'few', 'many', 'other'],
+    select: (n) =>
+      n === 0
+        ? 'zero'
+        : n === 1
+          ? 'one'
+          : n === 2
+            ? 'two'
+            : n % 100 >= 3 && n % 100 <= 10
+              ? 'few'
+              : n % 100 >= 11 && n % 100 <= 99
+                ? 'many'
+                : 'other',
+  },
+  tr: { categories: ['other'], select: () => 'other' },
+  id: { categories: ['other'], select: () => 'other' },
+  ja: { categories: ['other'], select: () => 'other' },
+  ko: { categories: ['other'], select: () => 'other' },
+  zh: { categories: ['other'], select: () => 'other' },
+};
+
+function installPluralRulesShim(): void {
+  const g = globalThis as any;
+  if (typeof g.Intl?.PluralRules === 'function') return;
+  g.Intl = g.Intl ?? {};
+  g.Intl.PluralRules = class PluralRulesShim {
+    private lang: string;
+    constructor(locales?: string | string[]) {
+      const tag = String((Array.isArray(locales) ? locales[0] : locales) ?? 'en').toLowerCase();
+      this.lang = tag.split('-')[0];
+    }
+    select(n: number): string {
+      return (PLURAL_RULES[this.lang] ?? PLURAL_RULES.en).select(Math.abs(n));
+    }
+    resolvedOptions() {
+      return {
+        locale: this.lang,
+        type: 'cardinal',
+        pluralCategories: (PLURAL_RULES[this.lang] ?? PLURAL_RULES.en).categories,
+      };
+    }
+  };
+}
+
+installPluralRulesShim();
+
 i18n.use(initReactI18next).init({
   resources: {
     en: {

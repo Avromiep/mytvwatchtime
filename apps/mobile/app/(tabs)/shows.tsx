@@ -344,6 +344,7 @@ function WatchList() {
   const rowsRef = useRef<WatchRow[]>([]);
   const pendingPrepend = useRef<{ height: number; offset: number } | null>(null);
   const pastFetchGate = useRef(0);
+  const topArmed = useRef(true);
   const maybeFetchPast = useCallback(() => {
     if (!canFetchPast || pastQuery.isFetchingNextPage) return;
     const now = Date.now();
@@ -358,9 +359,20 @@ function WatchList() {
   const onScroll = useCallback((e: any) => {
     offsetRef.current = e.nativeEvent.contentOffset.y;
   }, []);
+  // Latched level-trigger: fire ONE fetch per arrival at the top, re-arming only
+  // after the offset leaves the threshold. Without the latch, an offset pinned in
+  // the zone (empty/fully-deduped page, failed fetch, or the spacer anchored at 0
+  // via maintainVisibleContentPosition) refires fetchNextPage every cooldown tick
+  // for as long as the user sits at the top.
   useEffect(() => {
     const id = setInterval(() => {
-      if (offsetRef.current < 250) maybeFetchPast();
+      if (offsetRef.current >= 250) {
+        topArmed.current = true;
+        return;
+      }
+      if (!topArmed.current) return;
+      topArmed.current = false;
+      maybeFetchPast();
     }, 500);
     return () => clearInterval(id);
   }, [maybeFetchPast]);
@@ -587,6 +599,7 @@ function Upcoming() {
   const rowsRef = useRef<UpcomingRow[]>([]);
   const pendingPrepend = useRef<{ height: number; offset: number } | null>(null);
   const pastFetchGate = useRef(0);
+  const topArmed = useRef(true);
   const maybeFetchPast = useCallback(() => {
     if (!canFetchPast || pastQuery.isFetchingNextPage) return;
     const now = Date.now();
@@ -604,11 +617,19 @@ function Upcoming() {
   // Level-triggered top detection: edge-triggered approaches (onStartReached,
   // onScroll crossings) are flaky on web — after the anchor restore the offset can
   // sit inside the threshold with no further events, forcing a scroll-down-and-up
-  // dance. A cheap interval just looks at the current position: near the top →
-  // load (cooldown-capped), away from the top → does nothing. No event dependence.
+  // dance. A cheap interval just looks at the current position. It is latched
+  // (topArmed): ONE fetch per arrival at the top, re-arming only once the offset
+  // leaves the threshold — otherwise an offset pinned near 0 (empty/deduped page,
+  // failed fetch, anchored spacer) refires forever while the user sits at the top.
   useEffect(() => {
     const id = setInterval(() => {
-      if (offsetRef.current < 250) maybeFetchPast();
+      if (offsetRef.current >= 250) {
+        topArmed.current = true;
+        return;
+      }
+      if (!topArmed.current) return;
+      topArmed.current = false;
+      maybeFetchPast();
     }, 500);
     return () => clearInterval(id);
   }, [maybeFetchPast]);

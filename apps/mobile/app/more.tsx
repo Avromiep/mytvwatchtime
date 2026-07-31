@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { ActivityIndicator, Dimensions, FlatList, ScrollView, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
+import { Image } from 'expo-image';
 import { MediaType } from '@tvwatch/shared';
 import { Header } from '../components/Header';
 import { PosterCard, cardProgress, cardYear } from '../components/cards';
@@ -163,6 +164,41 @@ export default function MoreScreen() {
     rows.push({ key: `row_${i}`, cards: items.slice(i, i + cols) });
   }
 
+  // Gate the grid on the first screenful of posters: every cell mounts at once and,
+  // on a cold image cache, the placeholders sit empty for ~1s and then all pop in
+  // together. Prefetching the visible rows first shows the spinner a beat longer,
+  // then the grid appears with its posters (mirrors movies.tsx cache warming).
+  const preloadKey = items
+    .slice(0, cols * 4)
+    .map((it) => it.posterUrl ?? it.images?.poster)
+    .filter(Boolean)
+    .join('|');
+  const [postersReady, setPostersReady] = useState(false);
+  useEffect(() => {
+    if (!preloadKey) {
+      setPostersReady(true);
+      return;
+    }
+    let alive = true;
+    setPostersReady(false);
+    // Fail-safe: never trap the grid behind a stalled prefetch.
+    const failSafe = setTimeout(() => {
+      if (alive) setPostersReady(true);
+    }, 2000);
+    Image.prefetch(preloadKey.split('|'))
+      .catch(() => undefined)
+      .finally(() => {
+        if (alive) {
+          clearTimeout(failSafe);
+          setPostersReady(true);
+        }
+      });
+    return () => {
+      alive = false;
+      clearTimeout(failSafe);
+    };
+  }, [preloadKey]);
+
   return (
     <Screen>
       <Header title={title} showBack />
@@ -184,13 +220,16 @@ export default function MoreScreen() {
           />
         ))}
       </ScrollView>
-      {loading ? (
+      {loading || !postersReady ? (
         <Spinner />
       ) : (
         <FlatList
           key={cols}
           data={rows}
           keyExtractor={(r) => r.key}
+          initialNumToRender={cols * 4}
+          maxToRenderPerBatch={cols * 4}
+          windowSize={7}
           contentContainerStyle={{
             padding: spacing.lg,
             maxWidth: 1200,
