@@ -219,54 +219,73 @@ export class TrackingService {
 
     // Batched: the old per-episode markEpisodeWatched loop cost ~8 queries + a badge
     // evaluation + 2 Redis keyspace scans PER EPISODE on a single tap.
-    const existing = await this.prisma.userEpisodeStatus.findMany({
-      where: { userId, episodeId: { in: episodeIds } },
-      select: { episodeId: true, watched: true },
-    });
-    const existingById = new Map(existing.map((s) => [s.episodeId, s]));
-    // Mirrors markEpisodeWatched's upsert: create missing rows, flip unwatched ones;
-    // already-watched rows stay untouched (watchedAt keeps the FIRST watch date).
-    const toCreate = season.episodes.filter((e) => !existingById.has(e.id));
-    const toMark = season.episodes.filter((e) => existingById.get(e.id)?.watched === false);
-    const newlyWatched = [...toCreate, ...toMark];
+    let newlyWatched: typeof season.episodes = [];
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        newlyWatched = await this.prisma.$transaction(
+          async (tx) => {
+            const existing = await tx.userEpisodeStatus.findMany({
+              where: { userId, episodeId: { in: episodeIds } },
+              select: { episodeId: true, watched: true },
+            });
+            const existingById = new Map(existing.map((status) => [status.episodeId, status]));
+            // Mirrors markEpisodeWatched's upsert: create missing rows, flip unwatched ones;
+            // already-watched rows stay untouched (watchedAt keeps the FIRST watch date).
+            const toCreate = season.episodes.filter((episode) => !existingById.has(episode.id));
+            const toMark = season.episodes.filter(
+              (episode) => existingById.get(episode.id)?.watched === false,
+            );
+            const transitioned = [...toCreate, ...toMark];
+
+            if (toCreate.length) {
+              await tx.userEpisodeStatus.createMany({
+                data: toCreate.map((episode) => ({
+                  userId,
+                  episodeId: episode.id,
+                  watched: true,
+                  watchedAt: now,
+                  watchCount: 1,
+                })),
+              });
+            }
+            if (toMark.length) {
+              await tx.userEpisodeStatus.updateMany({
+                where: {
+                  userId,
+                  episodeId: { in: toMark.map((episode) => episode.id) },
+                  watched: false,
+                },
+                data: { watched: true, watchedAt: now, watchCount: 1 },
+              });
+            }
+            if (transitioned.length) {
+              await tx.watchHistory.createMany({
+                data: transitioned.map((episode) => ({
+                  userId,
+                  mediaId,
+                  mediaType: MediaType.SHOW,
+                  episodeId: episode.id,
+                  seasonNumber: season.number,
+                  episodeNumber: episode.number,
+                  runtimeMinutes: episode.runtimeMinutes,
+                  watchedAt: now,
+                })),
+              });
+            }
+            return transitioned;
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
+        break;
+      } catch (error) {
+        const isRetryable =
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          (error.code === 'P2002' || error.code === 'P2034');
+        if (!isRetryable || attempt === 2) throw error;
+      }
+    }
 
     if (newlyWatched.length) {
-      const ops: Prisma.PrismaPromise<any>[] = [
-        this.prisma.watchHistory.createMany({
-          data: newlyWatched.map((e) => ({
-            userId,
-            mediaId,
-            mediaType: MediaType.SHOW,
-            episodeId: e.id,
-            seasonNumber: season.number,
-            episodeNumber: e.number,
-            runtimeMinutes: e.runtimeMinutes,
-            watchedAt: now,
-          })),
-        }),
-      ];
-      if (toCreate.length) {
-        ops.unshift(
-          this.prisma.userEpisodeStatus.createMany({
-            data: toCreate.map((e) => ({
-              userId,
-              episodeId: e.id,
-              watched: true,
-              watchedAt: now,
-              watchCount: 1,
-            })),
-          }),
-        );
-      }
-      if (toMark.length) {
-        ops.unshift(
-          this.prisma.userEpisodeStatus.updateMany({
-            where: { userId, episodeId: { in: toMark.map((e) => e.id) }, watched: false },
-            data: { watched: true, watchedAt: now, watchCount: 1 },
-          }),
-        );
-      }
-      await this.prisma.$transaction(ops);
       await this.bumpShowCount(userId, mediaId, newlyWatched.length, now);
       // One event for the whole season: badge evaluation and stats invalidation are
       // user-level + idempotent, and the leaderboard bust is debounced — the old loop

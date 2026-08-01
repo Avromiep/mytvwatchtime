@@ -571,8 +571,9 @@ export class ImportService {
   async confirm(userId: string, importId: string) {
     const imp = await this.prisma.import.findFirst({ where: { id: importId, userId } });
     if (!imp) throw new NotFoundException('Import not found');
-    if (imp.status !== 'READY_FOR_REVIEW') {
-      throw new BadRequestException(`Import is not ready for review (status=${imp.status})`);
+    const isRetryableApplyFailure = imp.status === 'FAILED' && imp.processedAt != null;
+    if (imp.status !== 'READY_FOR_REVIEW' && !isRetryableApplyFailure) {
+      throw new BadRequestException(`Import cannot be confirmed (status=${imp.status})`);
     }
     await this.prisma.import.update({
       where: { id: importId },
@@ -615,7 +616,17 @@ export class ImportService {
         where: { id: importId },
         data: { status: 'COMPLETED', completedAt: new Date(), progress: 100 },
       });
-      await this.rebuildShowStatuses(userId, items);
+      // A FAILED retry excludes section-level APPLIED items from `items`. Rebuild from every
+      // episode item in the import so shows completed before the original failure are included.
+      const rebuildItems = await this.prisma.importItem.findMany({
+        where: {
+          importId,
+          sourceEntityType: 'WATCHED_EPISODE',
+          matchedMediaId: { not: null },
+        },
+        select: { sourceEntityType: true, matchedMediaId: true },
+      });
+      await this.rebuildShowStatuses(userId, rebuildItems);
       // The import rewrote the user's whole library: bust the per-user
       // watch-next/upcoming/progress caches AND the for-you ranking (same
       // pattern set as TrackingService.invalidateUserCache), otherwise the
@@ -768,7 +779,79 @@ export class ImportService {
 
     // --- WATCHED EPISODES ---
     if (epItemsGuarded.length) {
-      const episodeIds = epItemsGuarded.map((it) => it.matchedEpisodeId);
+      const stagedEpisodeIds = epItemsGuarded.map((it) => it.matchedEpisodeId as string);
+      const stagedEpisodes = await this.prisma.episode.findMany({
+        where: { id: { in: stagedEpisodeIds } },
+        select: { id: true },
+      });
+      const existingEpisodeIds = new Set(stagedEpisodes.map((episode) => episode.id));
+
+      // A match can become stale between archive processing and confirmation when metadata
+      // hydration/remapping replaces an episode row. Repair regular episodes strictly by the
+      // already-authoritative show + S/E identity. Embedded specials must never use S/E
+      // fallback because TVDB and TMDB can share those coordinates with a regular episode.
+      const repairedItems: any[] = [];
+      const unresolvedItems: any[] = [];
+      for (const item of epItemsGuarded) {
+        if (existingEpisodeIds.has(item.matchedEpisodeId)) continue;
+        const normalized: any = item.normalizedData ?? {};
+        const seasonNumber = Number(normalized.season);
+        const episodeNumber = Number(normalized.episode);
+        const canRepairByPosition =
+          normalized.special !== true &&
+          Number.isInteger(seasonNumber) &&
+          Number.isInteger(episodeNumber);
+        const replacement = canRepairByPosition
+          ? await this.prisma.episode.findFirst({
+              where: {
+                season: { show: { mediaId: item.matchedMediaId }, number: seasonNumber },
+                number: episodeNumber,
+              },
+              select: { id: true },
+            })
+          : null;
+
+        if (replacement) {
+          this.logger.warn(
+            `apply guard: remapped stale episode ${item.matchedEpisodeId} to ${replacement.id} for import item ${item.id}`,
+          );
+          item.matchedEpisodeId = replacement.id;
+          repairedItems.push(item);
+        } else {
+          this.logger.warn(
+            `apply guard: skipping import item ${item.id} because episode ${item.matchedEpisodeId} no longer exists`,
+          );
+          unresolvedItems.push(item);
+        }
+      }
+
+      if (repairedItems.length) {
+        await Promise.all(
+          repairedItems.map((item) =>
+            this.prisma.importItem.update({
+              where: { id: item.id },
+              data: { matchedEpisodeId: item.matchedEpisodeId, errorMessage: null },
+            }),
+          ),
+        );
+      }
+      if (unresolvedItems.length) {
+        const unresolvedIds = unresolvedItems.map((item) => item.id);
+        await this.prisma.importItem.updateMany({
+          where: { id: { in: unresolvedIds } },
+          data: {
+            status: 'SKIPPED',
+            matchedEpisodeId: null,
+            errorMessage: null,
+          },
+        });
+        for (const item of unresolvedItems) item.matchedEpisodeId = null;
+        skipped += unresolvedItems.length;
+      }
+
+      const unresolvedIds = new Set(unresolvedItems.map((item) => item.id));
+      const applicableEpItems = epItemsGuarded.filter((item) => !unresolvedIds.has(item.id));
+      const episodeIds = applicableEpItems.map((item) => item.matchedEpisodeId as string);
       const [episodeData, existingWatched] = await Promise.all([
         this.prisma.episode.findMany({
           where: { id: { in: episodeIds } },
@@ -793,7 +876,7 @@ export class ImportService {
       // even when the two files spell the show title differently (→ different normTitle,
       // → not merged earlier, but same matchedEpisodeId here).
       const watchCountByEpisode = new Map<string, number>();
-      for (const it of epItemsGuarded) {
+      for (const it of applicableEpItems) {
         const c = Math.max(1, Number(it.normalizedData?.watchCount) || 1);
         watchCountByEpisode.set(
           it.matchedEpisodeId,
@@ -809,7 +892,7 @@ export class ImportService {
       const bumpUpdates: { id: string; watchCount: number }[] = [];
       let sectionCreated = 0;
       let sectionBumped = 0;
-      for (const it of epItemsGuarded) {
+      for (const it of applicableEpItems) {
         const epId = it.matchedEpisodeId;
         const importedCount = watchCountByEpisode.get(epId) ?? 1;
 

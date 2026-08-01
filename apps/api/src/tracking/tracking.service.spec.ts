@@ -1,5 +1,56 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { TrackingService } from './tracking.service';
+
+describe('TrackingService.markSeasonWatched concurrency', () => {
+  it('retries a raced insert and treats an already-completed watch as a no-op', async () => {
+    const episode = { id: 'e1', number: 1, runtimeMinutes: 45 };
+    const prisma: any = {
+      season: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'season-1',
+          number: 1,
+          show: { mediaId: 'media-1' },
+          episodes: [episode],
+        }),
+      },
+      userEpisodeStatus: {
+        findMany: jest
+          .fn()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ episodeId: 'e1', watched: true }]),
+        createMany: jest.fn().mockRejectedValueOnce(
+          new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+            code: 'P2002',
+            clientVersion: '5.22.0',
+          }),
+        ),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      watchHistory: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    };
+    prisma.$transaction = jest.fn(async (callback: (tx: any) => Promise<unknown>) =>
+      callback(prisma),
+    );
+    const events = { emit: jest.fn() };
+    const redis = {
+      delByPattern: jest.fn().mockResolvedValue(0),
+      del: jest.fn().mockResolvedValue(0),
+    };
+    const service = new TrackingService(prisma, events as any, redis as any);
+
+    await expect(service.markSeasonWatched('u1', 'season-1')).resolves.toEqual({
+      watched: true,
+      count: 1,
+    });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+    expect(prisma.$transaction).toHaveBeenLastCalledWith(expect.any(Function), {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+    });
+    expect(prisma.watchHistory.createMany).not.toHaveBeenCalled();
+    expect(events.emit).not.toHaveBeenCalled();
+  });
+});
 
 /** unwatchEpisodeOnce / unwatchSeasonOnce: undo ONE viewing, stay watched. */
 describe('TrackingService unwatch-once', () => {

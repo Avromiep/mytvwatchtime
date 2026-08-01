@@ -25,10 +25,20 @@ interface Props {
   labels: WidgetLabels;
   tokens: Tokens;
   height: number;
+  images: ReadonlyMap<string, string>;
 }
 
-function WatchNextRow({ item, tokens }: { item: WatchNextItemDto; tokens: Tokens }) {
-  const still = widgetImage(item.episode.stillUrl ?? item.backdropUrl, 'w300');
+function WatchNextRow({
+  item,
+  tokens,
+  images,
+}: {
+  item: WatchNextItemDto;
+  tokens: Tokens;
+  images: ReadonlyMap<string, string>;
+}) {
+  const remoteStill = widgetImage(item.episode.stillUrl ?? item.backdropUrl, 'w300');
+  const still = remoteStill ? images.get(remoteStill) : undefined;
   return (
     <FlexWidget
       clickAction="OPEN_URI"
@@ -94,7 +104,7 @@ function WatchNextRow({ item, tokens }: { item: WatchNextItemDto; tokens: Tokens
   );
 }
 
-export function WatchNextWidget({ state, labels, tokens, height }: Props) {
+export function WatchNextWidget({ state, labels, tokens, height, images }: Props) {
   const listHeight = height - PAD * 2 - HEADER_H - LIST_TOP_GAP;
   const items = state.status === 'ok' ? state.data.slice(0, MAX_ITEMS) : [];
   // ListWidget items must not exceed the list height — fall back to a clipped
@@ -115,7 +125,12 @@ export function WatchNextWidget({ state, labels, tokens, height }: Props) {
       <FlexWidget
         clickAction="OPEN_URI"
         clickActionData={{ uri: SHOWS_URI }}
-        style={{ flexDirection: 'row', alignItems: 'center', height: HEADER_H, width: 'match_parent' }}
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          height: HEADER_H,
+          width: 'match_parent',
+        }}
       >
         <FlexWidget style={{ flex: 1 }}>
           <TextWidget
@@ -133,17 +148,22 @@ export function WatchNextWidget({ state, labels, tokens, height }: Props) {
 
       {items.length > 0 ? (
         useList ? (
-          <ListWidget style={{ width: 'match_parent', height: listHeight, marginTop: LIST_TOP_GAP }}>
+          <ListWidget
+            style={{ width: 'match_parent', height: listHeight, marginTop: LIST_TOP_GAP }}
+          >
             {items.map((it) => (
-              <FlexWidget key={it.episode.id} style={{ height: ROW_H + ROW_GAP, width: 'match_parent' }}>
-                <WatchNextRow item={it} tokens={tokens} />
+              <FlexWidget
+                key={it.episode.id}
+                style={{ height: ROW_H + ROW_GAP, width: 'match_parent' }}
+              >
+                <WatchNextRow item={it} tokens={tokens} images={images} />
               </FlexWidget>
             ))}
           </ListWidget>
         ) : (
           items.slice(0, fallbackRows).map((it) => (
             <FlexWidget key={it.episode.id} style={{ marginTop: ROW_GAP, width: 'match_parent' }}>
-              <WatchNextRow item={it} tokens={tokens} />
+              <WatchNextRow item={it} tokens={tokens} images={images} />
             </FlexWidget>
           ))
         )
@@ -155,7 +175,11 @@ export function WatchNextWidget({ state, labels, tokens, height }: Props) {
         >
           <TextWidget
             text={state.status === 'auth' ? labels.signIn : labels.emptyWatchNext}
-            style={{ color: hex(state.status === 'auth' ? tokens.primary : tokens.textMuted), fontSize: 12, fontWeight: '500' }}
+            style={{
+              color: hex(state.status === 'auth' ? tokens.primary : tokens.textMuted),
+              fontSize: 12,
+              fontWeight: '500',
+            }}
           />
         </FlexWidget>
       )}

@@ -64,6 +64,7 @@ Read this file BEFORE touching anything under `apps/api/src/import/**`.
 
 ## Batched apply
 - Batched apply: `createMany` in 5000-row chunks, **one raised-timeout `$transaction` per section** (episodes/movies/watchlist/favorites/lists), not one giant transaction — each section marks its items `APPLIED` so BullMQ/manual retries are idempotent. Apply timeouts via `IMPORT_TX_TIMEOUT_MS` (default 60s).
+- Episode matches are revalidated immediately before apply. If metadata replacement removed a staged episode row, regular episodes are remapped strictly within the already-matched show by S/E; embedded specials never use S/E fallback. Irrecoverable stale rows silently become `SKIPPED` instead of aborting confirmation; confirmation remains terminal and completes all other valid sections. A `FAILED` apply can be confirmed again: already-`APPLIED` sections remain untouched and all affected show-progress rows are rebuilt after success.
 - `<nil>` values are normalized to null (not 0).
 - After import confirm: `rebuildShowStatuses` recalculates watched/total counts.
 - Configurable worker concurrency via `IMPORT_WORKER_CONCURRENCY` env.

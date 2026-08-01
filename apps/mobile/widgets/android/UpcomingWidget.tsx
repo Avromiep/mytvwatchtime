@@ -29,10 +29,21 @@ interface Props {
   labels: WidgetLabels;
   tokens: Tokens;
   height: number;
+  images: ReadonlyMap<string, string>;
 }
 
-function UpcomingRow({ item, tokens }: { item: UpcomingItemDto; tokens: Tokens }) {
+function UpcomingRow({
+  item,
+  tokens,
+  images,
+}: {
+  item: UpcomingItemDto;
+  tokens: Tokens;
+  images: ReadonlyMap<string, string>;
+}) {
   const dateLabel = shortAirDate(item.airDate);
+  const remotePoster = widgetImage(item.posterUrl, 'w185');
+  const poster = remotePoster ? images.get(remotePoster) : undefined;
   return (
     <FlexWidget
       clickAction="OPEN_URI"
@@ -47,9 +58,9 @@ function UpcomingRow({ item, tokens }: { item: UpcomingItemDto; tokens: Tokens }
         width: 'match_parent',
       }}
     >
-      {item.posterUrl ? (
+      {poster ? (
         <ImageWidget
-          image={img(widgetImage(item.posterUrl, 'w185')!)}
+          image={img(poster)}
           imageWidth={37}
           imageHeight={56}
           radius={6}
@@ -89,7 +100,14 @@ function UpcomingRow({ item, tokens }: { item: UpcomingItemDto; tokens: Tokens }
           maxLines={1}
           style={{ color: hex(tokens.textMuted), fontSize: 10, fontWeight: '500', marginTop: 2 }}
         />
-        <FlexWidget style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2, width: 'match_parent' }}>
+        <FlexWidget
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            marginTop: 2,
+            width: 'match_parent',
+          }}
+        >
           <FlexWidget style={{ flex: 1 }}>
             <TextWidget
               text={`${dateLabel}${item.airTime ? ` · ${item.airTime}` : ''}`}
@@ -115,13 +133,18 @@ type FlatRow =
   | { type: 'header'; key: string; title: string }
   | { type: 'item'; key: string; item: UpcomingItemDto };
 
-export function UpcomingWidget({ state, labels, tokens, height }: Props) {
+export function UpcomingWidget({ state, labels, tokens, height, images }: Props) {
   // Full near-term content (scrollable); section headers interleave with their rows.
   const rows: FlatRow[] = [];
   if (state.status === 'ok') {
     for (const g of state.data) {
-      rows.push({ type: 'header', key: `h_${g.key}`, title: upcomingGroupTitle(g.key, labels, g.label) });
-      for (const it of g.items.slice(0, MAX_PER_GROUP)) rows.push({ type: 'item', key: `c_${it.id}`, item: it });
+      rows.push({
+        type: 'header',
+        key: `h_${g.key}`,
+        title: upcomingGroupTitle(g.key, labels, g.label),
+      });
+      for (const it of g.items.slice(0, MAX_PER_GROUP))
+        rows.push({ type: 'item', key: `c_${it.id}`, item: it });
     }
   }
 
@@ -153,7 +176,12 @@ export function UpcomingWidget({ state, labels, tokens, height }: Props) {
       <FlexWidget
         clickAction="OPEN_URI"
         clickActionData={{ uri: SHOWS_URI }}
-        style={{ flexDirection: 'row', alignItems: 'center', height: HEADER_H, width: 'match_parent' }}
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          height: HEADER_H,
+          width: 'match_parent',
+        }}
       >
         <FlexWidget style={{ flex: 1 }}>
           <TextWidget
@@ -171,7 +199,9 @@ export function UpcomingWidget({ state, labels, tokens, height }: Props) {
 
       {rows.length > 0 ? (
         useList ? (
-          <ListWidget style={{ width: 'match_parent', height: listHeight, marginTop: LIST_TOP_GAP }}>
+          <ListWidget
+            style={{ width: 'match_parent', height: listHeight, marginTop: LIST_TOP_GAP }}
+          >
             {rows.map((r, i) =>
               r.type === 'header' ? (
                 <FlexWidget
@@ -185,12 +215,17 @@ export function UpcomingWidget({ state, labels, tokens, height }: Props) {
                 >
                   <TextWidget
                     text={r.title.toUpperCase()}
-                    style={{ color: hex(tokens.textMuted), fontSize: 10, fontWeight: '700', letterSpacing: 1 }}
+                    style={{
+                      color: hex(tokens.textMuted),
+                      fontSize: 10,
+                      fontWeight: '700',
+                      letterSpacing: 1,
+                    }}
                   />
                 </FlexWidget>
               ) : (
                 <FlexWidget key={r.key} style={{ height: ROW_H + ROW_GAP, width: 'match_parent' }}>
-                  <UpcomingRow item={r.item} tokens={tokens} />
+                  <UpcomingRow item={r.item} tokens={tokens} images={images} />
                 </FlexWidget>
               ),
             )}
@@ -200,16 +235,26 @@ export function UpcomingWidget({ state, labels, tokens, height }: Props) {
             r.type === 'header' ? (
               <FlexWidget
                 key={r.key}
-                style={{ height: GROUP_H + (i === 0 ? 0 : SECTION_GAP), paddingTop: i === 0 ? 0 : SECTION_GAP, justifyContent: 'flex-end', width: 'match_parent' }}
+                style={{
+                  height: GROUP_H + (i === 0 ? 0 : SECTION_GAP),
+                  paddingTop: i === 0 ? 0 : SECTION_GAP,
+                  justifyContent: 'flex-end',
+                  width: 'match_parent',
+                }}
               >
                 <TextWidget
                   text={r.title.toUpperCase()}
-                  style={{ color: hex(tokens.textMuted), fontSize: 10, fontWeight: '700', letterSpacing: 1 }}
+                  style={{
+                    color: hex(tokens.textMuted),
+                    fontSize: 10,
+                    fontWeight: '700',
+                    letterSpacing: 1,
+                  }}
                 />
               </FlexWidget>
             ) : (
               <FlexWidget key={r.key} style={{ marginTop: ROW_GAP, width: 'match_parent' }}>
-                <UpcomingRow item={r.item} tokens={tokens} />
+                <UpcomingRow item={r.item} tokens={tokens} images={images} />
               </FlexWidget>
             ),
           )
@@ -222,7 +267,11 @@ export function UpcomingWidget({ state, labels, tokens, height }: Props) {
         >
           <TextWidget
             text={state.status === 'auth' ? labels.signIn : labels.emptyUpcoming}
-            style={{ color: hex(state.status === 'auth' ? tokens.primary : tokens.textMuted), fontSize: 12, fontWeight: '500' }}
+            style={{
+              color: hex(state.status === 'auth' ? tokens.primary : tokens.textMuted),
+              fontSize: 12,
+              fontWeight: '500',
+            }}
           />
         </FlexWidget>
       )}

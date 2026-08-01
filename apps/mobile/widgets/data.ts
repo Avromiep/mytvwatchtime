@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Image } from 'expo-image';
 import {
   firstNetwork,
   UPCOMING_NEAR_TERM_BUCKETS,
@@ -61,15 +62,14 @@ export function upcomingGroupTitle(key: string, labels: WidgetLabels, fallback: 
 }
 
 export type WidgetFetchState<T> =
-  | { status: 'ok'; data: T }
-  | { status: 'auth' }
-  | { status: 'error' };
+  { status: 'ok'; data: T } | { status: 'auth' } | { status: 'error' };
 
 // Widget renders happen once per home-screen instance and headless fetches have no
 // natural timeout — bound every request and memoize results briefly so N widget
 // instances rendered in the same update round share ONE network call.
 const WIDGET_FETCH_TIMEOUT_MS = 15000;
 const WIDGET_CACHE_TTL_MS = 30000;
+const WIDGET_IMAGE_PREFETCH_TIMEOUT_MS = 6000;
 
 function withTimeout<T>(p: Promise<T>): Promise<T> {
   return Promise.race([
@@ -91,7 +91,10 @@ function toState<T>(fn: () => Promise<T>): Promise<WidgetFetchState<T>> {
 
 const resultCache = new Map<string, { at: number; value: WidgetFetchState<any> }>();
 
-function cached<T>(key: string, fn: () => Promise<WidgetFetchState<T>>): Promise<WidgetFetchState<T>> {
+function cached<T>(
+  key: string,
+  fn: () => Promise<WidgetFetchState<T>>,
+): Promise<WidgetFetchState<T>> {
   const hit = resultCache.get(key);
   if (hit && Date.now() - hit.at < WIDGET_CACHE_TTL_MS) return Promise.resolve(hit.value);
   return fn().then((value) => {
@@ -111,7 +114,10 @@ export function invalidateWidgetDataCache(): void {
 // the last successful payload and fall back to it on transient failures. A genuine
 // auth failure (401 after a failed refresh) still drops the cache (logout / expired
 // refresh token must not leave personal data on the home screen).
-const DISK_CACHE_KEYS = { watchNext: 'widget:lastGood.watchNext', upcoming: 'widget:lastGood.upcoming' } as const;
+const DISK_CACHE_KEYS = {
+  watchNext: 'widget:lastGood.watchNext',
+  upcoming: 'widget:lastGood.upcoming',
+} as const;
 
 async function readLastGood<T>(key: string): Promise<T | null> {
   try {
@@ -166,16 +172,18 @@ export async function fetchWatchNextItems(): Promise<WidgetFetchState<WatchNextI
       toState(async () => {
         const res = await api.get<WatchNextResponseDto>('/me/watch-next');
         const seen = new Set<string>();
-        return (res.items ?? [])
-          .filter((it) => {
-            if (it.bucket !== WatchNextBucket.WATCH_NEXT) return false;
-            const k = it.episode?.id;
-            if (!k || seen.has(k)) return false;
-            seen.add(k);
-            return true;
-          })
-          // Compact widget rows show only the first of a joined multi-network string.
-          .map((it) => ({ ...it, network: firstNetwork(it.network) }));
+        return (
+          (res.items ?? [])
+            .filter((it) => {
+              if (it.bucket !== WatchNextBucket.WATCH_NEXT) return false;
+              const k = it.episode?.id;
+              if (!k || seen.has(k)) return false;
+              seen.add(k);
+              return true;
+            })
+            // Compact widget rows show only the first of a joined multi-network string.
+            .map((it) => ({ ...it, network: firstNetwork(it.network) }))
+        );
       }),
     ),
   );
@@ -189,13 +197,15 @@ export async function fetchUpcomingGroups(): Promise<WidgetFetchState<UpcomingGr
       toState(async () => {
         const res = await api.get<{ groups: UpcomingGroupDto[] }>('/me/upcoming');
         const wanted = new Set<string>(UPCOMING_NEAR_TERM_BUCKETS);
-        return (res.groups ?? [])
-          .filter((g) => wanted.has(g.key) && g.items?.length)
-          // Compact widget rows show only the first of a joined multi-network string.
-          .map((g) => ({
-            ...g,
-            items: g.items.map((it) => ({ ...it, network: firstNetwork(it.network) })),
-          }));
+        return (
+          (res.groups ?? [])
+            .filter((g) => wanted.has(g.key) && g.items?.length)
+            // Compact widget rows show only the first of a joined multi-network string.
+            .map((g) => ({
+              ...g,
+              items: g.items.map((it) => ({ ...it, network: firstNetwork(it.network) })),
+            }))
+        );
       }),
     ),
   );
@@ -206,7 +216,11 @@ export function pad2(n?: number | null): string {
 }
 
 /** "S02 E05" episode code. */
-export function episodeCode(season?: number | null, episode?: number | null, separator = ' '): string {
+export function episodeCode(
+  season?: number | null,
+  episode?: number | null,
+  separator = ' ',
+): string {
   return `S${pad2(season)}${separator}E${pad2(episode)}`;
 }
 
@@ -222,7 +236,46 @@ export const SHOWS_URI = 'tvwatchtime://shows';
 
 /** Rewrite a TMDB image URL to a smaller variant for widget rendering (the widget
  *  library downloads every remote bitmap uncached). Non-TMDB URLs pass through. */
-export function widgetImage(url: string | null | undefined, size: 'w185' | 'w300'): string | undefined {
+export function widgetImage(
+  url: string | null | undefined,
+  size: 'w185' | 'w300',
+): string | undefined {
   if (!url) return undefined;
   return url.replace(/\/t\/p\/(?:w\d+|original)\//, `/t/p/${size}/`);
+}
+
+/** Resolve remote artwork to Expo's persistent disk cache before handing it to
+ * the Android widget library. That library otherwise downloads every URL
+ * synchronously for every light/dark render and cannot reuse the result. Local
+ * files also keep working when a last-good payload contains an expired URL. */
+export async function cacheWidgetImages(
+  urls: Array<string | null | undefined>,
+): Promise<ReadonlyMap<string, string>> {
+  const unique = [...new Set(urls.filter((url): url is string => Boolean(url)))];
+  const resolved = new Map<string, string>();
+
+  const resolveCached = async (url: string): Promise<void> => {
+    try {
+      const path = await Image.getCachePathAsync(url);
+      if (path) resolved.set(url, path.startsWith('file://') ? path : `file://${path}`);
+    } catch {
+      // A missing/temporarily unavailable image must not fail the whole widget.
+    }
+  };
+
+  await Promise.all(unique.map(resolveCached));
+  const missing = unique.filter((url) => !resolved.has(url));
+  if (missing.length) {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Image.prefetch(missing, { cachePolicy: 'disk' }).catch(() => false),
+      new Promise<false>((resolve) => {
+        timeout = setTimeout(() => resolve(false), WIDGET_IMAGE_PREFETCH_TIMEOUT_MS);
+      }),
+    ]);
+    if (timeout) clearTimeout(timeout);
+    await Promise.all(missing.map(resolveCached));
+  }
+
+  return resolved;
 }

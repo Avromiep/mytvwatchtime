@@ -5,7 +5,10 @@ import { ImportService } from './import.service';
  * entity type (a mis-tagged import item or a bad external-id cross-link).
  */
 describe('ImportService.applyBatch — cross-type guard', () => {
-  function makeService(mediaTypes: Record<string, string>) {
+  function makeService(
+    mediaTypes: Record<string, string>,
+    options: { episodes?: any[]; replacementEpisode?: any } = {},
+  ) {
     const prisma: any = {
       mediaItem: {
         findMany: jest.fn(async () =>
@@ -13,10 +16,19 @@ describe('ImportService.applyBatch — cross-type guard', () => {
         ),
       },
       movie: { findMany: jest.fn().mockResolvedValue([]) },
+      episode: {
+        findMany: jest.fn().mockResolvedValue(options.episodes ?? []),
+        findFirst: jest.fn().mockResolvedValue(options.replacementEpisode ?? null),
+      },
+      userEpisodeStatus: { findMany: jest.fn().mockResolvedValue([]) },
       userMovieStatus: { findMany: jest.fn().mockResolvedValue([]) },
+      watchHistory: {},
       customList: { findMany: jest.fn().mockResolvedValue([]) },
       import: { update: jest.fn().mockResolvedValue({}) },
-      importItem: { updateMany: jest.fn().mockResolvedValue({}) },
+      importItem: {
+        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({}),
+      },
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
     const chunked: any[] = [];
@@ -34,7 +46,7 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     (service as any).chunkedCreateMany = jest.fn(async (_tx: any, _model: string, rows: any[]) => {
       chunked.push(...rows);
     });
-    return { service: service as any, chunked };
+    return { service: service as any, prisma, chunked };
   }
 
   const movieItem = (mediaId: string) => ({
@@ -59,5 +71,60 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     const res = await service.applyBatch('u1', 'imp1', [movieItem('movie-1')], 'TVTIME');
     expect(res.created).toBe(1);
     expect(chunked.some((r) => r.mediaId === 'movie-1' && r.watched === true)).toBe(true);
+  });
+
+  const episodeItem = (episodeId: string, normalizedData: Record<string, unknown> = {}) => ({
+    id: 'ep-item-1',
+    sourceEntityType: 'WATCHED_EPISODE',
+    status: 'MATCHED',
+    matchedMediaId: 'show-1',
+    matchedEpisodeId: episodeId,
+    normalizedData: { season: 1, episode: 2, watchCount: 1, ...normalizedData },
+  });
+
+  it('repairs a stale regular-episode match before creating watched rows', async () => {
+    const replacement = {
+      id: 'ep-new',
+      runtimeMinutes: 45,
+      season: { number: 1 },
+    };
+    const { service, prisma, chunked } = makeService(
+      { 'show-1': 'SHOW' },
+      { replacementEpisode: { id: 'ep-new' } },
+    );
+    prisma.episode.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([replacement]);
+
+    const res = await service.applyBatch('u1', 'imp1', [episodeItem('ep-deleted')], 'TVTIME');
+
+    expect(res.created).toBe(1);
+    expect(prisma.importItem.update).toHaveBeenCalledWith({
+      where: { id: 'ep-item-1' },
+      data: { matchedEpisodeId: 'ep-new', errorMessage: null },
+    });
+    expect(chunked.some((row) => row.episodeId === 'ep-new' && row.watched === true)).toBe(true);
+    expect(chunked.some((row) => row.episodeId === 'ep-deleted')).toBe(false);
+  });
+
+  it('skips an irrecoverable stale episode without failing the rest of the import', async () => {
+    const { service, prisma, chunked } = makeService({ 'show-1': 'SHOW' });
+
+    const res = await service.applyBatch(
+      'u1',
+      'imp1',
+      [episodeItem('ep-deleted', { special: true })],
+      'TVTIME',
+    );
+
+    expect(res).toEqual({ created: 0, skipped: 1 });
+    expect(prisma.episode.findFirst).not.toHaveBeenCalled();
+    expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['ep-item-1'] } },
+      data: {
+        status: 'SKIPPED',
+        matchedEpisodeId: null,
+        errorMessage: null,
+      },
+    });
+    expect(chunked.some((row) => row.episodeId)).toBe(false);
   });
 });
