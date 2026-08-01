@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Platform, View, ActivityIndicator } from 'react-native';
+import { InteractionManager, Platform, View, ActivityIndicator } from 'react-native';
 import '../utils/alert-polyfill'; // Web safety-net: routes residual Alert.alert to themed dialog
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -140,18 +140,49 @@ function RootShell() {
 }
 
 /**
- * Detail payloads persist to AsyncStorage so a previously viewed show/movie/
- * episode reopens INSTANTLY after an app restart (stale-while-revalidate:
- * cached render, background refetch, smooth in-place update). Only small
- * detail queries persist — big rails (watch-next, 500-item collections,
- * search/discover) refetch fast and serializing them on every cache write
- * would hammer AsyncStorage. maxAge matches the 24h gcTime on detail queries.
+ * Detail payloads + main-tab first-paint queries persist to AsyncStorage so the
+ * app reopens INSTANTLY after a restart (stale-while-revalidate: cached render,
+ * background refetch, smooth in-place update). The dangers of persisting tabs,
+ * and how they're contained here:
+ *  - Size: Android AsyncStorage caps at 6MB. Auto-paged collections (movies tab)
+ *    are truncated to their first pages at serialize time; bucket/history/past
+ *    pager pages and search/discover-result pages are never persisted.
+ *  - Write amplification: every cache change re-serializes the dehydrated set,
+ *    so it stays lean (details + first paints only) and writes are throttled.
+ *  - Staleness: server invalidates watch-next/upcoming on every user action and
+ *    restored queries refetch in the background on mount; per-user leakage on
+ *    logout is prevented by removeClient() in Gate.
+ *  - Shape drift across app versions: bump `buster` to drop stale restores.
+ * maxAge matches the 24h gcTime on detail queries.
  */
+const MAX_PERSISTED_COLLECTION_PAGES = 2;
 const queryPersister = createAsyncStoragePersister({
   storage: AsyncStorage,
-  throttleTime: 2000,
+  // Short throttle: narrows the window where a killed app's last persisted
+  // snapshot still holds in-flight optimistic mutation state.
+  throttleTime: 1000,
+  serialize: (client) => {
+    // Truncate auto-paged collections to their first pages before serializing —
+    // full histories/watchlists can be thousands of rows (megabytes). The
+    // restored first pages render instantly; useAllPages re-chains the rest.
+    for (const q of client.clientState.queries) {
+      const key = q.queryKey as readonly unknown[];
+      const data = q.state?.data as any;
+      if (
+        (key[0] === 'watchlist' || key[0] === 'favorites' || key[0] === 'history') &&
+        key[1] === 'all' &&
+        Array.isArray(data?.pages) &&
+        data.pages.length > MAX_PERSISTED_COLLECTION_PAGES
+      ) {
+        data.pages = data.pages.slice(0, MAX_PERSISTED_COLLECTION_PAGES);
+        data.pageParams = data.pageParams.slice(0, MAX_PERSISTED_COLLECTION_PAGES);
+      }
+    }
+    return JSON.stringify(client);
+  },
 });
-const PERSISTED_QUERY_ROOTS = new Set([
+/** Detail payloads (24h gcTime) — instant detail screens. */
+const PERSISTED_DETAIL_ROOTS = new Set([
   'show',
   'movie',
   'episode',
@@ -159,6 +190,25 @@ const PERSISTED_QUERY_ROOTS = new Set([
   'episodeSiblings',
   'person',
 ]);
+/** Main-tab first paints. Excludes pager slices (watchNext bucket/history,
+ *  upcoming past) and single-shot variants — those refetch on demand. */
+const isPersistedTabQuery = (key: readonly unknown[]): boolean => {
+  switch (key[0]) {
+    case 'watchNext':
+      return key.length <= 2; // main payload + paused rail
+    case 'upcoming':
+      return key.length === 1;
+    case 'discoverSections':
+    case 'genres':
+      return true;
+    case 'watchlist':
+    case 'favorites':
+    case 'history':
+      return key[1] === 'all'; // movies-tab collections (truncated at serialize)
+    default:
+      return false;
+  }
+};
 
 export default function RootLayout() {
   return (
@@ -175,8 +225,27 @@ export default function RootLayout() {
             dehydrateOptions: {
               shouldDehydrateQuery: (q) =>
                 q.state.status === 'success' &&
-                PERSISTED_QUERY_ROOTS.has(q.queryKey[0] as string),
+                (PERSISTED_DETAIL_ROOTS.has(q.queryKey[0] as string) ||
+                  isPersistedTabQuery(q.queryKey)),
             },
+          }}
+          onSuccess={() => {
+            // A restored snapshot is never trusted as fresh: it can contain
+            // optimistic mutation state captured mid-flight (app backgrounded
+            // within the persister's throttle window, before the server
+            // reconcile landed) — e.g. an episode unwatched right before
+            // closing the app restoring as Watched. Mark everything stale so
+            // mounted queries reconcile in the background; the cached paint
+            // stays on screen and the corrected data swaps in smoothly.
+            //
+            // Deferred until after first-paint interactions settle: invalidating
+            // synchronously on restore fired a refetch storm for every mounted
+            // query on the exact frames where disk-cached images needed the JS
+            // thread for their load events — posters sat blank for seconds on
+            // cold start even though the bytes were already on disk.
+            InteractionManager.runAfterInteractions(() => {
+              void queryClient.invalidateQueries();
+            });
           }}
         >
           <AuthProvider>
