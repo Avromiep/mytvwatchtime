@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
+import { FlatList, InteractionManager, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { MediaType } from '@tvwatch/shared';
@@ -132,15 +132,23 @@ export default function MoviesScreen() {
     return { rows, stickyIndices };
   }, [sections, expanded, cols]);
 
-  // Warm the disk cache for posters BELOW the viewport while the auto-paged queries
-  // append — otherwise each newly mounted row triggers a network fetch + decode on
-  // first scroll-past (the visible freeze/pop-in).
+  // Warm the disk cache for posters just below the viewport while the auto-paged
+  // queries append — otherwise each newly mounted row triggers a network fetch +
+  // decode on first scroll-past (the visible freeze/pop-in).
+  // Deferred + capped: on a cold start with restored cache this fired for EVERY
+  // library poster on the same frames the visible images were loading, starving
+  // them behind hundreds of prefetch jobs (the multi-second blank posters).
   useEffect(() => {
     const urls = sections
       .flatMap((s) => s.items)
       .map((m) => m.posterUrl)
-      .filter((u): u is string => !!u);
-    if (urls.length) Image.prefetch(urls).catch(() => undefined);
+      .filter((u): u is string => !!u)
+      .slice(0, 48);
+    if (!urls.length) return;
+    const task = InteractionManager.runAfterInteractions(() => {
+      Image.prefetch(urls).catch(() => undefined);
+    });
+    return () => task.cancel();
   }, [sections]);
 
   const noData =

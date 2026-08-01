@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
+import { FlatList, InteractionManager, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
@@ -90,12 +90,20 @@ export default function MyShowsScreen() {
   }, [defs, expanded, cols]);
 
   // Warm the disk cache for posters below the viewport (see movies.tsx note).
+  // Deferred + capped: on a cold start with restored cache, prefetching EVERY
+  // library poster on the first frames starved the visible images behind
+  // hundreds of prefetch jobs (the multi-second blank posters).
   useEffect(() => {
     const urls = defs
       .flatMap((s) => s.items)
       .map((m) => m.posterUrl)
-      .filter((u): u is string => !!u);
-    if (urls.length) Image.prefetch(urls).catch(() => undefined);
+      .filter((u): u is string => !!u)
+      .slice(0, 48);
+    if (!urls.length) return;
+    const task = InteractionManager.runAfterInteractions(() => {
+      Image.prefetch(urls).catch(() => undefined);
+    });
+    return () => task.cancel();
   }, [defs]);
 
   const renderItem = useCallback(({ item }: { item: FlatRow }) => {
