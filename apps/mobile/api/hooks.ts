@@ -1910,6 +1910,11 @@ export const useImportItems = (
         pageSize: 500,
       }),
     enabled: !!id,
+    // Import rows are mutable until confirmation. Never let the app-wide 5-minute stale
+    // window preserve an empty snapshot for "All types" while a newly selected entity
+    // filter fetches fresh rows under a different cache key.
+    staleTime: 0,
+    refetchOnMount: 'always',
     // No placeholderData: after a status change / filter switch we'd otherwise briefly show the
     // previous (wrong) filter's rows. Correctness over flicker for the review list.
   });

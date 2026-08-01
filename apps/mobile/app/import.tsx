@@ -493,6 +493,7 @@ function ReviewItems({
         </ScrollView>
       </View>
       <FlatList
+        key={`${statusFilter ?? 'all'}:${entityFilter ?? 'all'}`}
         data={items}
         keyExtractor={(i) => i.id}
         contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: 120 }}
@@ -523,8 +524,15 @@ function ReviewItems({
           );
         }}
         ListEmptyComponent={
-          q.isLoading ? (
+          q.isLoading || q.isFetching ? (
             <Spinner />
+          ) : q.isError ? (
+            <View style={{ padding: spacing.xl, alignItems: 'center', gap: spacing.md }}>
+              <T variant="caption" muted style={{ textAlign: 'center' }}>
+                {t('import:tryAgain')}
+              </T>
+              <Button title={t('common:tryAgain')} variant="ghost" onPress={() => q.refetch()} />
+            </View>
           ) : (
             <T variant="caption" muted style={{ padding: spacing.xl, textAlign: 'center' }}>
               {t('import:noItems')}

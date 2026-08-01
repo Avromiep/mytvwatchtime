@@ -223,7 +223,10 @@ export class ImportService {
     if (!owned) throw new NotFoundException('Import not found');
 
     const page = opts.page || 1;
-    const pageSize = Math.min(opts.pageSize || 50, 200);
+    // The review UI deliberately requests one stable page: offset pagination drifts while
+    // manual resolutions move rows between statuses. Keep the server cap aligned with that
+    // client contract so "All types" cannot silently omit rows beyond the first 200.
+    const pageSize = Math.min(opts.pageSize || 50, 500);
     const where: any = { importId };
     if (opts.status) where.status = opts.status.toUpperCase();
     const entityWhere: any = { ...where };

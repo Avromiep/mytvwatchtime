@@ -29,6 +29,7 @@ describe('ImportService.getItems — entityCounts', () => {
     const res = await service.getItems('u1', 'imp1', {
       status: 'needs_review',
       entity: 'WATCHED_MOVIE',
+      pageSize: 500,
     });
 
     expect(prisma.importItem.groupBy).toHaveBeenCalledWith({
@@ -38,5 +39,6 @@ describe('ImportService.getItems — entityCounts', () => {
     });
     expect(res.entityCounts).toEqual({ WATCHED_EPISODE: 5, WATCHED_MOVIE: 2 });
     expect(res.total).toBe(7);
+    expect(prisma.importItem.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 500 }));
   });
 });

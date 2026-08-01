@@ -753,10 +753,11 @@ export class ImportMatcher {
   }
 
   /**
-   * External-ID-first matching for Trakt exports. Order: TMDB id (local mapping, else light
-   * fetch + upsert) → TVDB id (authority gate above) → IMDB id (local mapping only) → title
-   * fallback via the regular matchMedia path. An id that cannot be resolved NEVER causes a
-   * wrong-title match on its own — title matching only runs when no id resolved at all.
+   * External-ID-first matching for id-carrying exports. Order: TMDB id (local mapping, else
+   * light fetch + upsert) → IMDB id (local mapping, else exact TMDB /find) → TVDB id
+   * (authority gate above) → title fallback. IMDB precedes TVDB because some TV Time movie
+   * rows contain a valid movie IMDB id alongside an unrelated TVDB SERIES id; the entity-kind
+   * scoped IMDB lookup is the safe discriminator in that conflict.
    */
   async matchByExternalIds(
     ids: TraktIds,
@@ -825,13 +826,7 @@ export class ImportMatcher {
       }
     }
 
-    // 2) TVDB id — authority gate (no title fallback inside).
-    if (ids.tvdb) {
-      const r = await this.matchByTvdbId(String(ids.tvdb), title, type, year ?? null);
-      if (r.mediaId) return done(r);
-    }
-
-    // 3) IMDB id — local mapping first, then an exact /find recovery.
+    // 2) IMDB id — local mapping first, then an exact, entity-kind-scoped /find recovery.
     if (ids.imdb) {
       const ext = await this.prisma.externalId.findFirst({
         where: { provider: ExternalProvider.IMDB, providerEntityKind: kind, value: ids.imdb },
@@ -853,6 +848,7 @@ export class ImportMatcher {
                     title,
                     year: year ?? null,
                   });
+            await this.attachExternalId(mediaId, ExternalProvider.IMDB, kind, ids.imdb);
             return done({ mediaId, confidence: 0.9, matchedTitle: title });
           }
         } catch (e) {
@@ -861,6 +857,13 @@ export class ImportMatcher {
           );
         }
       }
+    }
+
+    // 3) TVDB id — authority gate (no title fallback inside). This intentionally runs after
+    //    IMDB so a malformed movie row's TVDB SERIES id cannot preempt its valid IMDB id.
+    if (ids.tvdb) {
+      const r = await this.matchByTvdbId(String(ids.tvdb), title, type, year ?? null);
+      if (r.mediaId) return done(r);
     }
 
     // 4) No id resolved → regular title matching (matchMedia without a raw TVDB id).

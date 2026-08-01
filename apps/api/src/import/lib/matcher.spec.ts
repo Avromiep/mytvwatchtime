@@ -1,4 +1,4 @@
-import { ExternalProvider, MediaType } from '@tvwatch/shared';
+import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
 import { ImportMatcher, needsTvdbRehydration } from './matcher';
 import { ProviderError } from '../../media-metadata/providers/shared/provider-errors';
 
@@ -159,6 +159,7 @@ function fakePrismaExt(
         if (p === ExternalProvider.IMDB) return withType(opts.extByImdb);
         return null;
       },
+      create: jest.fn(async () => ({})),
     },
     episodeExternalId: {
       findFirst: async (args: any) => opts.epExtByProvider?.[args?.where?.provider] ?? null,
@@ -253,6 +254,56 @@ describe('ImportMatcher — matchByExternalIds (Trakt)', () => {
       1999,
     );
     expect(res).toEqual({ mediaId: 'm-imdb', confidence: 0.9, matchedTitle: 'Show' });
+  });
+
+  it('conflicting ids: a kind-compatible IMDB movie wins over an unrelated TVDB series', async () => {
+    const prisma = fakePrismaExt({
+      extByTvdb: {
+        media: { id: 'm-calimero', title: 'Calimero', type: MediaType.SHOW },
+      },
+    });
+    const meta = {
+      lightUpsertShow: jest.fn(),
+      lightUpsertMovie: jest.fn(async () => 'm-thor'),
+    };
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => ({
+        movie: { tmdbId: 616037 },
+        show: null,
+        episode: null,
+      })),
+    };
+    const tvdb = { enabled: true, getShow: jest.fn(), searchShows: jest.fn() };
+    const matcher = new ImportMatcher(prisma as any, meta as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchByExternalIds(
+      { imdb: 'tt10648342', tvdb: 131141 },
+      'MOVIE',
+      'Thor: Love and Thunder',
+      'thor love and thunder',
+      2022,
+    );
+
+    expect(tmdb.findByExternalId).toHaveBeenCalledWith('tt10648342', 'imdb_id');
+    expect(meta.lightUpsertMovie).toHaveBeenCalledWith({
+      tmdbId: 616037,
+      title: 'Thor: Love and Thunder',
+      year: 2022,
+    });
+    expect(prisma.externalId.create).toHaveBeenCalledWith({
+      data: {
+        mediaId: 'm-thor',
+        provider: ExternalProvider.IMDB,
+        providerEntityKind: ProviderEntityKind.MOVIE,
+        value: 'tt10648342',
+      },
+    });
+    expect(res).toEqual({
+      mediaId: 'm-thor',
+      confidence: 0.9,
+      matchedTitle: 'Thor: Love and Thunder',
+    });
   });
 
   it('no usable ids → regular title fallback', async () => {
