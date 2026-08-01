@@ -44,7 +44,7 @@ export class LibraryService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly meta: MediaMetadataService,
-  ) { }
+  ) {}
 
   /**
    * Localize media title/poster/backdrop fields on a list of result items in the
@@ -52,7 +52,10 @@ export class LibraryService {
    * library rails that read `media.title` directly instead of going through
    * fetchListDtos.
    */
-  private async localizeItems<T>(items: T[], getMediaId: (i: T) => string | undefined): Promise<T[]> {
+  private async localizeItems<T>(
+    items: T[],
+    getMediaId: (i: T) => string | undefined,
+  ): Promise<T[]> {
     const ids = [...new Set(items.map(getMediaId).filter((v): v is string => !!v))];
     if (ids.length === 0) return items;
     await this.meta.ensureListLocaleOverrides(ids);
@@ -67,8 +70,10 @@ export class LibraryService {
       const out: any = { ...(item as any) };
       if ('showTitle' in out) out.showTitle = localized(m, 'titles', 'title') ?? out.showTitle;
       else if ('title' in out) out.title = localized(m, 'titles', 'title') ?? out.title;
-      if ('posterUrl' in out) out.posterUrl = localized(m, 'posterUrls', 'posterUrl') ?? out.posterUrl;
-      if ('backdropUrl' in out) out.backdropUrl = localized(m, 'backdropUrls', 'backdropUrl') ?? out.backdropUrl;
+      if ('posterUrl' in out)
+        out.posterUrl = localized(m, 'posterUrls', 'posterUrl') ?? out.posterUrl;
+      if ('backdropUrl' in out)
+        out.backdropUrl = localized(m, 'backdropUrls', 'backdropUrl') ?? out.backdropUrl;
       return out as T;
     });
   }
@@ -156,10 +161,7 @@ export class LibraryService {
 
     // Fallback: shows the user has watched episodes for but missing from user_show_status
     // (e.g. import didn't rebuild statuses, or status was lost)
-    const existingMediaIds = new Set([
-      ...statusMediaIds,
-      ...watchlistShows.map((w) => w.mediaId),
-    ]);
+    const existingMediaIds = new Set([...statusMediaIds, ...watchlistShows.map((w) => w.mediaId)]);
     // Media ids of dropped or paused shows: the fallback watched-episodes query
     // below must NOT resurrect them into watch-next.
     const excludedRows = await this.prisma.userShowStatus.findMany({
@@ -175,7 +177,9 @@ export class LibraryService {
       JOIN episodes e ON ues.episode_id = e.id
       JOIN seasons s ON e.season_id = s.id
       JOIN shows sh ON s.show_id = sh.id
-      WHERE ues.user_id = ${userId} AND ues.watched = true AND s.is_special = false
+      WHERE ues.user_id = ${userId} AND ues.watched = true
+        AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
+        AND s.is_special = false
       GROUP BY sh.media_id
     `;
     const missingShowIds = watchedShowsRaw
@@ -183,9 +187,9 @@ export class LibraryService {
       .map((r) => r.mediaId);
     const missingShows = missingShowIds.length
       ? await this.prisma.mediaItem.findMany({
-        where: { id: { in: missingShowIds }, type: 'SHOW' },
-        include: { show: true },
-      })
+          where: { id: { in: missingShowIds }, type: 'SHOW' },
+          include: { show: true },
+        })
       : [];
     const watchedMap = new Map(watchedShowsRaw.map((r) => [r.mediaId, r]));
 
@@ -197,7 +201,8 @@ export class LibraryService {
         lastWatchedAt: s.lastWatchedAt ?? watchedMap.get(s.mediaId)?.lastWatchedAt ?? null,
         // Status-row shows with zero watched episodes still belong in Start Watching
         // when they're watchlisted (e.g. user unmarked every episode).
-        isWatchlistOnly: watchlistIds.has(s.mediaId) &&
+        isWatchlistOnly:
+          watchlistIds.has(s.mediaId) &&
           Math.max(s.watchedCount ?? 0, watchedMap.get(s.mediaId)?.watchedCount ?? 0) === 0,
       })),
       ...watchlistShows.map((w) => ({
@@ -227,9 +232,7 @@ export class LibraryService {
     // Shows that can produce a card: started (has watched episodes) or watchlist-only.
     // (Shows the user viewed but never interacted with are skipped — previously via
     // `continue` in the loop, now filtered up-front so they don't bloat the queries.)
-    const candidates = allStatuses.filter(
-      (s) => s.isWatchlistOnly || (s.watchedCount ?? 0) > 0,
-    );
+    const candidates = allStatuses.filter((s) => s.isWatchlistOnly || (s.watchedCount ?? 0) > 0);
     const candidateIds = candidates.map((s) => s.mediaId);
 
     // Batched episode lookups — one round trip each instead of two queries PER SHOW
@@ -252,6 +255,7 @@ export class LibraryService {
           JOIN shows sh ON s.show_id = sh.id
           WHERE sh.media_id IN (${Prisma.join(candidateIds)})
             AND s.is_special = false
+            AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
             AND e.air_date IS NOT NULL
             AND e.air_date <= ${now}
             AND NOT EXISTS (
@@ -267,9 +271,9 @@ export class LibraryService {
       const episodeIds = nextRows.map((r) => r.episodeId);
       const episodes = episodeIds.length
         ? await this.prisma.episode.findMany({
-          where: { id: { in: episodeIds } },
-          include: { season: true },
-        })
+            where: { id: { in: episodeIds } },
+            include: { season: true },
+          })
         : [];
       const epById = new Map(episodes.map((e) => [e.id, e]));
       for (const r of nextRows) {
@@ -288,6 +292,7 @@ export class LibraryService {
         JOIN episodes e ON e.season_id = s.id
         WHERE sh.media_id IN (${Prisma.join(candidateIds)})
           AND s.is_special = false
+          AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
           AND e.air_date IS NOT NULL
           AND e.air_date <= ${now}
         GROUP BY sh.media_id
@@ -454,6 +459,7 @@ export class LibraryService {
           JOIN shows sh ON s.show_id = sh.id
           WHERE sh.media_id IN (${Prisma.join(candidateIds)})
             AND s.is_special = false
+            AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
             AND e.air_date IS NOT NULL
             AND e.air_date <= ${now}
             AND NOT EXISTS (
@@ -487,6 +493,7 @@ export class LibraryService {
         JOIN episodes e ON e.season_id = s.id
         WHERE sh.media_id IN (${Prisma.join(candidateIds)})
           AND s.is_special = false
+          AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
           AND e.air_date IS NOT NULL
           AND e.air_date <= ${now}
         GROUP BY sh.media_id
@@ -532,7 +539,13 @@ export class LibraryService {
       // history cursor (watchedAt, id) needs a deterministic total order.
       orderBy: [{ watchedAt: 'desc' }, { id: 'desc' }],
       take: limit,
-      include: { episode: { include: { season: { include: { show: { include: { media: { include: { show: true } } } } } } } } },
+      include: {
+        episode: {
+          include: {
+            season: { include: { show: { include: { media: { include: { show: true } } } } } },
+          },
+        },
+      },
     });
     return this.mapWatchHistoryRows(userId, rows);
   }
@@ -546,7 +559,11 @@ export class LibraryService {
   async watchNextHistory(
     userId: string,
     q: { before: string; beforeId: string; limit?: number },
-  ): Promise<{ items: any[]; hasMore: boolean; cursor: { before: string; beforeId: string } | null }> {
+  ): Promise<{
+    items: any[];
+    hasMore: boolean;
+    cursor: { before: string; beforeId: string } | null;
+  }> {
     const before = new Date(q.before);
     if (Number.isNaN(before.getTime())) throw new BadRequestException('Invalid before cursor');
     const take = Math.max(1, Math.min(q.limit ?? 20, 50));
@@ -559,7 +576,13 @@ export class LibraryService {
       },
       orderBy: [{ watchedAt: 'desc' }, { id: 'desc' }],
       take: take + 1,
-      include: { episode: { include: { season: { include: { show: { include: { media: { include: { show: true } } } } } } } } },
+      include: {
+        episode: {
+          include: {
+            season: { include: { show: { include: { media: { include: { show: true } } } } } },
+          },
+        },
+      },
     });
     const hasMore = rows.length > take;
     const pageRows = hasMore ? rows.slice(0, take) : rows;
@@ -626,10 +649,13 @@ export class LibraryService {
     // Past side: newest 10 aired episodes (scroll-up history, granular buckets),
     // paginated further via /me/upcoming/past. Future side unchanged.
     const pastWhere = {
+      structureState: 'ACTIVE' as const,
       airDate: { lt: today },
       season: { show: { mediaId: { in: tracked } } },
     };
-    const include = { season: { include: { show: { include: { media: { include: { show: true } } } } } } };
+    const include = {
+      season: { include: { show: { include: { media: { include: { show: true } } } } } },
+    };
     const [pastEpisodesDesc, pastTotal, futureEpisodes] = await Promise.all([
       this.prisma.episode.findMany({
         where: pastWhere,
@@ -639,7 +665,11 @@ export class LibraryService {
       }),
       this.prisma.episode.count({ where: pastWhere }),
       this.prisma.episode.findMany({
-        where: { airDate: { gte: today }, season: { show: { mediaId: { in: tracked } } } },
+        where: {
+          structureState: 'ACTIVE',
+          airDate: { gte: today },
+          season: { show: { mediaId: { in: tracked } } },
+        },
         include,
         orderBy: [{ airDate: 'asc' }, { season: { number: 'asc' } }, { number: 'asc' }],
         take: 200,
@@ -656,9 +686,7 @@ export class LibraryService {
       groups: this.groupUpcoming(items),
       past: {
         hasMore: pastTotal > pastEpisodesDesc.length,
-        cursor: oldest
-          ? { before: oldest.airDate!.toISOString(), beforeId: oldest.id }
-          : null,
+        cursor: oldest ? { before: oldest.airDate!.toISOString(), beforeId: oldest.id } : null,
       },
     };
     await this.redis.set(cacheKey, result, 60);
@@ -671,11 +699,11 @@ export class LibraryService {
    * never shift an offset. Groups are returned in ascending chronological order,
    * ready to be prepended above the already-loaded past groups.
    */
-  async upcomingPast(
-    userId: string,
-    opts: { before: string; beforeId: string; limit?: number },
-  ) {
-    const limit = Math.min(Math.max(opts.limit || UPCOMING_PAST_PAGE_SIZE, 1), UPCOMING_PAST_MAX_PAGE_SIZE);
+  async upcomingPast(userId: string, opts: { before: string; beforeId: string; limit?: number }) {
+    const limit = Math.min(
+      Math.max(opts.limit || UPCOMING_PAST_PAGE_SIZE, 1),
+      UPCOMING_PAST_MAX_PAGE_SIZE,
+    );
     const beforeDate = new Date(opts.before);
     if (Number.isNaN(beforeDate.getTime()) || !opts.beforeId) {
       throw new BadRequestException('Invalid cursor');
@@ -693,6 +721,7 @@ export class LibraryService {
 
     const episodes = await this.prisma.episode.findMany({
       where: {
+        structureState: 'ACTIVE',
         airDate: { lt: today },
         season: { show: { mediaId: { in: tracked } } },
         OR: [
@@ -700,7 +729,9 @@ export class LibraryService {
           { airDate: effectiveBefore, id: { lt: opts.beforeId } },
         ],
       },
-      include: { season: { include: { show: { include: { media: { include: { show: true } } } } } } },
+      include: {
+        season: { include: { show: { include: { media: { include: { show: true } } } } } },
+      },
       orderBy: [{ airDate: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -807,7 +838,12 @@ export class LibraryService {
       userId,
       ...(opts.mediaType ? { mediaType: opts.mediaType } : {}),
       ...(opts.from || opts.to
-        ? { watchedAt: { gte: opts.from ? new Date(opts.from) : undefined, lte: opts.to ? new Date(opts.to) : undefined } }
+        ? {
+            watchedAt: {
+              gte: opts.from ? new Date(opts.from) : undefined,
+              lte: opts.to ? new Date(opts.to) : undefined,
+            },
+          }
         : {}),
     };
     const [rows, total] = await Promise.all([
@@ -855,11 +891,17 @@ export class LibraryService {
     // Dropped shows (removed from the watchlist) are excluded from upcoming even
     // though their watch history is kept. Paused shows are excluded the same way.
     const [statuses, watchlist] = await Promise.all([
-      this.prisma.userShowStatus.findMany({ where: { userId, dropped: false, pausedAt: null }, select: { mediaId: true } }),
+      this.prisma.userShowStatus.findMany({
+        where: { userId, dropped: false, pausedAt: null },
+        select: { mediaId: true },
+      }),
       this.prisma.watchlistItem.findMany({
         where: {
           userId,
-          media: { type: MediaType.SHOW, showStatuses: { none: { userId, pausedAt: { not: null } } } },
+          media: {
+            type: MediaType.SHOW,
+            showStatuses: { none: { userId, pausedAt: { not: null } } },
+          },
         },
         select: { mediaId: true },
       }),
@@ -911,19 +953,21 @@ export class LibraryService {
 
     // Batch-query accurate AIRED episode counts (excludes future + null air dates)
     const showMediaIds = statuses.map((s) => s.mediaId);
-    const airedCounts = showMediaIds.length > 0
-      ? await this.prisma.$queryRaw<{ mediaId: string; airedCount: number }[]>`
+    const airedCounts =
+      showMediaIds.length > 0
+        ? await this.prisma.$queryRaw<{ mediaId: string; airedCount: number }[]>`
           SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS "airedCount"
           FROM shows sh
           JOIN seasons s ON s.show_id = sh.id
           JOIN episodes e ON e.season_id = s.id
           WHERE sh.media_id IN (${Prisma.join(showMediaIds)})
             AND s.is_special = false
+            AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
             AND e.air_date IS NOT NULL
             AND e.air_date <= NOW()
           GROUP BY sh.media_id
         `
-      : [];
+        : [];
     const airedMap = new Map(airedCounts.map((r) => [r.mediaId, r.airedCount]));
 
     const watching: any[] = [];
@@ -937,7 +981,16 @@ export class LibraryService {
       const w = s.watchedCount ?? 0;
       const airedTotal = airedMap.get(s.mediaId) ?? 0;
       const progress = airedTotal > 0 ? w / airedTotal : 0;
-      const item = { id: s.media.id, title: s.media.title, posterUrl: s.media.posterUrl, rating: s.media.rating ?? null, year: s.media.show?.yearStart ?? null, progress, lastWatchedAt: s.lastWatchedAt, pausedAt: s.pausedAt };
+      const item = {
+        id: s.media.id,
+        title: s.media.title,
+        posterUrl: s.media.posterUrl,
+        rating: s.media.rating ?? null,
+        year: s.media.show?.yearStart ?? null,
+        progress,
+        lastWatchedAt: s.lastWatchedAt,
+        pausedAt: s.pausedAt,
+      };
       // Tracking-paused shows get their own rail — out of the
       // To watch/Finished buckets regardless of progress.
       if (s.pausedAt) {
@@ -951,10 +1004,22 @@ export class LibraryService {
     finished.sort((a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0));
     paused.sort((a, b) => (b.pausedAt?.getTime() ?? 0) - (a.pausedAt?.getTime() ?? 0));
 
-    const progressedIds = new Set([...watching.map((i) => i.id), ...finished.map((i) => i.id), ...paused.map((i) => i.id)]);
+    const progressedIds = new Set([
+      ...watching.map((i) => i.id),
+      ...finished.map((i) => i.id),
+      ...paused.map((i) => i.id),
+    ]);
     const notStarted = watchlist
       .filter((w) => !progressedIds.has(w.mediaId))
-      .map((w) => ({ id: w.media.id, title: w.media.title, posterUrl: w.media.posterUrl, rating: w.media.rating ?? null, year: w.media.show?.yearStart ?? null, progress: 0, addedAt: w.createdAt }));
+      .map((w) => ({
+        id: w.media.id,
+        title: w.media.title,
+        posterUrl: w.media.posterUrl,
+        rating: w.media.rating ?? null,
+        year: w.media.show?.yearStart ?? null,
+        progress: 0,
+        addedAt: w.createdAt,
+      }));
 
     const [watchingL, finishedL, notStartedL, pausedL] = await Promise.all([
       this.localizeItems(watching, (i) => i.id),
@@ -963,7 +1028,12 @@ export class LibraryService {
       this.localizeItems(paused, (i) => i.id),
     ]);
 
-    const result = { watching: watchingL, notStarted: notStartedL, finished: finishedL, paused: pausedL };
+    const result = {
+      watching: watchingL,
+      notStarted: notStartedL,
+      finished: finishedL,
+      paused: pausedL,
+    };
     await this.redis.set(cacheKey, result, 30);
     return result;
   }

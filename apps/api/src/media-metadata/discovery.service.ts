@@ -13,7 +13,6 @@ import { TvdbProvider } from './providers/tvdb.provider';
 import { HydrationQueue } from './hydration/hydration.queue';
 import { DiscoverQueryDto, ExploreFiltersDto, SearchQueryDto } from './dto/discover.dto';
 import { paginate } from '../common/dto/pagination.dto';
-import { isAnimeSignal } from './classification/anime-signal';
 
 /** Trending window entry: media id + the TMDB payload signals used for cheap
  *  list-time filtering (genre ids for genre chips, origin countries for anime). */
@@ -94,9 +93,8 @@ export class DiscoveryService {
   }
 
   /**
-   * Drop anime from trending entries: payload signal first (TMDB genre 16 + JP origin,
-   * same rule as the import matcher), then the DB classification for hydrated rows
-   * (one batched read — only runs when the user opted out of anime).
+   * Drop confirmed anime from trending entries. TMDB list payloads do not contain
+   * keywords, so the strict genre+keyword rule is evaluated during routing/hydration.
    */
   private async filterAnimeEntries(entries: TrendingEntry[]): Promise<TrendingEntry[]> {
     const dbAnime = new Set(
@@ -107,7 +105,7 @@ export class DiscoveryService {
         })
       ).map((r) => r.id),
     );
-    return entries.filter((e) => !dbAnime.has(e.id) && !isAnimeSignal(e.g, e.oc ?? []));
+    return entries.filter((e) => !dbAnime.has(e.id));
   }
 
   async search(q: SearchQueryDto, userId?: string) {
@@ -206,7 +204,9 @@ export class DiscoveryService {
           { show: { is: { originalTitle: { equals: term, mode: 'insensitive' as const } } } },
         ],
       },
-      take: 50, orderBy: { popularity: 'desc' }, select: { id: true },
+      take: 50,
+      orderBy: { popularity: 'desc' },
+      select: { id: true },
     });
     const exactIds = exactRows.map((r) => r.id);
     const containsRows = await this.prisma.mediaItem.findMany({
@@ -218,7 +218,9 @@ export class DiscoveryService {
         ],
         id: { notIn: exactIds },
       },
-      take: 100, orderBy: { popularity: 'desc' }, select: { id: true },
+      take: 100,
+      orderBy: { popularity: 'desc' },
+      select: { id: true },
     });
     const containsIds = containsRows.map((r) => r.id);
     // Token tier (forgiving): every normalized word of the term must appear in the
@@ -226,24 +228,36 @@ export class DiscoveryService {
     // leading tokens, punctuation, or word order.
     const tokens = searchTokens(term);
     const skipIds = [...exactIds, ...containsIds];
-    const tokenRows = tokens.length > 1
-      ? await this.prisma.mediaItem.findMany({
-          where: {
-            ...dbWhere,
-            AND: tokens.map((tok) => ({
-              OR: [
-                { title: { contains: tok, mode: 'insensitive' as const } },
-                { show: { is: { originalTitle: { contains: tok, mode: 'insensitive' as const } } } },
-              ],
-            })),
-            ...(skipIds.length ? { id: { notIn: skipIds } } : {}),
-          },
-          take: 100, orderBy: { popularity: 'desc' }, select: { id: true },
-        })
-      : [];
+    const tokenRows =
+      tokens.length > 1
+        ? await this.prisma.mediaItem.findMany({
+            where: {
+              ...dbWhere,
+              AND: tokens.map((tok) => ({
+                OR: [
+                  { title: { contains: tok, mode: 'insensitive' as const } },
+                  {
+                    show: {
+                      is: { originalTitle: { contains: tok, mode: 'insensitive' as const } },
+                    },
+                  },
+                ],
+              })),
+              ...(skipIds.length ? { id: { notIn: skipIds } } : {}),
+            },
+            take: 100,
+            orderBy: { popularity: 'desc' },
+            select: { id: true },
+          })
+        : [];
     const localIds = [...exactIds, ...containsIds, ...tokenRows.map((r) => r.id)];
 
-    let entry: SearchCacheEntry = { ids: localIds, genreIds: {}, tmdbPagesFetched: 0, exhausted: false };
+    let entry: SearchCacheEntry = {
+      ids: localIds,
+      genreIds: {},
+      tmdbPagesFetched: 0,
+      exhausted: false,
+    };
     entry = await this.fetchNextTmdbPage(term, q, entry);
 
     // If NO results from local + TMDB, fall back to TVDB API (synchronous).
@@ -252,22 +266,50 @@ export class DiscoveryService {
       if (wantShows) {
         try {
           const r = await this.tvdb.searchShows(providerTerm, 1);
-          entry.ids.push(...await Promise.all(
-            r.items.filter((i) => i.tvdbId).map((i) => this.meta.lightUpsertShowTvdb(
-              { tvdbId: i.tvdbId!, title: i.title, overview: i.overview, posterUrl: i.posterUrl, backdropUrl: null, popularity: 0, year: i.year ?? null },
+          entry.ids.push(
+            ...(await Promise.all(
+              r.items
+                .filter((i) => i.tvdbId)
+                .map((i) =>
+                  this.meta.lightUpsertShowTvdb({
+                    tvdbId: i.tvdbId!,
+                    title: i.title,
+                    overview: i.overview,
+                    posterUrl: i.posterUrl,
+                    backdropUrl: null,
+                    popularity: 0,
+                    year: i.year ?? null,
+                  }),
+                ),
             )),
-          ));
-        } catch (e) { this.logger.warn(`TVDB show fallback failed: ${(e as Error).message}`); }
+          );
+        } catch (e) {
+          this.logger.warn(`TVDB show fallback failed: ${(e as Error).message}`);
+        }
       }
       if (wantMovies && entry.ids.length === 0) {
         try {
           const r = await this.tvdb.searchMovies(providerTerm, 1);
-          entry.ids.push(...await Promise.all(
-            r.items.filter((i) => i.tvdbId).map((i) => this.meta.lightUpsertMovieTvdb(
-              { tvdbId: i.tvdbId!, title: i.title, overview: i.overview, posterUrl: i.posterUrl, backdropUrl: null, popularity: 0, year: i.year ?? null },
+          entry.ids.push(
+            ...(await Promise.all(
+              r.items
+                .filter((i) => i.tvdbId)
+                .map((i) =>
+                  this.meta.lightUpsertMovieTvdb({
+                    tvdbId: i.tvdbId!,
+                    title: i.title,
+                    overview: i.overview,
+                    posterUrl: i.posterUrl,
+                    backdropUrl: null,
+                    popularity: 0,
+                    year: i.year ?? null,
+                  }),
+                ),
             )),
-          ));
-        } catch (e) { this.logger.warn(`TVDB movie fallback failed: ${(e as Error).message}`); }
+          );
+        } catch (e) {
+          this.logger.warn(`TVDB movie fallback failed: ${(e as Error).message}`);
+        }
       }
       entry.exhausted = true;
     }
@@ -275,15 +317,22 @@ export class DiscoveryService {
     entry.ids = [...new Set(entry.ids)];
 
     // Enqueue background enrichment.
-    if (wantShows && this.tvdb?.enabled) this.hydration.enqueueTvdbSearch(term, 'SHOW', lang).catch(() => undefined);
-    if (wantMovies && this.tvdb?.enabled) this.hydration.enqueueTvdbSearch(term, 'MOVIE', lang).catch(() => undefined);
-    for (const id of entry.ids) this.hydration.enqueueClassifyCandidate({ mediaId: id }).catch(() => undefined);
+    if (wantShows && this.tvdb?.enabled)
+      this.hydration.enqueueTvdbSearch(term, 'SHOW', lang).catch(() => undefined);
+    if (wantMovies && this.tvdb?.enabled)
+      this.hydration.enqueueTvdbSearch(term, 'MOVIE', lang).catch(() => undefined);
+    for (const id of entry.ids)
+      this.hydration.enqueueClassifyCandidate({ mediaId: id }).catch(() => undefined);
 
     return entry;
   }
 
   /** Append the next TMDb page (per requested type) to the cached window. */
-  private async fetchNextTmdbPage(term: string, q: SearchQueryDto, entry: SearchCacheEntry): Promise<SearchCacheEntry> {
+  private async fetchNextTmdbPage(
+    term: string,
+    q: SearchQueryDto,
+    entry: SearchCacheEntry,
+  ): Promise<SearchCacheEntry> {
     if (entry.exhausted) return entry;
     if (!this.tmdb.enabled) return { ...entry, exhausted: true };
     const wantShows = !q.type || q.type === MediaType.SHOW;
@@ -294,15 +343,27 @@ export class DiscoveryService {
     const providerTerm = normalizeSearchTerm(term) || term;
 
     const tasks: Promise<{ kind: 'show' | 'movie'; items: any[] }>[] = [];
-    if (wantShows) tasks.push(this.tmdb.searchShows(providerTerm, nextPage).then((r) => ({ kind: 'show' as const, items: r.items })));
-    if (wantMovies) tasks.push(this.tmdb.searchMovies(providerTerm, nextPage).then((r) => ({ kind: 'movie' as const, items: r.items })));
+    if (wantShows)
+      tasks.push(
+        this.tmdb
+          .searchShows(providerTerm, nextPage)
+          .then((r) => ({ kind: 'show' as const, items: r.items })),
+      );
+    if (wantMovies)
+      tasks.push(
+        this.tmdb
+          .searchMovies(providerTerm, nextPage)
+          .then((r) => ({ kind: 'movie' as const, items: r.items })),
+      );
     const results = await Promise.all(tasks);
 
     let allShort = results.length > 0;
     for (const { kind, items } of results) {
       if (!items.length) continue;
       const upserted = await Promise.all(
-        items.map((i) => (kind === 'show' ? this.meta.lightUpsertShow(i) : this.meta.lightUpsertMovie(i))),
+        items.map((i) =>
+          kind === 'show' ? this.meta.lightUpsertShow(i) : this.meta.lightUpsertMovie(i),
+        ),
       );
       items.forEach((item, idx) => {
         entry.genreIds[upserted[idx]] = item.genreIds ?? [];
@@ -647,8 +708,9 @@ export class DiscoveryService {
     const exclude = this.parseSlugList(filters?.excludeGenres);
     const country = filters?.country?.trim().toUpperCase();
     const key = `${windowNs}:${kind}:${currentLanguage()}:${genre?.toLowerCase() || 'all'}:${hideAnime ? 'noanime' : 'all'}:${exclude.join(',') || '-'}:${country || '-'}`;
-    const win = (await this.redis.get<{ ids: string[]; upstreamPages: number; exhausted: boolean }>(key))
-      ?? { ids: [], upstreamPages: 0, exhausted: false };
+    const win = (await this.redis.get<{ ids: string[]; upstreamPages: number; exhausted: boolean }>(
+      key,
+    )) ?? { ids: [], upstreamPages: 0, exhausted: false };
     let rounds = 0;
     while (win.ids.length < target && !win.exhausted && rounds < 5) {
       if (win.upstreamPages >= 10) {
@@ -672,10 +734,7 @@ export class DiscoveryService {
     return win;
   }
 
-  private async applyGenreToEntries(
-    entries: TrendingEntry[],
-    genre?: string,
-  ): Promise<string[]> {
+  private async applyGenreToEntries(entries: TrendingEntry[], genre?: string): Promise<string[]> {
     const ids = entries.map((e) => e.id);
     if (!genre?.trim()) return ids;
     const payload: Record<string, number[]> = {};
@@ -844,7 +903,9 @@ export class DiscoveryService {
         is: {
           OR: [
             { country: { equals: country, mode: 'insensitive' } },
-            ...(variants.length ? [{ country: { in: variants, mode: 'insensitive' as const } }] : []),
+            ...(variants.length
+              ? [{ country: { in: variants, mode: 'insensitive' as const } }]
+              : []),
           ],
         },
       },
@@ -937,16 +998,32 @@ export class DiscoveryService {
       await Promise.all([
         this.tmdb.enabled
           ? this.trendingShows(userId, 1, 20, g, filters)
-          : { items: await this.topDb(MediaType.SHOW, 20, userId, { ...filters, genre: g }), page: 1, hasMore: false },
+          : {
+              items: await this.topDb(MediaType.SHOW, 20, userId, { ...filters, genre: g }),
+              page: 1,
+              hasMore: false,
+            },
         this.tmdb.enabled
           ? this.trendingMovies(userId, 1, 20, g, filters)
-          : { items: await this.topDb(MediaType.MOVIE, 20, userId, { ...filters, genre: g }), page: 1, hasMore: false },
+          : {
+              items: await this.topDb(MediaType.MOVIE, 20, userId, { ...filters, genre: g }),
+              page: 1,
+              hasMore: false,
+            },
         this.tmdb.enabled
           ? this.topRatedShows(userId, 1, 20, g, filters)
-          : { items: await this.topDb(MediaType.SHOW, 20, userId, { ...filters, genre: g }), page: 1, hasMore: false },
+          : {
+              items: await this.topDb(MediaType.SHOW, 20, userId, { ...filters, genre: g }),
+              page: 1,
+              hasMore: false,
+            },
         this.tmdb.enabled
           ? this.topRatedMovies(userId, 1, 20, g, filters)
-          : { items: await this.topDb(MediaType.MOVIE, 20, userId, { ...filters, genre: g }), page: 1, hasMore: false },
+          : {
+              items: await this.topDb(MediaType.MOVIE, 20, userId, { ...filters, genre: g }),
+              page: 1,
+              hasMore: false,
+            },
         this.tmdb.enabled
           ? this.nowPlayingMovies(userId, 1, 20, g, filters)
           : { items: [], page: 1, hasMore: false },
@@ -991,7 +1068,11 @@ export class DiscoveryService {
     // releaseDate sort: re-order the ranked window newest-first (the cached ranking
     // is sort-agnostic — the affinity order is just the default view).
     if (filters?.sort === 'releaseDate') ids = await this.sortIdsByReleaseDesc(ids);
-    const items = await this.fetchListDtos(ids.slice((page - 1) * pageSize, page * pageSize), userId, pageSize);
+    const items = await this.fetchListDtos(
+      ids.slice((page - 1) * pageSize, page * pageSize),
+      userId,
+      pageSize,
+    );
     return { items, page, hasMore: ids.length > page * pageSize };
   }
 
@@ -1176,7 +1257,10 @@ export class DiscoveryService {
       orderBy,
       take: limit,
     });
-    return this.fetchListDtos(rows.map((r) => r.id), userId);
+    return this.fetchListDtos(
+      rows.map((r) => r.id),
+      userId,
+    );
   }
 
   /**
@@ -1200,7 +1284,10 @@ export class DiscoveryService {
           ? {
               watchlist: { where: { userId }, select: { id: true } },
               favorites: { where: { userId }, select: { id: true } },
-              showStatuses: { where: { userId }, select: { id: true, watchedCount: true, totalCount: true } },
+              showStatuses: {
+                where: { userId },
+                select: { id: true, watchedCount: true, totalCount: true },
+              },
               movieStatuses: { where: { userId }, select: { id: true, watched: true } },
             }
           : {}),
@@ -1210,19 +1297,21 @@ export class DiscoveryService {
 
     // Batch-query accurate aired episode counts for shows (excludes future + null air dates)
     const showMediaIds = media.filter((m) => m.type === MediaType.SHOW).map((m) => m.id);
-    const airedCounts = showMediaIds.length > 0
-      ? await this.prisma.$queryRaw<{ mediaId: string; airedCount: number }[]>`
+    const airedCounts =
+      showMediaIds.length > 0
+        ? await this.prisma.$queryRaw<{ mediaId: string; airedCount: number }[]>`
           SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS "airedCount"
           FROM shows sh
           JOIN seasons s ON s.show_id = sh.id
           JOIN episodes e ON e.season_id = s.id
           WHERE sh.media_id IN (${Prisma.join(showMediaIds)})
             AND s.is_special = false
+            AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
             AND e.air_date IS NOT NULL
             AND e.air_date <= NOW()
           GROUP BY sh.media_id
         `
-      : [];
+        : [];
     const airedMap = new Map(airedCounts.map((r) => [r.mediaId, r.airedCount]));
 
     return limitedIds
@@ -1259,8 +1348,14 @@ export class DiscoveryService {
           ? {
               watchlist: { where: { userId }, select: { id: true } },
               favorites: { where: { userId }, select: { id: true } },
-              showStatuses: { where: { userId }, select: { id: true, watchedCount: true, totalCount: true } },
-              movieStatuses: { where: { userId }, select: { id: true, watched: true, watchedAt: true } },
+              showStatuses: {
+                where: { userId },
+                select: { id: true, watchedCount: true, totalCount: true },
+              },
+              movieStatuses: {
+                where: { userId },
+                select: { id: true, watched: true, watchedAt: true },
+              },
             }
           : {}),
       },
@@ -1269,19 +1364,21 @@ export class DiscoveryService {
 
     // Batch-query accurate aired episode counts for shows (excludes future + null air dates)
     const showMediaIds = media.filter((m) => m.type === MediaType.SHOW).map((m) => m.id);
-    const airedCounts = showMediaIds.length > 0
-      ? await this.prisma.$queryRaw<{ mediaId: string; airedCount: number }[]>`
+    const airedCounts =
+      showMediaIds.length > 0
+        ? await this.prisma.$queryRaw<{ mediaId: string; airedCount: number }[]>`
           SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS "airedCount"
           FROM shows sh
           JOIN seasons s ON s.show_id = sh.id
           JOIN episodes e ON e.season_id = s.id
           WHERE sh.media_id IN (${Prisma.join(showMediaIds)})
             AND s.is_special = false
+            AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
             AND e.air_date IS NOT NULL
             AND e.air_date <= NOW()
           GROUP BY sh.media_id
         `
-      : [];
+        : [];
     const airedMap = new Map(airedCounts.map((r) => [r.mediaId, r.airedCount]));
 
     return limitedIds

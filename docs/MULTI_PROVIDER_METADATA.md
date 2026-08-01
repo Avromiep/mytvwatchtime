@@ -6,12 +6,12 @@ implemented behavior.
 
 ## Providers
 
-| Provider | Role | Identity namespace | Retrieval notes |
-|---|---|---|---|
-| TMDB | Primary general provider | `TMDB` `SERIES`/`MOVIE` | API key required |
-| TVDB v4 | General fallback **and** first-class source for TVDB-only media | `THE_TVDB` `SERIES`/`MOVIE`/`EPISODE` | API key (+ optional PIN), distributed token |
-| Kitsu | Preferred anime/manga | `KITSU` `ANIME`/`MANGA` | Option B gateway/cache to public Kitsu catalogue |
-| Jikan | MyAnimeList fallback (retrieval) | `MYANIME_LIST` `ANIME`/`MANGA` | Identity is MAL; Jikan is the retrieval provider. Optional self-host |
+| Provider | Role                                                            | Identity namespace                    | Retrieval notes                             |
+| -------- | --------------------------------------------------------------- | ------------------------------------- | ------------------------------------------- |
+| TMDB     | Primary general provider                                        | `TMDB` `SERIES`/`MOVIE`               | API key required                            |
+| TVDB v4  | General fallback **and** first-class source for TVDB-only media | `THE_TVDB` `SERIES`/`MOVIE`/`EPISODE` | API key (+ optional PIN), distributed token |
+| Kitsu    | Optional anime enrichment                                       | `KITSU` `ANIME`/`MANGA`               | Alternative titles, subtype, dates, artwork |
+| Jikan    | Optional MyAnimeList enrichment                                 | `MYANIME_LIST` `ANIME`/`MANGA`        | Identity is MAL; Jikan is retrieval only    |
 
 A verified external identity is the triple **(provider, providerEntityKind, value)**. Distinct
 namespaces never collide: `(TMDB, SERIES, 123)` ≠ `(TMDB, MOVIE, 123)`; `(KITSU, ANIME, 9)` ≠
@@ -19,33 +19,29 @@ namespaces never collide: `(TMDB, SERIES, 123)` ≠ `(TMDB, MOVIE, 123)`; `(KITS
 
 ## Provider priority (field-by-field, never whole-record)
 
-| Content | Priority |
-|---|---|
-| Anime (confirmed/probable) | **Kitsu > Jikan/MyAnimeList > TVDB > TMDB** |
-| Manga publication metadata | **Kitsu > Jikan/MyAnimeList** |
-| General (TMDB exists) | **TMDB > TVDB** |
+| Content                     | Priority                                                                |
+| --------------------------- | ----------------------------------------------------------------------- |
+| Anime shows                 | **TMDB identity/classification → TVDB metadata + structure**            |
+| Manga publication metadata  | **Kitsu > Jikan/MyAnimeList**                                           |
+| General (TMDB exists)       | **TMDB > TVDB**                                                         |
 | TVDB-only general (no TMDB) | **TVDB** (TMDB optional, attached later if a reliable mapping is found) |
 
-TMDB/TVDB remain authoritative for **structural** fields (seasons, episodes, release structure,
-watch history) of an anime/manga-classified adaptation — even when Kitsu/Jikan supply canonical
-anime metadata. Manga chapters/volumes/serialization are **never** written onto an adaptation.
+Exactly one of TMDB or TVDB owns a show's **structural** fields (seasons and episodes). Kitsu/Jikan
+can enrich anime metadata but never own or switch structure. Manga chapters, volumes, and
+serialization are never written onto a screen adaptation.
 
 ## Anime workflow (non-circular)
 
 ```
-initial local/TMDB/TVDB metadata → detect anime candidate
-→ Kitsu matching → Jikan/MyAnimeList fallback
-→ final classification (confirmed / probable / general / unknown)
-→ field-level metadata merge + provenance
+TMDB routing profile (identity + genres + keywords + external ids)
+→ strict Animation(16) AND anime-keyword decision
+→ TVDB structure for confirmed anime; TMDB structure otherwise
+→ optional Kitsu/Jikan field enrichment without routing authority
 ```
 
-- A **candidate** is anything with the TMDB `Animation` genre, a verified Kitsu/MAL anime id,
-  strong TVDB anime signals, or a manual flag. `Animation` is a gate, not proof.
-- **Confirmed** requires a reliable Kitsu or MAL match.
-- **Probable** does NOT require a provider response: Animation + Japanese language/origin/studio
-  evidence yields probable anime even when Kitsu/Jikan are unavailable (provider-unavailability is
-  distinguished from a genuine no-match; reliable no-match is cached temporarily).
-- Western animation with no reliable anime match stays **GENERAL**.
+- Automatic **ANIME** requires TMDB `Animation` genre and TMDB `anime` keyword together.
+- Kitsu/MAL matches, Japanese language/origin/studio, and TVDB type signals never classify or route.
+- Movies remain TMDB-owned even when classified as anime; only shows have provider-owned structure.
 - Source show/movie category is **never** treated as classification.
 
 ## TV Time imports
@@ -66,13 +62,13 @@ After a confident import match, the same candidate→match→classify→hydrate 
 
 ### TV Time file → known TVDB fields (header-based)
 
-| File | Imported data | Known TVDB fields |
-|---|---|---|
-| `tracking-prod-records-v2.csv` | Watched episodes + watchlist | `s_id` (series), `episode_id` |
-| `tracking-prod-records.csv` | Watched episodes, watchlist, show/movie | `series_id` |
-| `show_seen_episode_latest.csv` | Watched episodes | `tv_show_id`, `episode_id` |
-| `seen_episode_source.csv` | Watched episodes | `episode_id` |
-| `followed_tv_show.csv` | Active show watchlist | `tv_show_id` |
+| File                           | Imported data                           | Known TVDB fields             |
+| ------------------------------ | --------------------------------------- | ----------------------------- |
+| `tracking-prod-records-v2.csv` | Watched episodes + watchlist            | `s_id` (series), `episode_id` |
+| `tracking-prod-records.csv`    | Watched episodes, watchlist, show/movie | `series_id`                   |
+| `show_seen_episode_latest.csv` | Watched episodes                        | `tv_show_id`, `episode_id`    |
+| `seen_episode_source.csv`      | Watched episodes                        | `episode_id`                  |
+| `followed_tv_show.csv`         | Active show watchlist                   | `tv_show_id`                  |
 
 `<nil>` and empty values are treated as null, never zero. Headers are matched by name (not position).
 
@@ -86,7 +82,7 @@ After a confident import match, the same candidate→match→classify→hydrate 
    - `classify-candidate:{mediaId|identity}` — candidate detection on results.
 3. Return; never wait for TVDB/Kitsu/Jikan network work.
 
-**Provisional vs permanent:** only *unused* background-search candidates are temporary. Selecting /
+**Provisional vs permanent:** only _unused_ background-search candidates are temporary. Selecting /
 needing a TVDB-only result promotes it to a **permanent**, fully-hydrated record via a single shared
 promotion service (`getOrCreateByIdentity`, deterministic lock + recheck). TMDB is **not** required.
 Clients never create media records directly; selection accepts a local id or a provider identity and

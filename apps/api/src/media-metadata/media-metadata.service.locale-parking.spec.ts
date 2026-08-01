@@ -118,7 +118,10 @@ function fakeTx(over: Record<string, any> = {}) {
         return {};
       },
     },
-    episode: { upsert: async () => ({ id: 'ep-1' }), update: async () => ({}) },
+    episode: {
+      create: async () => ({ id: 'ep-1' }),
+      update: async (a: any) => ({ id: a.where.id }),
+    },
     episodeExternalId: { upsert: async () => ({}) },
     movie: { findUnique: async () => null, upsert: async () => ({}) },
   };

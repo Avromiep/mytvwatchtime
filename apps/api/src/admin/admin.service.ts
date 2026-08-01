@@ -84,7 +84,7 @@ export class AdminService {
         this.prisma.user.count(),
         this.prisma.mediaItem.count({ where: { type: 'SHOW' } }),
         this.prisma.mediaItem.count({ where: { type: 'MOVIE' } }),
-        this.prisma.episode.count(),
+        this.prisma.episode.count({ where: { structureState: 'ACTIVE' } }),
         this.prisma.watchHistory.count(),
         this.prisma.import.count(),
         this.prisma.notification.count(),
@@ -346,7 +346,13 @@ export class AdminService {
       failed: result.failed,
       movieId: movie?.id,
     });
-    return { sent: result.sent > 0, devices: devices.length, pushed: result.sent, failed: result.failed, movie };
+    return {
+      sent: result.sent > 0,
+      devices: devices.length,
+      pushed: result.sent,
+      failed: result.failed,
+      movie,
+    };
   }
 
   // ---------------- Hydration Jobs ----------------

@@ -24,7 +24,7 @@ function fakePrisma(
       findFirst: async () => opts.exactMedia ?? null,
       findMany: async () => opts.likeMedia ?? [],
     },
-    episode: { count: async () => 0, findFirst: async () => null },
+    episode: { count: async () => 0, findMany: async () => [] },
     $queryRaw: async () => [] as any[],
   };
 }
@@ -53,10 +53,7 @@ describe('ImportMatcher — conditional TVDB recovery (Phase 9)', () => {
     expect(tvdb.getShow).not.toHaveBeenCalled(); // no external call
   });
 
-  it('Step 0: accepts a cross-type match (MOVIE item hitting a SHOW row) — the id is authoritative', async () => {
-    // Legacy TV Time rows mis-track shows through the movie entity, so a MOVIE item can
-    // carry a live TVDB SERIES id. The id says what the entity really is — resolve to it.
-    // Data safety lives downstream: the apply-time type guard writes nothing cross-type.
+  it('Step 0: rejects a local TVDB mapping of the wrong media type', async () => {
     const prisma = fakePrisma({
       extByTvdb: { media: { id: 'm1', title: 'Sense8', type: MediaType.SHOW } },
     });
@@ -68,8 +65,8 @@ describe('ImportMatcher — conditional TVDB recovery (Phase 9)', () => {
       tvdb as any,
     );
     const res = await matcher.matchMedia('sense8', 'Sense8', 'MOVIE', null, null, null, '268156');
-    expect(res.mediaId).toBe('m1');
-    expect(res.confidence).toBe(0.9);
+    expect(res.mediaId).toBeNull();
+    expect(res.confidence).toBe(0);
     expect(tvdb.getShow).not.toHaveBeenCalled(); // local mapping — no external call
   });
 
@@ -165,14 +162,16 @@ function fakePrismaExt(
       findFirst: async (args: any) => opts.epExtByProvider?.[args?.where?.provider] ?? null,
     },
     mediaItem: { findFirst: async () => null, findMany: async () => [] },
-    episode: { count: async () => 0, findFirst: async () => null },
+    episode: { count: async () => 0, findMany: async () => [] },
     $queryRaw: async () => [] as any[],
   };
 }
 
 describe('ImportMatcher — matchByExternalIds (Trakt)', () => {
   it('TMDB id: local TMDB mapping wins without any external call', async () => {
-    const prisma = fakePrismaExt({ extByTmdb: { media: { id: 'm-tmdb', title: 'Show' } } });
+    const prisma = fakePrismaExt({
+      extByTmdb: { media: { id: 'm-tmdb', title: 'Show', type: MediaType.SHOW } },
+    });
     const meta = { lightUpsertShow: jest.fn(), lightUpsertMovie: jest.fn() };
     const tvdb = { enabled: true, getShow: jest.fn(), searchShows: jest.fn() };
     const matcher = new ImportMatcher(prisma as any, meta as any, fakeTmdb as any, tvdb as any);
@@ -188,38 +187,70 @@ describe('ImportMatcher — matchByExternalIds (Trakt)', () => {
     expect(tvdb.getShow).not.toHaveBeenCalled();
   });
 
-  it('TMDB id miss + tmdb enabled (SHOW): light-upserts by id (no heavy getShow)', async () => {
+  it('rejects a wrong-type local TMDB mapping and continues to a compatible IMDb identity', async () => {
+    const prisma = fakePrismaExt({
+      extByTmdb: { media: { id: 'wrong-movie', title: 'Wrong', type: MediaType.MOVIE } },
+      extByImdb: { media: { id: 'right-show', title: 'Right', type: MediaType.SHOW } },
+    });
+    const matcher = new ImportMatcher(
+      prisma as any,
+      { lightUpsertShow: jest.fn(), lightUpsertMovie: jest.fn() } as any,
+      { enabled: false } as any,
+      { enabled: false } as any,
+    );
+
+    const res = await matcher.matchByExternalIds(
+      { tmdb: 1, imdb: 'tt-right' },
+      'SHOW',
+      'Right',
+      'right',
+      2020,
+    );
+
+    expect(res).toEqual({ mediaId: 'right-show', confidence: 0.9, matchedTitle: 'Right' });
+  });
+
+  it('TMDB id miss + tmdb enabled (SHOW): validates with a lightweight routing profile', async () => {
     const prisma = fakePrismaExt({});
     const meta = { lightUpsertShow: jest.fn(async () => 'm-new'), lightUpsertMovie: jest.fn() };
-    const tmdb = { enabled: true, getShow: jest.fn(), getMovie: jest.fn() };
+    const tmdb = {
+      enabled: true,
+      getShowRoutingProfile: jest.fn().mockResolvedValue({
+        tmdbId: 387,
+        title: 'Show',
+        yearStart: 1999,
+        genreIds: [],
+        keywords: [],
+        tvdbId: 75886,
+        imdbId: 'tt1',
+      }),
+    };
     const tvdb = { enabled: false, getShow: jest.fn(), searchShows: jest.fn() };
     const matcher = new ImportMatcher(prisma as any, meta as any, tmdb as any, tvdb as any);
     const res = await matcher.matchByExternalIds({ tmdb: 387 }, 'SHOW', 'Show', 'show', 1999);
+    expect(tmdb.getShowRoutingProfile).toHaveBeenCalledWith(387);
     expect(meta.lightUpsertShow).toHaveBeenCalledWith({ tmdbId: 387, title: 'Show', year: 1999 });
-    expect(tmdb.getShow).not.toHaveBeenCalled(); // shows stay light — hydration happens post-match
     expect(res).toEqual({ mediaId: 'm-new', confidence: 0.95, matchedTitle: 'Show' });
   });
 
-  it('TMDB id miss + tmdb enabled (MOVIE): fetches the movie once, then light-upserts', async () => {
+  it('TMDB id miss + tmdb enabled (MOVIE): validates with a lightweight routing profile', async () => {
     const prisma = fakePrismaExt({});
     const meta = { lightUpsertShow: jest.fn(), lightUpsertMovie: jest.fn(async () => 'm-mov') };
     const tmdb = {
       enabled: true,
-      getMovie: jest.fn(async () => ({
+      getMovieRoutingProfile: jest.fn(async () => ({
         tmdbId: 6075,
         title: 'Movie',
-        overview: null,
-        posterUrl: null,
-        backdropUrl: null,
-        rating: 8,
-        popularity: 5,
         releaseYear: 1993,
+        genreIds: [],
+        keywords: [],
+        imdbId: 'tt2',
       })),
     };
     const tvdb = { enabled: false, getShow: jest.fn(), searchShows: jest.fn() };
     const matcher = new ImportMatcher(prisma as any, meta as any, tmdb as any, tvdb as any);
     const res = await matcher.matchByExternalIds({ tmdb: 6075 }, 'MOVIE', 'Movie', 'movie', 1993);
-    expect(tmdb.getMovie).toHaveBeenCalledWith(6075);
+    expect(tmdb.getMovieRoutingProfile).toHaveBeenCalledWith(6075);
     expect(meta.lightUpsertMovie).toHaveBeenCalled();
     expect(res.mediaId).toBe('m-mov');
     expect(res.confidence).toBe(0.95);
@@ -381,9 +412,10 @@ function fakePrismaFind(
     mediaItem: { findFirst: async () => null, findMany: async () => [] },
     episode: {
       count: async () => opts.episodeCount ?? 0,
-      findFirst: async (args: any) => {
+      findMany: async (args: any) => {
         const key = `${args?.where?.season?.number}:${args?.where?.number}`;
-        return opts.episodeBySE?.[key] ?? null;
+        const episode = opts.episodeBySE?.[key] ?? null;
+        return episode ? [episode] : [];
       },
     },
     $queryRaw: async () => [] as any[],
@@ -464,7 +496,7 @@ describe('ImportMatcher — TMDB /find translation (matchByTvdbId)', () => {
     expect(res.confidence).toBe(0.95);
   });
 
-  it('anime show (Animation + JP): TVDB-authoritative record + TVDB-first hydration + TMDB id attached', async () => {
+  it('anime show (TMDB Animation + anime keyword): TVDB-authoritative record + TMDB id attached', async () => {
     const { prisma, state } = fakePrismaFind();
     const meta = {
       lightUpsertShow: jest.fn(),
@@ -479,6 +511,15 @@ describe('ImportMatcher — TMDB /find translation (matchByTvdbId)', () => {
         movie: null,
         show: { tmdbId: 65930, genreIds: [16, 10759], originCountries: ['JP'] },
         episode: null,
+      })),
+      getShowRoutingProfile: jest.fn(async () => ({
+        tmdbId: 65930,
+        title: 'Naruto',
+        yearStart: 2002,
+        genreIds: [16, 10759],
+        keywords: ['anime'],
+        tvdbId: 78857,
+        imdbId: 'tt0409591',
       })),
     };
     const tvdbShow = {
@@ -570,7 +611,7 @@ describe('ImportMatcher — TMDB /find translation (matchByTvdbId)', () => {
 });
 
 describe('ImportMatcher — recoverEpisodeByTvdbId (/find recovery)', () => {
-  it('resolves via TMDB /find season/episode numbers and attaches the TMDB episode id', async () => {
+  it('resolves via TMDB /find and attaches both TMDB and original TVDB episode aliases', async () => {
     const { prisma, state } = fakePrismaFind({ episodeBySE: { '1:9': { id: 'ep-19' } } });
     const tmdb = {
       enabled: true,
@@ -584,7 +625,17 @@ describe('ImportMatcher — recoverEpisodeByTvdbId (/find recovery)', () => {
     const id = await matcher.recoverEpisodeByTvdbId('m1', '7968847');
     expect(tmdb.findByExternalId).toHaveBeenCalledWith('7968847', 'tvdb_id');
     expect(id).toBe('ep-19');
-    expect(state.episodeExternalIdUpsert).toHaveBeenCalled();
+    expect(state.episodeExternalIdUpsert).toHaveBeenCalledTimes(2);
+    expect(state.episodeExternalIdUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ provider: ExternalProvider.TMDB, value: '2449623' }),
+      }),
+    );
+    expect(state.episodeExternalIdUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ provider: ExternalProvider.THE_TVDB, value: '7968847' }),
+      }),
+    );
   });
 
   it('returns null when the /find episode belongs to a different show (TMDB id mismatch)', async () => {
@@ -1032,7 +1083,7 @@ describe('ImportMatcher — matchByTitleVerified (resolve by name)', () => {
   });
 });
 
-describe('ImportMatcher — cross-type id authority (legacy movie-typed show rows)', () => {
+describe('ImportMatcher — incompatible external-id types', () => {
   const meta = () => ({
     lightUpsertShow: jest.fn(async () => 'm-show'),
     lightUpsertMovie: jest.fn(async () => 'm-movie'),
@@ -1041,7 +1092,7 @@ describe('ImportMatcher — cross-type id authority (legacy movie-typed show row
     ensureShowFull: jest.fn(async () => undefined),
   });
 
-  it('SHOW item hitting a local MOVIE mapping resolves to the movie (id is authoritative)', async () => {
+  it('SHOW item hitting a local MOVIE mapping rejects it before attachment', async () => {
     const prisma = fakePrisma({
       extByTvdb: { media: { id: 'm-mov', title: 'Some Movie', type: MediaType.MOVIE } },
     });
@@ -1058,10 +1109,10 @@ describe('ImportMatcher — cross-type id authority (legacy movie-typed show row
       '555',
     );
 
-    expect(res).toEqual({ mediaId: 'm-mov', confidence: 0.9, matchedTitle: 'Some Movie' });
+    expect(res).toEqual({ mediaId: null, confidence: 0, matchedTitle: null });
   });
 
-  it('MOVIE item whose id /finds only a SERIES resolves to the show via TMDB', async () => {
+  it('MOVIE item whose id /finds only a SERIES does not create or attach a show', async () => {
     const prisma = fakePrisma({});
     const m = meta();
     const tmdb = {
@@ -1085,16 +1136,12 @@ describe('ImportMatcher — cross-type id authority (legacy movie-typed show row
       '81797',
     );
 
-    expect(m.lightUpsertShow).toHaveBeenCalledWith({
-      tmdbId: 45950,
-      title: 'One Piece',
-      year: null,
-    });
+    expect(m.lightUpsertShow).not.toHaveBeenCalled();
     expect(m.lightUpsertMovie).not.toHaveBeenCalled();
-    expect(res).toEqual({ mediaId: 'm-show', confidence: 0.9, matchedTitle: 'One Piece' });
+    expect(res).toEqual({ mediaId: null, confidence: 0, matchedTitle: null });
   });
 
-  it('MOVIE item: a 404 on the movie endpoint probes the series endpoint before declaring dead', async () => {
+  it('MOVIE item probes but never persists a live sibling SHOW id', async () => {
     const prisma = fakePrisma({});
     const m = meta();
     const tmdb = { enabled: true, findByExternalId: jest.fn(async () => null) };
@@ -1127,8 +1174,8 @@ describe('ImportMatcher — cross-type id authority (legacy movie-typed show row
 
     expect(tvdb.getMovie).toHaveBeenCalledWith(74796);
     expect(tvdb.getShow).toHaveBeenCalledWith(74796);
-    expect(m.lightUpsertShowTvdb).toHaveBeenCalled();
-    expect(res).toEqual({ mediaId: 'm-tvdb-show', confidence: 0.8, matchedTitle: 'Bleach' });
+    expect(m.lightUpsertShowTvdb).not.toHaveBeenCalled();
+    expect(res).toEqual({ mediaId: null, confidence: 0, matchedTitle: null });
   });
 
   it('MOVIE item: 404 on BOTH endpoints is dead → movie title fallback is allowed', async () => {
@@ -1197,7 +1244,6 @@ describe('ImportMatcher — cross-type id authority (legacy movie-typed show row
     expect(tmdb.searchMovies).not.toHaveBeenCalled();
   });
 });
-
 
 describe('ImportMatcher — pickBestTitleMatch (recency/year-aware title pick)', () => {
   const meta = () => ({
@@ -1273,9 +1319,14 @@ describe('ImportMatcher — pickBestTitleMatch (recency/year-aware title pick)',
       { tmdbId: 1, title: 'Dune', originalTitle: 'Dune', year: 1984, popularity: 95 },
       { tmdbId: 2, title: 'Dune', originalTitle: 'Dune', year: 2021, popularity: 60 },
     ]);
-    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, {
-      enabled: false,
-    } as any);
+    const matcher = new ImportMatcher(
+      prisma as any,
+      m as any,
+      tmdb as any,
+      {
+        enabled: false,
+      } as any,
+    );
     const res = await matcher.matchByTitleVerified('dune', 'Dune', 'MOVIE', null);
     expect(res.mediaId).toBe('m-movie');
     const upserted = (m.lightUpsertMovie as jest.Mock).mock.calls[0]?.[0];

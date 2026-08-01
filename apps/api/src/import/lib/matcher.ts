@@ -44,9 +44,7 @@ function pickBestTitleMatch<
   if (exactMatches.length === 0) return undefined;
   let pool = exactMatches;
   if (importYear != null) {
-    const near = exactMatches.filter(
-      (c) => c.year != null && Math.abs(c.year - importYear) <= 1,
-    );
+    const near = exactMatches.filter((c) => c.year != null && Math.abs(c.year - importYear) <= 1);
     if (near.length > 0) pool = near;
   }
   return [...pool].sort(
@@ -150,7 +148,7 @@ export class ImportMatcher {
         return { mediaId: null, confidence: 0, matchedTitle: null };
       }
       this.logger.log(
-        `All ${ids.length} TVDB id(s) for "${title}" are dead (404) — falling back to title search`,
+        `All ${ids.length} TVDB id(s) for "${title}" are dead or incompatible — falling back to compatible title/year search`,
       );
     }
 
@@ -453,7 +451,7 @@ export class ImportMatcher {
    * TVDB-authority resolution (shared by the CSV rawTvdbSeriesId gate and the Trakt
    * external-id path): local TVDB mapping → exact TMDB /find translation → direct TVDB fetch.
    * NEVER falls back to title matching — an unresolvable id returns null/confidence 0.
-   * Anime shows (Animation genre + JP origin per /find) are TVDB-authoritative: TMDB anime
+   * Anime shows (TMDB Animation genre + `anime` keyword) are TVDB-authoritative: TMDB anime
    * season/episode structures are unreliable, so they get a TVDB-backed record + TVDB-first
    * hydration (providerPref), with the TMDB id still attached for cross-lookups.
    * The CALLER is responsible for caching the result.
@@ -474,47 +472,75 @@ export class ImportMatcher {
       include: { media: true },
     });
     if (ext?.media) {
-      // The local id mapping is authoritative — EVEN across entity types. Legacy TV Time
-      // rows mis-track shows through the movie entity (a v1 "movie" row titled "Bleach"
-      // IS the anime), so when the id says SHOW we resolve to the show regardless of the
-      // item's declared type. Data safety is enforced downstream: the apply-time type
-      // guard drops e.g. a WATCHED_MOVIE matched to a SHOW, so nothing wrong is written.
       const expected = type === 'SHOW' ? MediaType.SHOW : MediaType.MOVIE;
       if (ext.media.type !== expected) {
-        this.logger.log(
-          `TVDB id ${rawTvdbSeriesId} ("${title}") resolves to a ${ext.media.type} row — accepting cross-type match for ${type} item`,
+        this.logger.warn(
+          `TVDB id ${rawTvdbSeriesId} ("${title}") resolves to ${ext.media.type}, expected ${type} — rejecting incompatible identity`,
         );
-        return { mediaId: ext.media.id, confidence: 0.9, matchedTitle: ext.media.title };
+        return { mediaId: null, confidence: 0, matchedTitle: null, dead: true };
       }
       return { mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title };
     }
 
     // 0a) Exact TMDB /find translation (one call, no title search). Anime shows take the
-    //     TVDB-authoritative branch instead of the TMDB record. The id is authoritative
-    //     even across entity types (see step 0): when /find only returns the SIBLING kind
-    //     (a series id on a MOVIE item, or a movie id on a SHOW item), resolve to it.
+    //     TVDB-authoritative branch instead of the TMDB record. A sibling-kind result is
+    //     retained only in import diagnostics; it is never attached to incompatible media.
     if (this.tmdb.enabled) {
       try {
         const found = await this.tmdb.findByExternalId(rawTvdbSeriesId, 'tvdb_id');
         const preferred = (type === 'SHOW' ? found?.show : found?.movie) ?? null;
         const sibling = (type === 'SHOW' ? found?.movie : found?.show) ?? null;
-        const hit = preferred ?? sibling;
-        if (hit) {
-          const kind: 'SHOW' | 'MOVIE' = preferred ? type : type === 'SHOW' ? 'MOVIE' : 'SHOW';
-          if (!preferred) {
-            this.logger.log(
-              `TVDB id ${rawTvdbSeriesId} ("${title}") is a ${kind} per TMDB /find — accepting cross-type match for ${type} item`,
-            );
+        if (!preferred && sibling) {
+          this.logger.warn(
+            `TVDB id ${rawTvdbSeriesId} ("${title}") is ${type === 'SHOW' ? 'MOVIE' : 'SHOW'} per TMDB /find, expected ${type} — rejecting incompatible identity`,
+          );
+          return { mediaId: null, confidence: 0, matchedTitle: null, dead: true };
+        }
+        if (preferred) {
+          const hit = preferred;
+          const kind = type;
+          let routingProfile: Awaited<ReturnType<TmdbProvider['getShowRoutingProfile']>> | null =
+            null;
+          if (kind === 'SHOW') {
+            try {
+              routingProfile = await this.tmdb.getShowRoutingProfile(hit.tmdbId);
+            } catch (e) {
+              this.logger.debug(
+                `TMDB routing profile ${hit.tmdbId} unavailable; keeping TMDB identity match: ${(e as Error).message}`,
+              );
+            }
           }
           if (
             kind === 'SHOW' &&
-            this.tvdb.enabled &&
-            isAnimeSignal(found!.show!.genreIds, found!.show!.originCountries)
+            routingProfile &&
+            isAnimeSignal(routingProfile.genreIds, routingProfile.keywords)
           ) {
+            const pendingAnime = async () => {
+              const mediaId = await this.meta.lightUpsertShow({
+                tmdbId: hit.tmdbId,
+                title,
+                year,
+              });
+              this.providerPref.set(mediaId, 'tvdb');
+              if (routingProfile!.tvdbId) {
+                await this.attachExternalId(
+                  mediaId,
+                  ExternalProvider.THE_TVDB,
+                  ProviderEntityKind.SERIES,
+                  String(routingProfile!.tvdbId),
+                );
+              }
+              return { mediaId, confidence: 0.9, matchedTitle: title };
+            };
+            // The import's raw TVDB id is not enough to own anime structure. TMDB must
+            // verify the canonical TVDB series cross-id; otherwise retain an identity-only
+            // pending stub and let review/retry resolve episodes later.
+            if (!routingProfile.tvdbId || !this.tvdb.enabled) return pendingAnime();
             try {
-              const s = await this.tvdb.getShow(Number(rawTvdbSeriesId));
+              const canonicalTvdbId = routingProfile.tvdbId;
+              const s = await this.tvdb.getShow(canonicalTvdbId);
               const mediaId = await this.meta.lightUpsertShowTvdb({
-                tvdbId: Number(rawTvdbSeriesId),
+                tvdbId: canonicalTvdbId,
                 title: s.title,
                 overview: s.overview ?? null,
                 posterUrl: s.posterUrl ?? null,
@@ -532,15 +558,16 @@ export class ImportMatcher {
               return { mediaId, confidence: 0.9, matchedTitle: s.title };
             } catch (e) {
               this.logger.warn(
-                `Anime TVDB-authoritative match failed for ${rawTvdbSeriesId} ("${title}") — falling back to TMDB: ${(e as Error).message}`,
+                `Anime TVDB-authoritative hydration failed for ${rawTvdbSeriesId} ("${title}") — retaining an identity-only pending stub: ${(e as Error).message}`,
               );
+              return pendingAnime();
             }
           }
           const mediaId =
             kind === 'SHOW'
               ? await this.meta.lightUpsertShow({ tmdbId: hit.tmdbId, title, year })
               : await this.meta.lightUpsertMovie({ tmdbId: hit.tmdbId, title, year });
-          return { mediaId, confidence: preferred ? 0.95 : 0.9, matchedTitle: title };
+          return { mediaId, confidence: 0.95, matchedTitle: title };
         }
       } catch (e) {
         this.logger.debug(
@@ -550,9 +577,8 @@ export class ImportMatcher {
     }
 
     // 0b) TMDB didn't resolve the TVDB ID → fetch from TVDB directly. A 404 on the expected
-    //     entity kind triggers ONE probe of the sibling kind first: mis-typed legacy rows
-    //     carry a LIVE id of the other kind (a series id on a movie item) — only a 404 on
-    //     BOTH kinds means the id is truly dead (TVDB merged/deleted it).
+    //     entity kind triggers one sibling-kind probe to distinguish an incompatible live
+    //     id from a dead id. The sibling result is never persisted or attached.
     let dead = false;
     if (this.tvdb.enabled) {
       const numId = Number(rawTvdbSeriesId);
@@ -588,11 +614,12 @@ export class ImportMatcher {
       } catch (e) {
         if (isProviderError(e) && e.category === 'not_found') {
           try {
-            const r = type === 'SHOW' ? await upsertMovie() : await upsertShow();
-            this.logger.log(
-              `TVDB id ${rawTvdbSeriesId} ("${title}") exists as a ${type === 'SHOW' ? 'movie' : 'series'} — accepting cross-type match for ${type} item`,
+            if (type === 'SHOW') await this.tvdb.getMovie(numId);
+            else await this.tvdb.getShow(numId);
+            this.logger.warn(
+              `TVDB id ${rawTvdbSeriesId} ("${title}") exists as ${type === 'SHOW' ? 'MOVIE' : 'SHOW'}, expected ${type} — rejecting incompatible identity`,
             );
-            return { mediaId: r.mediaId, confidence: 0.8, matchedTitle: r.title };
+            return { mediaId: null, confidence: 0, matchedTitle: null, dead: true };
           } catch (e2) {
             // A 404 on BOTH kinds means the id is DEAD — it carries no identity signal,
             // so a title fallback is legitimate. Any other failure (throttle, timeout,
@@ -643,8 +670,8 @@ export class ImportMatcher {
         `None of the ${ids.length} TVDB ids for "${title}" resolved (${ids.join(', ')}) — refusing title fallback`,
       );
     }
-    // Every id is provably dead (404) → the export's identity info is stale (TVDB merged
-    // the series into a new id). A title search is the only remaining signal — allow it.
+    // Every id is provably dead or incompatible with the imported type → it cannot identify
+    // a valid target. A validated title/year search is the only remaining compatible signal.
     // Any inconclusive failure keeps the refusal (we can't tell whether the id is live).
     return { mediaId: null, confidence: 0, matchedTitle: null, allDead: !sawInconclusive };
   }
@@ -666,7 +693,11 @@ export class ImportMatcher {
     if (!raw) return { mediaId: null, confidence: 0, matchedTitle: null };
     // 1) Local mapping: the episode is already hydrated somewhere — free, no provider call.
     const local = await this.prisma.episodeExternalId.findFirst({
-      where: { provider: ExternalProvider.THE_TVDB, value: raw },
+      where: {
+        provider: ExternalProvider.THE_TVDB,
+        value: raw,
+        episode: { structureState: 'ACTIVE' },
+      },
       include: {
         episode: { include: { season: { include: { show: { include: { media: true } } } } } },
       },
@@ -722,10 +753,15 @@ export class ImportMatcher {
     mediaId: string,
   ): Promise<{ maxSeason: number; maxEpisodeBySeason: Map<number, number> }> {
     const seasons = await this.prisma.season.findMany({
-      where: { show: { mediaId } },
+      where: { show: { mediaId }, episodes: { some: { structureState: 'ACTIVE' } } },
       select: {
         number: true,
-        episodes: { select: { number: true }, orderBy: { number: 'desc' }, take: 1 },
+        episodes: {
+          where: { structureState: 'ACTIVE' },
+          select: { number: true },
+          orderBy: { number: 'desc' },
+          take: 1,
+        },
       },
     });
     const maxEpisodeBySeason = new Map<number, number>();
@@ -735,21 +771,6 @@ export class ImportMatcher {
       maxEpisodeBySeason.set(s.number, s.episodes[0]?.number ?? 0);
     }
     return { maxSeason, maxEpisodeBySeason };
-  }
-
-  /** Re-hydrate a show from TVDB (best-effort union merge into the existing structure). */
-  async rehydrateWithTvdb(mediaId: string): Promise<boolean> {
-    const tvdbExt = await this.prisma.externalId.findFirst({
-      where: { mediaId, provider: ExternalProvider.THE_TVDB },
-    });
-    if (!tvdbExt || !this.tvdb?.enabled) return false;
-    try {
-      await this.meta.ensureShowFullTvdb(Number(tvdbExt.value));
-      return true;
-    } catch (e) {
-      this.logger.warn(`TVDB re-hydration failed for media ${mediaId}: ${(e as Error).message}`);
-      return false;
-    }
   }
 
   /**
@@ -781,9 +802,8 @@ export class ImportMatcher {
     };
     const kind = type === 'SHOW' ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
 
-    // 1) TMDB id — preferred provider. Local mapping first; on a miss create/locate the media
-    //    by id (shows use the export's title+year — getShow would fetch every season, and a
-    //    matched show is fully hydrated afterwards by ensureShowHydrated anyway).
+    // 1) TMDB id — preferred provider. Local mapping first; on a miss validate the
+    //    provider entity through the lightweight routing endpoint before attaching it.
     if (ids.tmdb) {
       const ext = await this.prisma.externalId.findFirst({
         where: {
@@ -793,31 +813,56 @@ export class ImportMatcher {
         },
         include: { media: true },
       });
-      if (ext?.media) {
+      if (ext?.media && ext.media.type === type) {
         return done({ mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title });
+      }
+      if (ext?.media) {
+        this.logger.warn(
+          `TMDB id ${ids.tmdb} is attached to ${ext.media.type}, expected ${type} — rejecting incompatible identity`,
+        );
       }
       if (this.tmdb.enabled) {
         try {
           if (type === 'SHOW') {
+            const profile = await this.tmdb.getShowRoutingProfile(ids.tmdb);
             const mediaId = await this.meta.lightUpsertShow({
-              tmdbId: ids.tmdb,
-              title,
-              year: year ?? null,
+              tmdbId: profile.tmdbId,
+              title: profile.title,
+              year: profile.yearStart,
             });
-            return done({ mediaId, confidence: 0.95, matchedTitle: title });
+            if (profile.imdbId) {
+              await this.attachExternalId(
+                mediaId,
+                ExternalProvider.IMDB,
+                ProviderEntityKind.SERIES,
+                profile.imdbId,
+              );
+            }
+            if (profile.tvdbId) {
+              await this.attachExternalId(
+                mediaId,
+                ExternalProvider.THE_TVDB,
+                ProviderEntityKind.SERIES,
+                String(profile.tvdbId),
+              );
+            }
+            return done({ mediaId, confidence: 0.95, matchedTitle: profile.title });
           }
-          const m = await this.tmdb.getMovie(ids.tmdb);
+          const profile = await this.tmdb.getMovieRoutingProfile(ids.tmdb);
           const mediaId = await this.meta.lightUpsertMovie({
-            tmdbId: m.tmdbId,
-            title: m.title,
-            overview: m.overview ?? null,
-            posterUrl: m.posterUrl ?? null,
-            backdropUrl: m.backdropUrl ?? null,
-            rating: m.rating ?? null,
-            popularity: m.popularity ?? null,
-            year: m.releaseYear ?? null,
+            tmdbId: profile.tmdbId,
+            title: profile.title,
+            year: profile.releaseYear,
           });
-          return done({ mediaId, confidence: 0.95, matchedTitle: m.title });
+          if (profile.imdbId) {
+            await this.attachExternalId(
+              mediaId,
+              ExternalProvider.IMDB,
+              ProviderEntityKind.MOVIE,
+              profile.imdbId,
+            );
+          }
+          return done({ mediaId, confidence: 0.95, matchedTitle: profile.title });
         } catch (e) {
           this.logger.debug(
             `TMDB id ${ids.tmdb} upsert failed for "${title}" — falling through: ${(e as Error).message}`,
@@ -832,8 +877,13 @@ export class ImportMatcher {
         where: { provider: ExternalProvider.IMDB, providerEntityKind: kind, value: ids.imdb },
         include: { media: true },
       });
-      if (ext?.media) {
+      if (ext?.media && ext.media.type === type) {
         return done({ mediaId: ext.media.id, confidence: 0.9, matchedTitle: ext.media.title });
+      }
+      if (ext?.media) {
+        this.logger.warn(
+          `IMDB id ${ids.imdb} is attached to ${ext.media.type}, expected ${type} — rejecting incompatible identity`,
+        );
       }
       if (this.tmdb.enabled) {
         try {
@@ -890,7 +940,7 @@ export class ImportMatcher {
           provider: c.provider,
           providerEntityKind: ProviderEntityKind.EPISODE,
           value: c.value,
-          episode: { season: { show: { mediaId } } },
+          episode: { structureState: 'ACTIVE', season: { show: { mediaId } } },
         },
         select: { episodeId: true },
       });
@@ -931,6 +981,9 @@ export class ImportMatcher {
         ExternalProvider.TMDB,
         String(ep.tmdbEpisodeId),
       );
+      // Preserve the imported alias as well: future imports resolve locally without
+      // another /find call, while the TMDB episode remains the active structural row.
+      await this.attachEpisodeExternalId(episodeId, ExternalProvider.THE_TVDB, raw);
     }
     return episodeId;
   }
@@ -1050,7 +1103,9 @@ export class ImportMatcher {
   /** Ensure a show has seasons/episodes in DB (needed to resolve episode by S/E). Skips if already hydrated. */
   async ensureShowHydrated(mediaId: string) {
     // Already hydrated? Then there's nothing to fetch — this is what makes re-imports fast.
-    const epCount = await this.prisma.episode.count({ where: { season: { show: { mediaId } } } });
+    const epCount = await this.prisma.episode.count({
+      where: { structureState: 'ACTIVE', season: { show: { mediaId } } },
+    });
     if (epCount > 0) return;
 
     const [tmdbExt, tvdbExt] = await Promise.all([
@@ -1063,10 +1118,11 @@ export class ImportMatcher {
     if (this.providerPref.get(mediaId) === 'tvdb' && tvdbExt && this.tvdb?.enabled) {
       try {
         await this.meta.ensureShowFullTvdb(Number(tvdbExt.value));
-        return;
       } catch {
-        // Fall through to TMDB.
+        // Confirmed anime never writes a temporary TMDB graph. A later retry/review can
+        // resolve it once TVDB is available.
       }
+      return;
     }
 
     // Try TMDB first (preferred provider).
@@ -1107,17 +1163,27 @@ export class ImportMatcher {
   ): Promise<string | null> {
     const key = `${mediaId}:${season}:${episode}:${lenient ? 'l' : 's'}`;
     if (this.episodeCache.has(key)) return this.episodeCache.get(key)!;
-    let ep = await this.prisma.episode.findFirst({
-      where: { season: { show: { mediaId }, number: season }, number: episode },
+    let matches = await this.prisma.episode.findMany({
+      where: {
+        structureState: 'ACTIVE',
+        season: { show: { mediaId }, number: season },
+        number: episode,
+      },
+      take: 2,
     });
-    if (!ep && lenient && season !== 0) {
+    if (matches.length !== 1 && lenient && season !== 0) {
       // Fallback: same episode number in the lowest non-special season of the show.
-      ep = await this.prisma.episode.findFirst({
-        where: { season: { show: { mediaId }, number: { not: 0 } }, number: episode },
+      matches = await this.prisma.episode.findMany({
+        where: {
+          structureState: 'ACTIVE',
+          season: { show: { mediaId }, number: { not: 0 } },
+          number: episode,
+        },
         orderBy: { season: { number: 'asc' } },
+        take: 2,
       });
     }
-    const id = ep?.id ?? null;
+    const id = matches.length === 1 ? matches[0].id : null;
     // Only cache POSITIVE results — never cache null (the show may get hydrated later).
     if (id) this.episodeCache.set(key, id);
     return id;
@@ -1135,8 +1201,8 @@ export class ImportMatcher {
  * locally hydrated structure? True when the hydrated show cannot contain referenced
  * episodes — e.g. matched the TMDB structure of a show whose TVDB structure differs
  * (anthologies, reboot continuations, split/merged hour-longs), or a poisoned partial
- * hydration (rate-limited fetch stored 1 episode). The processor reacts by re-hydrating
- * from TVDB (union upsert — existing rows are never deleted).
+ * hydration (rate-limited fetch stored 1 episode). The processor records this as a
+ * diagnostic only; it never hydrates a second provider graph into the show.
  */
 export function needsTvdbRehydration(
   footprint: {

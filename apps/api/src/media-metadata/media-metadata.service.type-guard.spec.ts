@@ -112,8 +112,15 @@ function fakeTx(over: Record<string, any> = {}) {
       createMany: async () => ({}),
       create: async () => ({}),
     },
-    season: { findMany: async () => [], findUnique: async () => null, upsert: async () => ({ id: 'se-1' }) },
-    episode: { upsert: async () => ({ id: 'ep-1' }) },
+    season: {
+      findMany: async () => [],
+      findUnique: async () => null,
+      upsert: async () => ({ id: 'se-1' }),
+    },
+    episode: {
+      create: async () => ({ id: 'ep-1' }),
+      update: async (a: any) => ({ id: a.where.id }),
+    },
     episodeExternalId: { upsert: async () => ({}) },
     movie: { findUnique: async () => null, upsert: async () => ({}) },
   };
@@ -609,7 +616,10 @@ describe('MediaMetadataService — recommendations persistence', () => {
 
   it('TMDB persist writes recommendations + the synced stamp', async () => {
     const { tx, calls } = fakeTx();
-    const getShow = jest.fn(async () => ({ ...makeShow([{ name: 'Animation' }]), recommendations: recs }));
+    const getShow = jest.fn(async () => ({
+      ...makeShow([{ name: 'Animation' }]),
+      recommendations: recs,
+    }));
     const svc = makeTmdbService(tx, getShow);
 
     await runInLanguage('en', () => svc.ensureShowFull(65942));

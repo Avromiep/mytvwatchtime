@@ -140,6 +140,26 @@ export interface NormalizedShow {
   /** TMDB /recommendations snapshot from the appended payload (cap 20). TMDB-only. */
   recommendations?: RecommendationItem[];
 }
+
+/** Identity/classification payload used before choosing a structural provider. It never
+ * fetches season details and must never be persisted as an episode structure. */
+export interface TmdbShowRoutingProfile {
+  tmdbId: number;
+  title: string;
+  yearStart: number | null;
+  genreIds: number[];
+  keywords: string[];
+  tvdbId: number | null;
+  imdbId: string | null;
+}
+export interface TmdbMovieRoutingProfile {
+  tmdbId: number;
+  title: string;
+  releaseYear: number | null;
+  genreIds: number[];
+  keywords: string[];
+  imdbId: string | null;
+}
 export interface NormalizedMovie {
   type: MediaType.MOVIE;
   tmdbId: number;
@@ -364,6 +384,45 @@ export class TmdbProvider {
       posterUrl: this.tmdb.img(s.poster_path, 'w342'),
       backdropUrl: this.tmdb.img(s.backdrop_path, 'w780'),
       rating: s.vote_average ?? null,
+    };
+  }
+
+  /** One lightweight routing call: identity + genres + keywords + external ids, with no
+   * appended season payloads. StructureAuthorityService calls this before any full show
+   * hydration so anime never temporarily writes a TMDB episode graph. */
+  async getShowRoutingProfile(tmdbId: number): Promise<TmdbShowRoutingProfile> {
+    const s = await this.tmdb.get<TmdbShow>(
+      `/tv/${tmdbId}`,
+      { append_to_response: 'external_ids,keywords' },
+      'en-US',
+    );
+    return {
+      tmdbId: s.id,
+      title: s.name || 'Untitled',
+      yearStart: s.first_air_date ? Number(s.first_air_date.slice(0, 4)) || null : null,
+      genreIds: (s.genres ?? []).map((g) => g.id),
+      keywords: (s.keywords?.results ?? []).map((k) => k.name).filter((n): n is string => !!n),
+      tvdbId: s.external_ids?.tvdb_id ?? null,
+      imdbId: s.external_ids?.imdb_id ?? null,
+    };
+  }
+
+  /** Movie counterpart used for strict content classification. Movies always retain
+   * TMDB structural ownership, but anime classification still requires TMDB-authored
+   * genre id 16 and the `anime` keyword. */
+  async getMovieRoutingProfile(tmdbId: number): Promise<TmdbMovieRoutingProfile> {
+    const m = await this.tmdb.get<TmdbMovie>(
+      `/movie/${tmdbId}`,
+      { append_to_response: 'external_ids,keywords' },
+      'en-US',
+    );
+    return {
+      tmdbId: m.id,
+      title: m.title || 'Untitled',
+      releaseYear: m.release_date ? Number(m.release_date.slice(0, 4)) || null : null,
+      genreIds: (m.genres ?? []).map((g) => g.id),
+      keywords: (m.keywords?.keywords ?? []).map((k) => k.name).filter((n): n is string => !!n),
+      imdbId: m.external_ids?.imdb_id ?? null,
     };
   }
 

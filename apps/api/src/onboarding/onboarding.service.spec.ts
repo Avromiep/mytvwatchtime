@@ -18,11 +18,13 @@ describe('OnboardingService', () => {
   }) => {
     const prisma = {
       user: {
-        findUnique: jest.fn().mockResolvedValue(
-          opts.user === undefined
-            ? { onboardingStatus: 'NOT_STARTED', onboardingVersion: null }
-            : opts.user,
-        ),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue(
+            opts.user === undefined
+              ? { onboardingStatus: 'NOT_STARTED', onboardingVersion: null }
+              : opts.user,
+          ),
         update: jest.fn().mockResolvedValue({}),
       },
       mediaItem: {
@@ -63,8 +65,14 @@ describe('OnboardingService', () => {
       $transaction: jest.fn().mockResolvedValue([]),
     };
     const events = { emit: jest.fn() };
-    const redis = { delByPattern: jest.fn().mockResolvedValue(0), del: jest.fn().mockResolvedValue(0) };
-    const meta = { ensureShowFull: jest.fn().mockResolvedValue('media-1'), ensureShowFullTvdb: jest.fn() };
+    const redis = {
+      delByPattern: jest.fn().mockResolvedValue(0),
+      del: jest.fn().mockResolvedValue(0),
+    };
+    const meta = {
+      ensureShowFull: jest.fn().mockResolvedValue('media-1'),
+      ensureShowFullTvdb: jest.fn(),
+    };
     const tmdb = { enabled: true };
     const tvdb = { enabled: true };
     const svc = new OnboardingService(
@@ -122,20 +130,41 @@ describe('OnboardingService', () => {
   // ---------------- CAUGHT_UP ----------------
   it('CAUGHT_UP marks eligible episodes in one transaction and rebuilds the show status', async () => {
     const { svc, prisma, events } = make({ media: showMedia, seasons });
-    const out = await svc.apply('u1', { shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }], movies: [] });
+    const out = await svc.apply('u1', {
+      shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }],
+      movies: [],
+    });
 
-    expect(out.applied).toEqual({ showsProcessed: 1, episodesMarked: 3, moviesWatched: 0, watchlistAdded: 1 });
+    expect(out.applied).toEqual({
+      showsProcessed: 1,
+      episodesMarked: 3,
+      moviesWatched: 0,
+      watchlistAdded: 1,
+    });
     expect(out.unresolved).toEqual([]);
     // Only aired, non-special episodes are eligible.
     expect(prisma.season.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { show: { mediaId: 'media-1' }, isSpecial: false },
-        include: { episodes: { where: { airDate: { not: null, lte: expect.any(Date) } } } },
+        where: {
+          show: { mediaId: 'media-1' },
+          isSpecial: false,
+          episodes: { some: { structureState: 'ACTIVE' } },
+        },
+        include: {
+          episodes: {
+            where: {
+              structureState: 'ACTIVE',
+              airDate: { not: null, lte: expect.any(Date) },
+            },
+          },
+        },
       }),
     );
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(prisma.userEpisodeStatus.createMany).toHaveBeenCalledWith({
-      data: ['e1', 'e2', 'e3'].map((id) => expect.objectContaining({ userId: 'u1', episodeId: id, watched: true, watchCount: 1 })),
+      data: ['e1', 'e2', 'e3'].map((id) =>
+        expect.objectContaining({ userId: 'u1', episodeId: id, watched: true, watchCount: 1 }),
+      ),
     });
     expect(prisma.watchHistory.createMany).toHaveBeenCalledWith({
       data: expect.arrayContaining([
@@ -146,7 +175,9 @@ describe('OnboardingService', () => {
     expect(events.emit).toHaveBeenCalledTimes(2); // watch.episode + watchlist.added
     expect(events.emit).toHaveBeenCalledWith('watch.episode', { userId: 'u1', mediaId: 'media-1' });
     expect(prisma.userShowStatus.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ update: expect.objectContaining({ watchedCount: 2, totalCount: 2, dropped: false }) }),
+      expect.objectContaining({
+        update: expect.objectContaining({ watchedCount: 2, totalCount: 2, dropped: false }),
+      }),
     );
     // A successful apply completes onboarding atomically.
     expect(prisma.user.update).toHaveBeenCalledWith({
@@ -165,7 +196,10 @@ describe('OnboardingService', () => {
         { episodeId: 'e3', watched: true },
       ],
     });
-    const out = await svc.apply('u1', { shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }], movies: [] });
+    const out = await svc.apply('u1', {
+      shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }],
+      movies: [],
+    });
 
     expect(out.applied.episodesMarked).toBe(0);
     expect(prisma.$transaction).not.toHaveBeenCalled();
@@ -184,7 +218,10 @@ describe('OnboardingService', () => {
         { episodeId: 'e2', watched: false }, // flipped
       ],
     });
-    const out = await svc.apply('u1', { shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }], movies: [] });
+    const out = await svc.apply('u1', {
+      shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }],
+      movies: [],
+    });
 
     expect(out.applied.episodesMarked).toBe(2); // e2 flipped + e3 created
     expect(prisma.userEpisodeStatus.updateMany).toHaveBeenCalledWith({
@@ -200,13 +237,23 @@ describe('OnboardingService', () => {
   it('WATCHED_THROUGH marks only episodes up to the boundary (S/E ordering)', async () => {
     const { svc, prisma } = make({ media: showMedia, seasons });
     const out = await svc.apply('u1', {
-      shows: [{ mediaId: 'media-1', action: 'WATCHED_THROUGH', throughSeasonNumber: 1, throughEpisodeNumber: 2 }],
+      shows: [
+        {
+          mediaId: 'media-1',
+          action: 'WATCHED_THROUGH',
+          throughSeasonNumber: 1,
+          throughEpisodeNumber: 2,
+        },
+      ],
       movies: [],
     });
 
     expect(out.applied.episodesMarked).toBe(2);
     expect(prisma.userEpisodeStatus.createMany).toHaveBeenCalledWith({
-      data: [expect.objectContaining({ episodeId: 'e1' }), expect.objectContaining({ episodeId: 'e2' })],
+      data: [
+        expect.objectContaining({ episodeId: 'e1' }),
+        expect.objectContaining({ episodeId: 'e2' }),
+      ],
     });
   });
 
@@ -220,9 +267,17 @@ describe('OnboardingService', () => {
   // ---------------- Watchlist ----------------
   it('WATCHLIST upserts the item, bumps addedCount and un-drops shows — no episode writes', async () => {
     const { svc, prisma, events } = make({ media: showMedia });
-    const out = await svc.apply('u1', { shows: [{ mediaId: 'media-1', action: 'WATCHLIST' }], movies: [] });
+    const out = await svc.apply('u1', {
+      shows: [{ mediaId: 'media-1', action: 'WATCHLIST' }],
+      movies: [],
+    });
 
-    expect(out.applied).toEqual({ showsProcessed: 1, episodesMarked: 0, moviesWatched: 0, watchlistAdded: 1 });
+    expect(out.applied).toEqual({
+      showsProcessed: 1,
+      episodesMarked: 0,
+      moviesWatched: 0,
+      watchlistAdded: 1,
+    });
     expect(prisma.watchlistItem.upsert).toHaveBeenCalledWith({
       where: { userId_mediaId: { userId: 'u1', mediaId: 'media-1' } },
       create: { userId: 'u1', mediaId: 'media-1' },
@@ -250,7 +305,10 @@ describe('OnboardingService', () => {
       media: showMedia,
       watchlistItems: [{ mediaId: 'media-1' }],
     });
-    const out = await svc.apply('u1', { shows: [{ mediaId: 'media-1', action: 'WATCHLIST' }], movies: [] });
+    const out = await svc.apply('u1', {
+      shows: [{ mediaId: 'media-1', action: 'WATCHLIST' }],
+      movies: [],
+    });
 
     expect(out.applied.watchlistAdded).toBe(0);
     expect(prisma.watchlistItem.upsert).not.toHaveBeenCalled();
@@ -261,7 +319,10 @@ describe('OnboardingService', () => {
   // ---------------- Movies ----------------
   it('movie WATCHED writes status + history + event only on the unwatched→watched transition', async () => {
     const { svc, prisma, events } = make({ media: movieMedia });
-    const out = await svc.apply('u1', { shows: [], movies: [{ mediaId: 'movie-1', action: 'WATCHED' }] });
+    const out = await svc.apply('u1', {
+      shows: [],
+      movies: [{ mediaId: 'movie-1', action: 'WATCHED' }],
+    });
 
     expect(out.applied.moviesWatched).toBe(1);
     expect(prisma.userMovieStatus.upsert).toHaveBeenCalled();
@@ -277,7 +338,10 @@ describe('OnboardingService', () => {
       movieStatus: { watched: true },
       watchlistItems: [{ mediaId: 'movie-1' }],
     });
-    const out = await svc.apply('u1', { shows: [], movies: [{ mediaId: 'movie-1', action: 'WATCHED' }] });
+    const out = await svc.apply('u1', {
+      shows: [],
+      movies: [{ mediaId: 'movie-1', action: 'WATCHED' }],
+    });
 
     expect(out.applied.moviesWatched).toBe(0);
     expect(prisma.watchHistory.create).not.toHaveBeenCalled();
@@ -287,7 +351,10 @@ describe('OnboardingService', () => {
   // ---------------- Watched ⇒ also watchlisted ----------------
   it('CAUGHT_UP also watchlists the show (tracked-library convention)', async () => {
     const { svc, prisma, events } = make({ media: showMedia, seasons });
-    const out = await svc.apply('u1', { shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }], movies: [] });
+    const out = await svc.apply('u1', {
+      shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }],
+      movies: [],
+    });
 
     expect(out.applied.watchlistAdded).toBe(1);
     expect(prisma.watchlistItem.upsert).toHaveBeenCalledWith({
@@ -304,7 +371,10 @@ describe('OnboardingService', () => {
 
   it('movie WATCHED also watchlists the movie', async () => {
     const { svc, prisma } = make({ media: movieMedia });
-    const out = await svc.apply('u1', { shows: [], movies: [{ mediaId: 'movie-1', action: 'WATCHED' }] });
+    const out = await svc.apply('u1', {
+      shows: [],
+      movies: [{ mediaId: 'movie-1', action: 'WATCHED' }],
+    });
 
     expect(out.applied.watchlistAdded).toBe(1);
     expect(prisma.watchlistItem.upsert).toHaveBeenCalledWith(
@@ -318,7 +388,10 @@ describe('OnboardingService', () => {
       seasons,
       watchlistItems: [{ mediaId: 'media-1' }], // already tracked (e.g. first apply ran)
     });
-    const out = await svc.apply('u1', { shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }], movies: [] });
+    const out = await svc.apply('u1', {
+      shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }],
+      movies: [],
+    });
 
     expect(out.applied.watchlistAdded).toBe(0);
     expect(prisma.watchlistItem.upsert).not.toHaveBeenCalled();
@@ -343,7 +416,10 @@ describe('OnboardingService', () => {
   // ---------------- Hydration / failure isolation ----------------
   it('hydrates shows with no episodes and reports HYDRATION_FAILED when still empty', async () => {
     const { svc, prisma, meta } = make({ media: showMedia, episodeCount: 0, hydratedCount: 0 });
-    const out = await svc.apply('u1', { shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }], movies: [] });
+    const out = await svc.apply('u1', {
+      shows: [{ mediaId: 'media-1', action: 'CAUGHT_UP' }],
+      movies: [],
+    });
 
     expect(out.unresolved).toEqual([{ mediaId: 'media-1', reason: 'HYDRATION_FAILED' }]);
     expect(prisma.$transaction).not.toHaveBeenCalled();

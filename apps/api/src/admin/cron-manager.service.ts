@@ -7,6 +7,7 @@ import { MetadataBackfillService } from '../media-metadata/metadata-backfill.ser
 import { AdminService } from './admin.service';
 import { ProviderAlertsService } from '../provider-alerts/provider-alerts.service';
 import { CronExpression } from '@nestjs/schedule';
+import { ConfigService } from '@nestjs/config';
 
 interface JobHandler {
   label: string;
@@ -83,7 +84,7 @@ const DEFAULTS: { name: string; label: string; schedule: string }[] = [
   {
     name: 'structure_reconcile',
     label: 'Structure Reconcile Repair',
-    schedule: '30 14 * * 1',
+    schedule: '30 14 * * *',
   },
   {
     name: 'movie_countries_backfill',
@@ -121,6 +122,7 @@ export class CronManagerService implements OnModuleInit {
     private readonly adminService: AdminService,
     private readonly metadataBackfill: MetadataBackfillService,
     private readonly providerAlerts: ProviderAlertsService,
+    private readonly config: ConfigService,
   ) {}
 
   async onModuleInit() {
@@ -196,11 +198,23 @@ export class CronManagerService implements OnModuleInit {
     });
     this.handlers.set('structure_reconcile', {
       label: 'Structure Reconcile Repair',
-      defaultSchedule: '30 14 * * 1',
-      // Bounded automatic repair (heavy per title: provider rehydration + per-episode
-      // transfers). Canonical is deterministic (anime/stamp ⇒ TVDB, else TMDB);
-      // converged titles leave the candidate list, so the batch drains over weeks.
-      fn: () => this.metadataBackfill.reconcileStructures({ mode: 'repair', limit: 50 }),
+      defaultSchedule: '30 14 * * *',
+      // Report-only by default. Production mutation must be enabled explicitly after all
+      // API/worker instances enforce structural ownership and the dry-run has been reviewed.
+      // Once enabled, daily bounded batches converge because repaired titles leave the set.
+      fn: async () => {
+        const configured = this.config.get<number>('jobs.structureRepairBatchSize') ?? 200;
+        const limit = Number.isFinite(configured)
+          ? Math.max(1, Math.min(Math.trunc(configured), 1000))
+          : 200;
+        const cursor = await this.nextStructureReconcileCursor();
+        return this.metadataBackfill.reconcileStructures({
+          mode:
+            this.config.get<boolean>('jobs.structureRepairEnabled') === true ? 'repair' : 'report',
+          limit,
+          ...(cursor ? { cursor } : {}),
+        });
+      },
     });
     this.handlers.set('movie_countries_backfill', {
       label: 'Movie Countries Backfill',
@@ -350,6 +364,18 @@ export class CronManagerService implements OnModuleInit {
     );
   }
 
+  /** Continue after the last bounded structure batch. A null cursor wraps to the start,
+   * so failed/review rows are retried after the full backlog has been traversed. */
+  private async nextStructureReconcileCursor(): Promise<string | undefined> {
+    const previous = await this.prisma.cronJobRun.findFirst({
+      where: { job: { name: 'structure_reconcile' }, status: 'success' },
+      orderBy: { finishedAt: 'desc' },
+      select: { result: true },
+    });
+    const cursor = (previous?.result as Record<string, unknown> | null)?.nextCursor;
+    return typeof cursor === 'string' && cursor.length > 0 ? cursor : undefined;
+  }
+
   private async executeJob(name: string) {
     const handler = this.handlers.get(name);
     if (!handler) return;
@@ -368,9 +394,7 @@ export class CronManagerService implements OnModuleInit {
       // "Report" column in the admin history view. Must stay valid JSON within the
       // 2000-char budget: slicing mid-JSON breaks parsing and falsely fails the run.
       const resultJson =
-        result && typeof result === 'object'
-          ? (safeCronResultSummary(result) as any)
-          : undefined;
+        result && typeof result === 'object' ? (safeCronResultSummary(result) as any) : undefined;
 
       await this.prisma.cronJob.update({
         where: { name },

@@ -72,8 +72,16 @@ export class OnboardingService {
   async apply(userId: string, dto: ApplyOnboardingDto): Promise<OnboardingApplyResultDto> {
     const shows = dedupe(dto.shows ?? []);
     const movies = dedupe(dto.movies ?? []);
-    if (shows.some((s) => s.action === 'WATCHED_THROUGH' && (s.throughSeasonNumber == null || s.throughEpisodeNumber == null))) {
-      throw new BadRequestException('WATCHED_THROUGH requires throughSeasonNumber and throughEpisodeNumber');
+    if (
+      shows.some(
+        (s) =>
+          s.action === 'WATCHED_THROUGH' &&
+          (s.throughSeasonNumber == null || s.throughEpisodeNumber == null),
+      )
+    ) {
+      throw new BadRequestException(
+        'WATCHED_THROUGH requires throughSeasonNumber and throughEpisodeNumber',
+      );
     }
 
     const result: OnboardingApplyResultDto = {
@@ -147,12 +155,12 @@ export class OnboardingService {
     // On-demand hydration for shows that have a MediaItem but no episodes yet
     // (same fallback chain as the import matcher: TMDB first, then TVDB).
     let epCount = await this.prisma.episode.count({
-      where: { season: { show: { mediaId: media.id } } },
+      where: { structureState: 'ACTIVE', season: { show: { mediaId: media.id } } },
     });
     if (epCount === 0) {
       await this.ensureShowHydrated(media.id);
       epCount = await this.prisma.episode.count({
-        where: { season: { show: { mediaId: media.id } } },
+        where: { structureState: 'ACTIVE', season: { show: { mediaId: media.id } } },
       });
       if (epCount === 0) {
         result.unresolved.push({ mediaId: media.id, reason: 'HYDRATION_FAILED' });
@@ -164,8 +172,16 @@ export class OnboardingService {
     // unaired episodes are excluded from ALL counts and progress).
     const now = new Date();
     const seasons = await this.prisma.season.findMany({
-      where: { show: { mediaId: media.id }, isSpecial: false },
-      include: { episodes: { where: { airDate: { not: null, lte: now } } } },
+      where: {
+        show: { mediaId: media.id },
+        isSpecial: false,
+        episodes: { some: { structureState: 'ACTIVE' } },
+      },
+      include: {
+        episodes: {
+          where: { structureState: 'ACTIVE', airDate: { not: null, lte: now } },
+        },
+      },
       orderBy: { number: 'asc' },
     });
     const eligible: EligibleEpisode[] = seasons
@@ -185,7 +201,8 @@ export class OnboardingService {
         : eligible.filter(
             (e) =>
               e.seasonNumber < item.throughSeasonNumber! ||
-              (e.seasonNumber === item.throughSeasonNumber! && e.number <= item.throughEpisodeNumber!),
+              (e.seasonNumber === item.throughSeasonNumber! &&
+                e.number <= item.throughEpisodeNumber!),
           );
     if (target.length === 0) {
       result.unresolved.push({ mediaId: media.id, reason: 'NO_AIRED_EPISODES' });
@@ -342,14 +359,26 @@ export class OnboardingService {
   private async rebuildShowStatus(userId: string, mediaId: string, now: Date) {
     const [watchedCount, maxWatched, totalCount] = await Promise.all([
       this.prisma.userEpisodeStatus.count({
-        where: { userId, watched: true, episode: { season: { show: { mediaId }, isSpecial: false } } },
+        where: {
+          userId,
+          watched: true,
+          episode: { structureState: 'ACTIVE', season: { show: { mediaId }, isSpecial: false } },
+        },
       }),
       this.prisma.userEpisodeStatus.aggregate({
-        where: { userId, watched: true, episode: { season: { show: { mediaId }, isSpecial: false } } },
+        where: {
+          userId,
+          watched: true,
+          episode: { structureState: 'ACTIVE', season: { show: { mediaId }, isSpecial: false } },
+        },
         _max: { watchedAt: true },
       }),
       this.prisma.episode.count({
-        where: { season: { show: { mediaId }, isSpecial: false }, airDate: { lte: now } },
+        where: {
+          structureState: 'ACTIVE',
+          season: { show: { mediaId }, isSpecial: false },
+          airDate: { lte: now },
+        },
       }),
     ]);
     await this.prisma.userShowStatus.upsert({

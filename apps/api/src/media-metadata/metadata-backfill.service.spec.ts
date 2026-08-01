@@ -118,8 +118,38 @@ describe('MetadataBackfillService — backfill anime routing (isAnimeMedia)', ()
     ...over,
   });
 
-  it('classified-ANIME rows go to the anime repair, never TMDB', async () => {
+  it('an old ANIME verdict alone cannot select TVDB structure', async () => {
     const { service } = make(candidate({ contentClassification: 'ANIME' }));
+    const animeFix = jest
+      .spyOn(service as any, 'fixAnimeShowFromTvdb')
+      .mockResolvedValue({ fixed: true, remapped: 0 } as any);
+    const meta = (service as any).meta;
+
+    await service.backfillBatch(1);
+
+    expect(animeFix).not.toHaveBeenCalled();
+    expect(meta.ensureShowFull).toHaveBeenCalledWith(65942);
+  });
+
+  it('the anime keyword alone cannot select TVDB structure', async () => {
+    const { service } = make(candidate({ show: { keywords: ['anime', 'isekai'] } }));
+    const animeFix = jest
+      .spyOn(service as any, 'fixAnimeShowFromTvdb')
+      .mockResolvedValue({ fixed: true, remapped: 0 } as any);
+
+    await service.backfillBatch(1);
+
+    expect(animeFix).not.toHaveBeenCalled();
+    expect((service as any).meta.ensureShowFull).toHaveBeenCalledWith(65942);
+  });
+
+  it('Animation plus the anime keyword selects the TVDB repair', async () => {
+    const { service } = make(
+      candidate({
+        show: { keywords: ['anime'], structureProvider: 'TVDB' },
+        genres: [{ genre: { slug: 'animation', name: 'Animation' } }],
+      }),
+    );
     const animeFix = jest
       .spyOn(service as any, 'fixAnimeShowFromTvdb')
       .mockResolvedValue({ fixed: true, remapped: 0 } as any);
@@ -129,28 +159,6 @@ describe('MetadataBackfillService — backfill anime routing (isAnimeMedia)', ()
 
     expect(animeFix).toHaveBeenCalledWith('m1');
     expect(meta.ensureShowFull).not.toHaveBeenCalled();
-  });
-
-  it('anime-keyword rows go to the anime repair even with the GENERAL classification', async () => {
-    const { service } = make(candidate({ show: { keywords: ['anime', 'isekai'] } }));
-    const animeFix = jest
-      .spyOn(service as any, 'fixAnimeShowFromTvdb')
-      .mockResolvedValue({ fixed: true, remapped: 0 } as any);
-
-    await service.backfillBatch(1);
-
-    expect(animeFix).toHaveBeenCalledWith('m1');
-  });
-
-  it('plain rows keep the TMDB-first path', async () => {
-    const { service } = make(candidate());
-    const animeFix = jest.spyOn(service as any, 'fixAnimeShowFromTvdb');
-    const meta = (service as any).meta;
-
-    await service.backfillBatch(1);
-
-    expect(animeFix).not.toHaveBeenCalled();
-    expect(meta.ensureShowFull).toHaveBeenCalledWith(65942);
   });
 });
 
@@ -201,23 +209,15 @@ describe('MetadataBackfillService.repairNonEnglishBase', () => {
     );
   });
 
-  it('animation rows are TVDB-authoritative (never TMDB), with the anime repair as id fallback', async () => {
-    const anime = (over: Record<string, any> = {}) =>
-      row({
-        genres: [{ genre: { slug: 'animation', name: 'Animation' } }],
-        ...over,
-      });
+  it('Animation alone remains TMDB-authoritative', async () => {
     const { service, meta } = make([
-      anime({
+      row({
         id: 'a1',
+        genres: [{ genre: { slug: 'animation', name: 'Animation' } }],
         externalIds: [
           { provider: 'TMDB', value: '1416', providerEntityKind: 'SERIES' },
           { provider: 'THE_TVDB', value: '789', providerEntityKind: 'SERIES' },
         ],
-      }),
-      anime({
-        id: 'a2',
-        externalIds: [{ provider: 'TMDB', value: '65942', providerEntityKind: 'SERIES' }],
       }),
     ]);
     const animeFix = jest
@@ -226,40 +226,36 @@ describe('MetadataBackfillService.repairNonEnglishBase', () => {
 
     await service.repairNonEnglishBase();
 
-    // Both ids present → TVDB wins over TMDB.
-    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
-    expect(meta.ensureShowFull).not.toHaveBeenCalled();
-    // No TVDB id → the anime repair resolves it instead of using TMDB.
-    expect(animeFix).toHaveBeenCalledWith('a2');
+    expect(meta.ensureShowFull).toHaveBeenCalledWith(1416);
+    expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+    expect(animeFix).not.toHaveBeenCalled();
   });
 
-  it('anime routing uses the REAL signals: classification verdict and the anime keyword (not just genre)', async () => {
+  it('strict Animation plus anime keyword uses the locked anime repair', async () => {
     const { service, meta } = make([
-      // Classified ANIME — TVDB wins even without the Animation genre.
       row({
         id: 'c1',
-        contentClassification: 'ANIME',
-        genres: [],
+        contentClassification: 'GENERAL',
+        show: {
+          keywords: ['anime', 'isekai'],
+          structureProvider: 'TVDB',
+          structureReason: 'ANIME_TVDB',
+        },
+        genres: [{ genre: { slug: 'animation', name: 'Animation' } }],
         externalIds: [
           { provider: 'TMDB', value: '1', providerEntityKind: 'SERIES' },
           { provider: 'THE_TVDB', value: '305089', providerEntityKind: 'SERIES' },
         ],
       }),
-      // anime keyword persisted — TVDB wins too.
-      row({
-        id: 'c2',
-        show: { keywords: ['anime', 'isekai'] },
-        genres: [],
-        externalIds: [
-          { provider: 'TMDB', value: '2', providerEntityKind: 'SERIES' },
-          { provider: 'THE_TVDB', value: '305089', providerEntityKind: 'SERIES' },
-        ],
-      }),
     ]);
+    const animeFix = jest
+      .spyOn(service as any, 'fixAnimeShowFromTvdb')
+      .mockResolvedValue({ fixed: true, remapped: 0 } as any);
 
     await service.repairNonEnglishBase();
 
-    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(305089);
+    expect(animeFix).toHaveBeenCalledWith('c1');
+    expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
     expect(meta.ensureShowFull).not.toHaveBeenCalled();
   });
 
@@ -456,12 +452,11 @@ describe('MetadataBackfillService', () => {
     it('rehydrates TMDB-structured animation shows from their stored TVDB id', async () => {
       mockCandidates([animeShow()]);
       const res = await service.rehydrateAnimeFromTvdb();
-      // Stale gate bypassed so ensureShowFullTvdb cannot skip a recently-refreshed show.
-      expect(prisma.mediaItem.update).toHaveBeenCalledWith({
-        where: { id: 'm1' },
-        data: { metadataRefreshedAt: null },
-      });
-      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(
+        789,
+        undefined,
+        expect.objectContaining({ forceRefresh: true, writeScope: 'STRUCTURE_REMAP' }),
+      );
       expect(res).toMatchObject({
         processed: 1,
         succeeded: 1,
@@ -488,7 +483,11 @@ describe('MetadataBackfillService', () => {
           value: '555',
         }),
       });
-      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(555);
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(
+        555,
+        undefined,
+        expect.objectContaining({ forceRefresh: true, writeScope: 'STRUCTURE_REMAP' }),
+      );
       expect(res.succeeded).toBe(1);
     });
 
@@ -540,7 +539,11 @@ describe('MetadataBackfillService', () => {
           value: '305089',
         }),
       });
-      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(305089);
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(
+        305089,
+        undefined,
+        expect.objectContaining({ forceRefresh: true, writeScope: 'STRUCTURE_REMAP' }),
+      );
       expect(res.succeeded).toBe(1);
     });
 
@@ -556,7 +559,11 @@ describe('MetadataBackfillService', () => {
       prisma.externalId.findFirst.mockResolvedValue(null);
       const res = await service.rehydrateAnimeFromTvdb();
       expect(tvdb.searchShows).toHaveBeenCalledWith('Naruto', 1);
-      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(555);
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(
+        555,
+        undefined,
+        expect.objectContaining({ forceRefresh: true, writeScope: 'STRUCTURE_REMAP' }),
+      );
       expect(res.succeeded).toBe(1);
     });
 
@@ -627,29 +634,27 @@ describe('MetadataBackfillService', () => {
       prisma.__setStaleRows(52);
       structureRemap.remapShow.mockResolvedValue({ stale: 52, mapped: 50, unmapped: 2 });
       const res = await service.fixAnimeShowFromTvdb('m1');
-      // Stale gate bypassed so ensureShowFullTvdb cannot skip a recently-refreshed show.
-      expect(prisma.mediaItem.update).toHaveBeenCalledWith({
-        where: { id: 'm1' },
-        data: { metadataRefreshedAt: null },
-      });
-      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(
+        789,
+        undefined,
+        expect.objectContaining({ forceRefresh: true, writeScope: 'STRUCTURE_REMAP' }),
+      );
       expect(structureRemap.remapShow).toHaveBeenCalledWith(
         'm1',
         expect.objectContaining({ onProgress: expect.any(Function) }),
       );
-      // Kept-unmapped count + matcher version + canonical structure provider persisted
-      // (kept rows alone never re-arm the repair; an older matcher version does).
+      // The typed Show fields are stamped by StructureRemapService; JSON remains only
+      // as a temporary compatibility marker during rollout.
       expect(prisma.mediaItem.update).toHaveBeenCalledWith({
         where: { id: 'm1' },
         data: {
           metadataProvenance: {
-            animeTvdbKeptUnmapped: 2,
             animeTvdbRemapVersion: StructureRemapService.MATCHER_VERSION,
             structureProvider: 'tvdb',
           },
         },
       });
-      expect(res).toEqual({ fixed: true, remapped: 50 });
+      expect(res).toMatchObject({ fixed: true, remapped: 50, report: { mapped: 50 } });
     });
 
     it('returns fixed=false when the TVDB id cannot be resolved', async () => {
@@ -662,45 +667,6 @@ describe('MetadataBackfillService', () => {
       expect(res.fixed).toBe(false);
       expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
       expect(structureRemap.remapShow).not.toHaveBeenCalled();
-    });
-
-    it('skips when only previously-kept unmapped rows remain (no re-hydration loop)', async () => {
-      prisma.mediaItem.findUnique.mockResolvedValue(
-        animeShow({
-          metadataProvenance: {
-            animeTvdbKeptUnmapped: 27,
-            animeTvdbRemapVersion: StructureRemapService.MATCHER_VERSION,
-          },
-        }),
-      );
-      prisma.__setStaleRows(27); // == kept count → nothing new
-      const res = await service.fixAnimeShowFromTvdb('m1');
-      expect(res.fixed).toBe(false);
-      expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
-      expect(tvdb.searchShows).not.toHaveBeenCalled();
-    });
-
-    it('re-arms when the kept rows were processed by an older matcher version', async () => {
-      prisma.mediaItem.findUnique.mockResolvedValue(
-        animeShow({
-          metadataProvenance: { animeTvdbKeptUnmapped: 27, animeTvdbRemapVersion: 1 },
-        }),
-      );
-      prisma.__setStaleRows(27); // same rows, but the v1 matcher never had absoluteNumber
-      structureRemap.remapShow.mockResolvedValue({ stale: 27, mapped: 27, unmapped: 0 });
-      const res = await service.fixAnimeShowFromTvdb('m1');
-      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
-      expect(res.fixed).toBe(true);
-    });
-
-    it('re-arms the repair when new stale rows appear (count grew past kept count)', async () => {
-      prisma.mediaItem.findUnique.mockResolvedValue(
-        animeShow({ metadataProvenance: { animeTvdbKeptUnmapped: 27 } }),
-      );
-      prisma.__setStaleRows(28); // new contamination
-      const res = await service.fixAnimeShowFromTvdb('m1');
-      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
-      expect(res.fixed).toBe(true);
     });
 
     it('coalesces concurrent repairs for the same show (detail + episodes race)', async () => {
@@ -730,9 +696,13 @@ describe('MetadataBackfillService', () => {
   });
 
   describe('backfillBatch (hydrateOne)', () => {
-    it('rehydrates animation shows from TVDB even without existing structure', async () => {
+    it('hydrates strict anime shows from TVDB even without existing structure', async () => {
       prisma.mediaItem.findMany.mockResolvedValue([
-        { ...animeShow(), genres: [{ genre: { slug: 'animation', name: 'Animation' } }] },
+        {
+          ...animeShow(),
+          show: { yearStart: 2002, keywords: ['anime'], structureProvider: 'TVDB' },
+          genres: [{ genre: { slug: 'animation', name: 'Animation' } }],
+        },
       ]);
       prisma.__setStaleRows(0); // no existing structure → would normally go TMDB
       await service.backfillBatch(10);
@@ -782,7 +752,7 @@ describe('MetadataBackfillService', () => {
   });
 
   describe('syncTmdbChanges', () => {
-    it('skips animation-genre shows (TVDB-authoritative)', async () => {
+    it('refreshes only TMDB supplemental fields for shows structurally owned by TVDB', async () => {
       tmdb.get.mockImplementation((path: string) =>
         Promise.resolve(
           path === '/tv/changes'
@@ -791,13 +761,24 @@ describe('MetadataBackfillService', () => {
         ),
       );
       prisma.externalId.findMany.mockResolvedValue([
-        { mediaId: 'm1', value: '42', media: { type: 'SHOW', externalIds: [] } },
-        { mediaId: 'm2', value: '42', media: { type: 'SHOW', externalIds: [] } },
+        {
+          mediaId: 'm1',
+          value: '42',
+          media: { type: 'SHOW', externalIds: [], show: { structureProvider: 'TVDB' } },
+        },
+        {
+          mediaId: 'm2',
+          value: '42',
+          media: { type: 'SHOW', externalIds: [], show: { structureProvider: 'TMDB' } },
+        },
       ]);
-      prisma.mediaItem.findMany.mockResolvedValue([{ id: 'm1' }]); // animation set
       const res = await service.syncTmdbChanges();
-      expect(meta.ensureShowFull).toHaveBeenCalledTimes(1); // only the non-animation show
-      expect(res).toMatchObject({ matched: 2, hydrated: 1, skippedAnime: 1 });
+      expect(meta.ensureShowFull).toHaveBeenCalledTimes(2);
+      expect(meta.ensureShowFull).toHaveBeenCalledWith(42, undefined, {
+        forceRefresh: true,
+        writeScope: 'METADATA_ONLY',
+      });
+      expect(res).toMatchObject({ matched: 2, hydrated: 2, skippedAnime: 1 });
     });
 
     it('uses the custom start date for one-off runs without moving the Redis cursor', async () => {
@@ -838,16 +819,16 @@ describe('MetadataBackfillService', () => {
         { id: 'm2', title: 'Broadchurch', tvdb_id: '73996' },
       ]);
       const res = await service.backfillCharacterIds();
-      expect(prisma.mediaItem.update).toHaveBeenCalledWith({
-        where: { id: 'm1' },
-        data: { metadataRefreshedAt: null },
-      });
       expect(meta.ensureShowFullTvdb).toHaveBeenCalledTimes(2);
       expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(73255, undefined, {
         skipClassification: true,
+        forceRefresh: true,
+        writeScope: 'CAST_ONLY',
       });
       expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(73996, undefined, {
         skipClassification: true,
+        forceRefresh: true,
+        writeScope: 'CAST_ONLY',
       });
       expect(res).toMatchObject({ processed: 2, succeeded: 2, failed: 0, rateLimited: 0 });
     });
@@ -1061,10 +1042,22 @@ describe('MetadataBackfillService — recommendations backfill', () => {
     );
     expect(
       sqls.some(
-        (s) =>
-          s.includes('recommendations_synced_at IS NULL') && s.includes("e.provider = 'TMDB'"),
+        (s) => s.includes('recommendations_synced_at IS NULL') && s.includes("e.provider = 'TMDB'"),
       ),
     ).toBe(true);
+  });
+
+  it('derives the dashboard dual-structure count from the repair selector', async () => {
+    const { service } = make({});
+    const selector = jest.spyOn(service as any, 'findDualStructureShows').mockResolvedValue([
+      { mediaId: 'm1', stale: 2, fresh: 10 },
+      { mediaId: 'm2', stale: 1, fresh: 8 },
+    ]);
+
+    const stats = await service.getHealthStats();
+
+    expect(selector).toHaveBeenCalledWith(100000);
+    expect(stats.dualStructureShows).toBe(2);
   });
 
   it('repair selection SQL mirrors the stat (null stamp + TMDB id), writes snapshot + stamp', async () => {
@@ -1665,7 +1658,6 @@ describe('MetadataBackfillService.repairBannerPosters', () => {
   });
 });
 
-
 describe('MetadataBackfillService.repairProviderDuplicateMovies', () => {
   function make(opts: {
     candidates: any[];
@@ -1696,7 +1688,10 @@ describe('MetadataBackfillService.repairProviderDuplicateMovies', () => {
     const tmdbProvider = {
       enabled: true,
       findByExternalIdStrict: jest.fn(async () => opts.findResult ?? null),
-      searchMovies: jest.fn(async () => ({ items: opts.searchItems ?? [], total: (opts.searchItems ?? []).length })),
+      searchMovies: jest.fn(async () => ({
+        items: opts.searchItems ?? [],
+        total: (opts.searchItems ?? []).length,
+      })),
     };
     const meta = mockMeta();
     const service = new MetadataBackfillService(
@@ -1796,7 +1791,10 @@ describe('MetadataBackfillService.repairProviderDuplicateMovies', () => {
       findResult: null,
       searchItems: [],
       sourceRow: { id: 'src1', ...dup, releaseYear: 2010 },
-      localMetaCandidates: [{ id: 'd1', ...dup }, { id: 'd2', ...dup }],
+      localMetaCandidates: [
+        { id: 'd1', ...dup },
+        { id: 'd2', ...dup },
+      ],
     });
     const res = await service.repairProviderDuplicateMovies();
     expect(res.skipReasons['metadata fallback ambiguous']).toBe(1);

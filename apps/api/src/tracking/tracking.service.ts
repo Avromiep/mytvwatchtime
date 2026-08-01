@@ -366,7 +366,12 @@ export class TrackingService {
     if (aired.length === 0) return { watched: true, count: 0 };
 
     const rewatched = await this.prisma.userEpisodeStatus.findMany({
-      where: { userId, episodeId: { in: aired.map((e) => e.id) }, watched: true, watchCount: { gte: 2 } },
+      where: {
+        userId,
+        episodeId: { in: aired.map((e) => e.id) },
+        watched: true,
+        watchCount: { gte: 2 },
+      },
       select: { episodeId: true },
     });
     if (rewatched.length === 0) {
@@ -530,6 +535,7 @@ export class TrackingService {
       const total = mayHaveNewEpisodes
         ? await this.prisma.episode.count({
             where: {
+              structureState: 'ACTIVE',
               season: { show: { mediaId }, isSpecial: false },
               airDate: { lte: new Date() },
             },
@@ -557,7 +563,11 @@ export class TrackingService {
 
     // First time tracking this show: compute the total and seed the row.
     const total = await this.prisma.episode.count({
-      where: { season: { show: { mediaId }, isSpecial: false }, airDate: { lte: new Date() } },
+      where: {
+        structureState: 'ACTIVE',
+        season: { show: { mediaId }, isSpecial: false },
+        airDate: { lte: new Date() },
+      },
     });
     try {
       await this.prisma.userShowStatus.create({

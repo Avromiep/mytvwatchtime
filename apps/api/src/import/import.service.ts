@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, ListSource } from '@prisma/client';
@@ -763,9 +769,11 @@ export class ImportService {
         })
       : [];
     const typeById = new Map(typeRows.map((r) => [r.id, r.type]));
+    const incompatibleItems: any[] = [];
     const guardFilter = (it: any, expected: string): boolean => {
       if (typeById.get(it.matchedMediaId) === expected) return true;
       skipped++;
+      incompatibleItems.push(it);
       this.logger.warn(
         `apply guard: dropping ${it.sourceEntityType} item ${it.id} — matched media is ${typeById.get(it.matchedMediaId) ?? 'missing'}, expected ${expected}`,
       );
@@ -779,12 +787,21 @@ export class ImportService {
     const favoriteItems = favoriteItemsRaw.filter((it) =>
       guardFilter(it, it.sourceEntityType === 'FAVORITE_MOVIE' ? 'MOVIE' : 'SHOW'),
     );
+    if (incompatibleItems.length) {
+      await this.prisma.importItem.updateMany({
+        where: { id: { in: incompatibleItems.map((item) => item.id) } },
+        data: {
+          status: 'SKIPPED',
+          errorMessage: 'Matched media type is incompatible with this import item',
+        },
+      });
+    }
 
     // --- WATCHED EPISODES ---
     if (epItemsGuarded.length) {
       const stagedEpisodeIds = epItemsGuarded.map((it) => it.matchedEpisodeId as string);
       const stagedEpisodes = await this.prisma.episode.findMany({
-        where: { id: { in: stagedEpisodeIds } },
+        where: { id: { in: stagedEpisodeIds }, structureState: 'ACTIVE' },
         select: { id: true },
       });
       const existingEpisodeIds = new Set(stagedEpisodes.map((episode) => episode.id));
@@ -804,15 +821,18 @@ export class ImportService {
           normalized.special !== true &&
           Number.isInteger(seasonNumber) &&
           Number.isInteger(episodeNumber);
-        const replacement = canRepairByPosition
-          ? await this.prisma.episode.findFirst({
+        const replacements = canRepairByPosition
+          ? await this.prisma.episode.findMany({
               where: {
+                structureState: 'ACTIVE',
                 season: { show: { mediaId: item.matchedMediaId }, number: seasonNumber },
                 number: episodeNumber,
               },
               select: { id: true },
+              take: 2,
             })
-          : null;
+          : [];
+        const replacement = replacements.length === 1 ? replacements[0] : null;
 
         if (replacement) {
           this.logger.warn(
@@ -822,7 +842,7 @@ export class ImportService {
           repairedItems.push(item);
         } else {
           this.logger.warn(
-            `apply guard: skipping import item ${item.id} because episode ${item.matchedEpisodeId} no longer exists`,
+            `apply guard: skipping import item ${item.id} because episode ${item.matchedEpisodeId} is missing or its canonical S/E replacement is ambiguous`,
           );
           unresolvedItems.push(item);
         }
@@ -845,7 +865,7 @@ export class ImportService {
           data: {
             status: 'SKIPPED',
             matchedEpisodeId: null,
-            errorMessage: null,
+            errorMessage: 'Episode is missing or its canonical replacement is ambiguous',
           },
         });
         for (const item of unresolvedItems) item.matchedEpisodeId = null;
@@ -857,7 +877,7 @@ export class ImportService {
       const episodeIds = applicableEpItems.map((item) => item.matchedEpisodeId as string);
       const [episodeData, existingWatched] = await Promise.all([
         this.prisma.episode.findMany({
-          where: { id: { in: episodeIds } },
+          where: { id: { in: episodeIds }, structureState: 'ACTIVE' },
           select: { id: true, runtimeMinutes: true, season: { select: { number: true } } },
         }),
         this.prisma.userEpisodeStatus.findMany({
@@ -2446,7 +2466,9 @@ export class ImportService {
       JOIN episodes e ON ues.episode_id = e.id
       JOIN seasons s ON e.season_id = s.id
       JOIN shows sh ON s.show_id = sh.id
-      WHERE ues.user_id = ${userId} AND ues.watched = true AND s.is_special = false
+      WHERE ues.user_id = ${userId} AND ues.watched = true
+        AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
+        AND s.is_special = false
       GROUP BY sh.media_id
     `;
 
@@ -2456,7 +2478,8 @@ export class ImportService {
       FROM episodes e
       JOIN seasons s ON e.season_id = s.id
       JOIN shows sh ON s.show_id = sh.id
-      WHERE s.is_special = false AND sh.media_id IN (${Prisma.join(showIds)})
+      WHERE e.structure_state = 'ACTIVE'::"EpisodeStructureState"
+        AND s.is_special = false AND sh.media_id IN (${Prisma.join(showIds)})
       GROUP BY sh.media_id
     `;
 

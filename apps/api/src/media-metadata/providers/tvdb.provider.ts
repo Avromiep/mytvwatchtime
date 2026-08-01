@@ -573,6 +573,54 @@ export class TvdbProvider {
     };
   }
 
+  /**
+   * Lightweight episode identity snapshot for structure reconciliation. Unlike
+   * {@link getShow}, this fetches only the paginated episode list: no artwork, cast,
+   * translations, or series metadata. Because the list is requested under a verified
+   * TVDB series id, a returned episode id also proves parent-show membership.
+   */
+  async getEpisodeRoutingIndex(
+    tvdbSeriesId: number,
+    language?: string,
+  ): Promise<
+    Map<
+      number,
+      {
+        airDate: string | null;
+        seasonNumber: number | null;
+        episodeNumber: number | null;
+        absoluteNumber: number | null;
+      }
+    >
+  > {
+    const episodesBySeason = await this.fetchSeriesEpisodes(tvdbSeriesId, language);
+    const index = new Map<
+      number,
+      {
+        airDate: string | null;
+        seasonNumber: number | null;
+        episodeNumber: number | null;
+        absoluteNumber: number | null;
+      }
+    >();
+    let derivedAbsolute = 1;
+    for (const [seasonNumber, episodes] of [...episodesBySeason.entries()].sort(
+      ([a], [b]) => a - b,
+    )) {
+      for (const episode of [...episodes].sort((a, b) => (a.number ?? 0) - (b.number ?? 0))) {
+        const isSpecial = seasonNumber === 0;
+        index.set(episode.id, {
+          airDate: episode.aired || null,
+          seasonNumber,
+          episodeNumber: episode.number ?? null,
+          absoluteNumber: isSpecial ? null : (episode.absoluteNumber ?? derivedAbsolute),
+        });
+        if (!isSpecial) derivedAbsolute++;
+      }
+    }
+    return index;
+  }
+
   /** Localized title + overview for a series in the requested language. */
   async getSeriesTranslations(
     tvdbId: number,

@@ -13,7 +13,7 @@ function model(fns: string[]): FnMap {
 function makeService() {
   const prisma: any = {
     cronJob: model(['findMany', 'upsert', 'update', 'findUnique']),
-    cronJobRun: model(['create']),
+    cronJobRun: model(['create', 'findFirst']),
     scheduledHydration: model(['findMany', 'findUnique', 'update']),
   };
   const scheduler = {
@@ -33,10 +33,14 @@ function makeService() {
     backfillBatch: jest.fn(),
     syncTmdbChanges: jest.fn(),
     rehydrateAnimeFromTvdb: jest.fn(),
+    reconcileStructures: jest.fn(),
   };
   const providerAlerts = {
     checkAlerts: jest.fn(),
     syncCatalog: jest.fn(),
+  };
+  const config: { get: jest.Mock } = {
+    get: jest.fn((key: string) => (key === 'jobs.structureRepairBatchSize' ? 200 : undefined)),
   };
   const svc = new CronManagerService(
     prisma,
@@ -45,12 +49,53 @@ function makeService() {
     adminService as any,
     metadataBackfill as any,
     providerAlerts as any,
+    config as any,
   );
-  return { svc, prisma, scheduler, adminService };
+  return { svc, prisma, scheduler, adminService, metadataBackfill, config };
 }
 
 describe('CronManagerService', () => {
   beforeEach(() => scheduleMock.mockClear());
+
+  it('keeps scheduled structure reconciliation report-only until explicitly enabled', async () => {
+    const { svc, prisma, metadataBackfill, config } = makeService();
+    metadataBackfill.reconcileStructures.mockResolvedValue({ mode: 'report' });
+    prisma.cronJob.findMany.mockResolvedValue([]);
+    prisma.scheduledHydration.findMany.mockResolvedValue([]);
+
+    await svc.onModuleInit();
+    await (svc as any).handlers.get('structure_reconcile').fn();
+
+    expect(metadataBackfill.reconcileStructures).toHaveBeenCalledWith({
+      mode: 'report',
+      limit: 200,
+    });
+
+    config.get.mockImplementation((key: string) =>
+      key === 'jobs.structureRepairEnabled' ? true : 200,
+    );
+    await (svc as any).handlers.get('structure_reconcile').fn();
+    expect(metadataBackfill.reconcileStructures).toHaveBeenLastCalledWith({
+      mode: 'repair',
+      limit: 200,
+    });
+  });
+
+  it('continues the scheduled structure repair from the previous bounded cursor', async () => {
+    const { svc, prisma, metadataBackfill } = makeService();
+    prisma.cronJob.findMany.mockResolvedValue([]);
+    prisma.scheduledHydration.findMany.mockResolvedValue([]);
+    prisma.cronJobRun.findFirst.mockResolvedValue({ result: { nextCursor: 'media-200' } });
+
+    await svc.onModuleInit();
+    await (svc as any).handlers.get('structure_reconcile').fn();
+
+    expect(metadataBackfill.reconcileStructures).toHaveBeenCalledWith({
+      mode: 'report',
+      limit: 200,
+      cursor: 'media-200',
+    });
+  });
 
   it('schedules jobs with their per-job timezone', async () => {
     const { svc, prisma } = makeService();

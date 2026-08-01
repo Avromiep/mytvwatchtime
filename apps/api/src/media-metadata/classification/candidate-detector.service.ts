@@ -56,11 +56,13 @@ export class CandidateDetectorService {
 
     const genresLower = (input.genres ?? []).map((g) => g.toLowerCase());
     const hasAnimation = genresLower.some((g) => ANIMATION_GENRE.test(g));
+    const hasTmdbAnimation = (input.tmdbGenreIds ?? []).includes(16);
 
     if (input.manualCandidate) signals.push('manual_candidate');
     const verifiedAnime = hasVerifiedAnimeId(input.externalIds);
     if (verifiedAnime) signals.push('verified_anime_id');
     if (hasAnimation) signals.push('animation_genre');
+    if (hasTmdbAnimation) signals.push('tmdb_animation_genre');
     const tvdbAnime = !!input.tvdbType && /anime/i.test(input.tvdbType);
     if (tvdbAnime) signals.push('tvdb_anime_signal');
     // TMDB keyword id 210024 ("anime") — community-maintained and quite reliable.
@@ -77,6 +79,7 @@ export class CandidateDetectorService {
     if (jpOrigin) evidence.japaneseOrigin = true;
     if (jpStudio) evidence.animeStudio = true;
     if (hasAnimation) evidence.hasAnimation = true;
+    if (hasTmdbAnimation) evidence.tmdbAnimation = true;
     if (tvdbAnime) evidence.tvdbAnimeSignal = true;
     if (keywordAnime) evidence.animeKeyword = true;
 

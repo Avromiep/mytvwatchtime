@@ -66,6 +66,11 @@ export default () => ({
   jobs: {
     metadataRefreshCron: process.env.METADATA_REFRESH_CRON || '0 3 * * *',
     notificationsDispatchCron: process.env.NOTIFICATIONS_DISPATCH_CRON || '*/5 * * * *',
+    structureRepairEnabled: process.env.STRUCTURE_REPAIR_ENABLED === 'true',
+    structureRepairBatchSize: Math.max(
+      1,
+      Math.min(Number(process.env.STRUCTURE_REPAIR_BATCH_SIZE || 200), 1000),
+    ),
   },
   imports: {
     dailyLimit: Number(process.env.IMPORT_DAILY_LIMIT || 3),

@@ -68,7 +68,7 @@ export default function ShowDetailScreen() {
   const { t } = useTranslation(['showDetail', 'common', 'episode']);
   const { id } = useLocalSearchParams<{ id: string }>();
   const qc = useQueryClient();
-  const { data: show, isLoading, isPlaceholderData, refetch } = useShow(id);
+  const { data: show, isLoading, isError, isPlaceholderData, refetch } = useShow(id);
   // Canonicalize numeric-TMDB-id URLs (Similar rail): seed the detail cache under the
   // INTERNAL id and replace the route, so every hook/mutation (votes, favorite,
   // watchlist, episodes, comments) keys on one consistent id — no alias drift.
@@ -104,6 +104,25 @@ export default function ShowDetailScreen() {
     setRefreshing(false);
   }, [refetch]);
   const onVoteError = () => showError({ description: t('episode:voteFailed') });
+
+  if (isError && !show)
+    return (
+      <Screen>
+        <Header showBack />
+        <View
+          style={{
+            flex: 1,
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: spacing.md,
+            padding: spacing.lg,
+          }}
+        >
+          <T variant="h2">{t('common:failed')}</T>
+          <Button title={t('common:retry')} onPress={() => void refetch()} />
+        </View>
+      </Screen>
+    );
 
   if (isLoading || !show || show.id !== id)
     return (

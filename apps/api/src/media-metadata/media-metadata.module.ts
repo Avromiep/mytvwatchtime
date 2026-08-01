@@ -23,6 +23,7 @@ import { MetadataBackfillService } from './metadata-backfill.service';
 import { StructureRemapService } from './structure-remap.service';
 import { CastDedupService } from './cast-dedup.service';
 import { ExternalReviewsService } from './external-reviews.service';
+import { StructureAuthorityService } from './structure-authority.service';
 
 @Module({
   controllers: [MediaController],
@@ -41,6 +42,7 @@ import { ExternalReviewsService } from './external-reviews.service';
     HydrationProcessor,
     MetadataBackfillService,
     StructureRemapService,
+    StructureAuthorityService,
     CastDedupService,
     TmdbClient,
     TmdbProvider,
@@ -71,6 +73,7 @@ import { ExternalReviewsService } from './external-reviews.service';
     MediaPromotionService,
     HydrationQueue,
     MetadataBackfillService,
+    StructureAuthorityService,
     CastDedupService,
   ],
 })

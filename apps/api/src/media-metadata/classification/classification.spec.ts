@@ -55,61 +55,51 @@ describe('CandidateDetectorService', () => {
 });
 
 describe('ClassifierService', () => {
-  it('confirms ANIME from a TMDB animated JP show with a reliable Kitsu match', () => {
+  it('confirms ANIME only when TMDB Animation and anime keyword are both present', () => {
     const c = detector.detect({
       genres: ['Animation'],
-      originalLanguage: 'ja',
-      originCountries: ['JP'],
+      tmdbGenreIds: [16],
+      keywords: ['anime'],
     });
+    const out = classifier.classify(c, null);
+    expect(out.classification).toBe('ANIME');
+    expect(out.tier).toBe('confirmed');
+    expect(out.confidence).toBe(0.95);
+  });
+
+  it('keeps Animation without the keyword as GENERAL even with a Kitsu match', () => {
+    const c = detector.detect({ genres: ['Animation'], originCountries: ['JP'] });
     const out = classifier.classify(c, {
       matched: true,
       provider: ExternalProvider.KITSU,
       externalId: '9',
-      confidence: 0.95,
+      confidence: 0.99,
     });
-    expect(out.classification).toBe('ANIME');
+    expect(out.classification).toBe('GENERAL');
     expect(out.tier).toBe('confirmed');
-    expect(out.confidence).toBeGreaterThanOrEqual(0.9);
+    expect(out.evidence.enrichmentProvider).toBe(ExternalProvider.KITSU);
   });
 
-  it('confirms ANIME from an animated JP movie with a reliable Jikan match', () => {
-    const c = detector.detect({ genres: ['Animation'], originalLanguage: 'ja' });
+  it('keeps the anime keyword without Animation as GENERAL', () => {
+    const c = detector.detect({ genres: ['Drama'], keywords: ['anime'] });
+    const out = classifier.classify(c, null);
+    expect(out.classification).toBe('GENERAL');
+    expect(out.tier).toBe('confirmed');
+  });
+
+  it('keeps Japanese origin, studio, and verified MAL id as GENERAL without both TMDB signals', () => {
+    const c = detector.detect({
+      genres: ['Animation'],
+      originCountries: ['JP'],
+      studios: ['Madhouse'],
+      externalIds: [animeId(ExternalProvider.MYANIME_LIST)],
+    });
     const out = classifier.classify(c, {
       matched: true,
       provider: ExternalProvider.MYANIME_LIST,
-      externalId: '5',
-      confidence: 0.88,
+      externalId: '1',
     });
-    expect(out.classification).toBe('ANIME');
-    expect(out.tier).toBe('confirmed');
-  });
-
-  it('classifies probable ANIME when Kitsu and Jikan are unavailable but evidence is strong', () => {
-    const c = detector.detect({
-      genres: ['Animation'],
-      originalLanguage: 'ja',
-      originCountries: ['JP'],
-      studios: ['Madhouse'],
-    });
-    const out = classifier.classify(c, { matched: false, reason: 'provider_unavailable' });
-    expect(out.classification).toBe('ANIME');
-    expect(out.tier).toBe('probable');
-    expect(out.confidence).toBeGreaterThan(0.4);
-  });
-
-  it('keeps Western animation (animation alone) as GENERAL at candidate tier', () => {
-    const c = detector.detect({ genres: ['Animation'] }); // no JP signals
-    const out = classifier.classify(c, { matched: false, reason: 'no_result' });
     expect(out.classification).toBe('GENERAL');
-    expect(out.tier).toBe('candidate');
-  });
-
-  it('confirms ANIME from the TMDB `anime` keyword alone (no provider match, no JP evidence)', () => {
-    const c = detector.detect({ keywords: ['anime'] }); // no genres/JP signals
-    const out = classifier.classify(c, { matched: false, reason: 'no_result' });
-    expect(out.classification).toBe('ANIME');
-    expect(out.tier).toBe('confirmed');
-    expect(out.confidence).toBe(0.9);
   });
 
   it('leaves a non-candidate as GENERAL', () => {
@@ -126,30 +116,5 @@ describe('ClassifierService', () => {
     });
     expect(c.isCandidate).toBe(false);
     expect(classifier.classify(c, undefined).classification).toBe('GENERAL');
-  });
-
-  it('upgrades a probable item to confirmed when a reliable mapping is later found', () => {
-    const c = detector.detect({ genres: ['Animation'], originalLanguage: 'ja' });
-    const first = classifier.classify(c, { matched: false, reason: 'provider_unavailable' });
-    expect(first.tier).toBe('probable');
-    const later = classifier.classify(c, {
-      matched: true,
-      provider: ExternalProvider.KITSU,
-      externalId: '7',
-      confidence: 0.92,
-    });
-    expect(later.tier).toBe('confirmed');
-    expect(later.classification).toBe('ANIME');
-  });
-
-  it('confirms ANIME with a verified MAL id even when genres are incomplete', () => {
-    const c = detector.detect({ externalIds: [animeId(ExternalProvider.MYANIME_LIST)] });
-    const out = classifier.classify(c, {
-      matched: true,
-      provider: ExternalProvider.MYANIME_LIST,
-      externalId: '1',
-    });
-    expect(out.classification).toBe('ANIME');
-    expect(out.tier).toBe('confirmed');
   });
 });

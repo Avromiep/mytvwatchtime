@@ -73,20 +73,6 @@ describe('repairTmdbStructureShow', () => {
     expect(structureRemap.remapShow).not.toHaveBeenCalled();
   });
 
-  it('skips when kept-unmapped rows cover the stale count at the current matcher version', async () => {
-    const { svc, meta, structureRemap } = make({
-      staleRows: 3,
-      provenance: {
-        structureKeptUnmapped: 3,
-        structureRemapVersion: StructureRemapService.MATCHER_VERSION,
-      },
-    });
-    const res = await (svc as any).repairTmdbStructureShow('m1');
-    expect(res.fixed).toBe(false);
-    expect(meta.ensureShowFull).not.toHaveBeenCalled();
-    expect(structureRemap.remapShow).not.toHaveBeenCalled();
-  });
-
   it('rehydrates from TMDB and remaps with canonical=tmdb, then stamps provenance', async () => {
     const { svc, prisma, meta, structureRemap } = make({
       staleRows: 5,
@@ -94,13 +80,12 @@ describe('repairTmdbStructureShow', () => {
     });
     const res = await (svc as any).repairTmdbStructureShow('m1');
 
-    expect(res).toEqual({ fixed: true, remapped: 5 });
-    // Stale gate bypassed so ensureShowFull cannot skip a recently-refreshed show.
-    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
-      where: { id: 'm1' },
-      data: { metadataRefreshedAt: null },
-    });
-    expect(meta.ensureShowFull).toHaveBeenCalledWith(1416);
+    expect(res).toMatchObject({ fixed: true, remapped: 5, report: { mapped: 5 } });
+    expect(meta.ensureShowFull).toHaveBeenCalledWith(
+      1416,
+      undefined,
+      expect.objectContaining({ forceRefresh: true, writeScope: 'STRUCTURE_REMAP' }),
+    );
     expect(structureRemap.remapShow).toHaveBeenCalledWith(
       'm1',
       expect.objectContaining({ canonical: 'tmdb', onProgress: expect.any(Function) }),
@@ -110,23 +95,26 @@ describe('repairTmdbStructureShow', () => {
       data: {
         metadataProvenance: {
           structureProvider: 'tmdb',
-          structureKeptUnmapped: 0,
           structureRemapVersion: StructureRemapService.MATCHER_VERSION,
         },
       },
     });
   });
 
-  it('re-arms when the kept count predates the current matcher version', async () => {
-    const { svc, meta, structureRemap } = make({
-      staleRows: 3,
-      provenance: { structureKeptUnmapped: 3, structureRemapVersion: 1 },
-      remap: { stale: 3, mapped: 3, unmapped: 0 },
+  it('re-arms quarantined legacy rows when the matcher version increases', async () => {
+    const { svc, prisma, structureRemap } = make({
+      staleRows: 1,
+      provenance: { structureRemapVersion: StructureRemapService.MATCHER_VERSION - 1 },
+      remap: { stale: 1, mapped: 1 },
     });
-    const res = await (svc as any).repairTmdbStructureShow('m1');
-    expect(res.fixed).toBe(true);
-    expect(meta.ensureShowFull).toHaveBeenCalled();
+
+    const result = await (svc as any).repairTmdbStructureShow('m1');
+
+    // Prisma tagged-template interpolations include the legacy-reconsideration gate.
+    // Before this regression fix the query was active-only and had no such true flag.
+    expect(prisma.$queryRaw.mock.calls[0]).toContain(true);
     expect(structureRemap.remapShow).toHaveBeenCalled();
+    expect(result).toMatchObject({ fixed: true, remapped: 1 });
   });
 
   it('returns notFixed when nothing was stale and no TMDB id anchors the show', async () => {

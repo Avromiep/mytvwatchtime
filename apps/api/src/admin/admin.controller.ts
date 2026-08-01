@@ -172,9 +172,8 @@ export class AdminController {
   /**
    * Season/episode structure reconciliation (mixed-provider structures, e.g. Dragon
    * Ball's flattened TMDB structure surviving next to the TVDB split). mode=report
-   * (default), dry-run (matcher only), repair (anime titles only; non-anime titles are
-   * reported for a deliberate provider decision). With mediaId: targeted, awaited,
-   * audited — the Dragon Ball one-time remediation path.
+   * (default), dry-run (matcher only), repair (bounded canonical-owner hydration/remap).
+   * With mediaId: targeted, awaited, and audited. Batch calls accept a stable cursor.
    */
   @Post('structure-reconcile/run')
   @RequireRoles('ADMIN')
@@ -183,6 +182,7 @@ export class AdminController {
     @Query('mode') mode?: string,
     @Query('count') count?: string,
     @Query('mediaId') mediaId?: string,
+    @Query('cursor') cursor?: string,
   ) {
     const m = mode === 'dry-run' || mode === 'repair' ? mode : 'report';
     const n = count ? Number(count) : undefined;
@@ -195,7 +195,7 @@ export class AdminController {
       });
       return result;
     }
-    this.metadataBackfill.reconcileStructures({ mode: m, limit: n }).catch((e) => {
+    this.metadataBackfill.reconcileStructures({ mode: m, limit: n, cursor }).catch((e) => {
       console.error('[Structure Reconcile] FAILED:', (e as Error)?.message ?? e);
     });
     return { message: `Structure reconcile (${m}) started. Check API logs / repair progress.` };

@@ -167,7 +167,11 @@ export default function MetadataHealthPage() {
   const [dedupInspecting, setDedupInspecting] = useState(false);
   const [dedupReview, setDedupReview] = useState<{
     titles?: { mediaId: string; title: string }[];
-    review: { mediaId: string; title: string; rows: { id: string; member: string; character: string | null; votes: number }[] }[];
+    review: {
+      mediaId: string;
+      title: string;
+      rows: { id: string; member: string; character: string | null; votes: number }[];
+    }[];
     groupsHigh?: number;
     groupsMedium?: number;
   } | null>(null);
@@ -344,9 +348,7 @@ export default function MetadataHealthPage() {
         );
         inspectCastDedup();
       })
-      .catch((e) =>
-        setDedupResult(`Merge failed: ${e?.response?.data?.message ?? 'error'}`),
-      )
+      .catch((e) => setDedupResult(`Merge failed: ${e?.response?.data?.message ?? 'error'}`))
       .finally(() => setMergingPair(false));
   };
 
@@ -354,7 +356,7 @@ export default function MetadataHealthPage() {
     if (
       mode === 'repair' &&
       !window.confirm(
-        'Reconcile mixed-provider season structures for anime titles (hydrate from TVDB and remap episodes, transferring all user data)? Run Report and Dry-run first and review the matches.',
+        'Reconcile mixed-provider season structures using each show’s persisted canonical owner, transferring or quarantining all user data? Run Report and Dry-run first and review the matches.',
       )
     ) {
       return;
@@ -381,7 +383,7 @@ export default function MetadataHealthPage() {
     if (
       mode === 'repair' &&
       !window.confirm(
-        'Run the full structure repair for this title (hydrate from TVDB + remap episodes, transferring all user data)? Run Dry-run first and review the matches.',
+        'Run the full canonical-owner structure repair for this title, transferring or quarantining all user data? Run Dry-run first and review the matches.',
       )
     ) {
       return;
@@ -393,16 +395,21 @@ export default function MetadataHealthPage() {
       .then((r) => {
         const t = r.data?.titles?.[0];
         const remap = t?.remap
-          ? ` — mapped ${t.remap.mapped}, unmapped ${t.remap.unmapped}, rules ${JSON.stringify(t.remap.matchRules)}`
+          ? ` — mapped ${t.remap.mapped}, transferred ${t.remap.transferred}, deleted ${t.remap.episodesRemoved} episodes/${t.remap.seasonsRemoved} seasons, legacy ${t.remap.legacyQuarantined}, unmapped ${t.remap.unmapped}, confidence ${JSON.stringify(t.mappingConfidence)}, rules ${JSON.stringify(t.remap.matchRules)}`
+          : '';
+        const missing = t?.missingProviderIds?.length
+          ? `; missing IDs ${t.missingProviderIds.join(', ')}`
           : '';
         setReconResult(
           t
-            ? `${t.title}: ${t.action} (stale ${t.stale}, fresh ${t.fresh})${remap}`
+            ? `${t.title}: ${t.action} (${String(t.structureProvider ?? 'unknown').toUpperCase()}/${t.authorityReason ?? 'unknown'}${missing}; stale ${t.stale}, fresh ${t.fresh}; failures ${r.data?.failed ?? 0}; remaining ${r.data?.remainingBacklog ?? '?'})${remap}`
             : `Done: ${JSON.stringify(r.data)}`,
         );
         setTimeout(() => load(), 10000);
       })
-      .catch((e) => setReconResult(`Targeted reconcile failed: ${e?.response?.data?.message ?? 'error'}`))
+      .catch((e) =>
+        setReconResult(`Targeted reconcile failed: ${e?.response?.data?.message ?? 'error'}`),
+      )
       .finally(() => setReconTargeted(false));
   };
 
@@ -667,11 +674,14 @@ export default function MetadataHealthPage() {
         <div className="rounded-lg border border-violet-200 p-4 dark:border-violet-800">
           <h2 className="mb-1 font-medium">Cast duplicates — manual review</h2>
           <p className="mb-3 text-xs text-zinc-500">
-            Name-only matches are never auto-merged. Pick which row survives; votes on the
-            other row are re-pointed before it is deleted.
+            Name-only matches are never auto-merged. Pick which row survives; votes on the other row
+            are re-pointed before it is deleted.
           </p>
           {dedupReview.review.map((g) => (
-            <div key={g.mediaId} className="mb-3 rounded border border-zinc-200 p-3 dark:border-zinc-700">
+            <div
+              key={g.mediaId}
+              className="mb-3 rounded border border-zinc-200 p-3 dark:border-zinc-700"
+            >
               <p className="mb-2 text-sm font-medium">{g.title}</p>
               <div className="space-y-1">
                 {g.rows.map((r) => (
@@ -1041,9 +1051,7 @@ export default function MetadataHealthPage() {
             />
             <MetricCard
               label="Non-English Content (suspected)"
-              value={
-                stats.nonEnglishContent === null ? 'Not loaded' : stats.nonEnglishContent
-              }
+              value={stats.nonEnglishContent === null ? 'Not loaded' : stats.nonEnglishContent}
               sub={
                 stats.nonEnglishContent === null
                   ? 'expensive scan skipped on page load'

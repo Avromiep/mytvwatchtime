@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo } from 'react';
 import { useLocalSearchParams } from 'expo-router';
 import { Header } from '../../components/Header';
 import { Screen, Spinner } from '../../components/primitives';
@@ -8,10 +8,10 @@ import { useEpisode, useEpisodeSiblings } from '../../api/hooks';
 
 export default function EpisodeDetailScreen() {
   const params = useLocalSearchParams<{ id: string }>();
-  // Capture the entry-point episode id ONCE. Subsequent router.replace() calls (from
-  // swiping) update the URL but must NOT re-derive pager state, or we'd loop.
-  const initialIdRef = useRef(params.id);
-  const initialId = initialIdRef.current;
+  // EpisodePager keeps swipe navigation local and does not rewrite the route. When the
+  // app navigates to a different /episode/:id screen in the same mounted web route,
+  // the URL param must therefore become the new entry id immediately.
+  const initialId = params.id;
 
   // Bootstrap: load the entry episode + the lightweight season-sibling ids (no full
   // show-structure download just to page within the season).
@@ -41,5 +41,7 @@ export default function EpisodeDetailScreen() {
     return <EpisodeDetailContent episodeId={initialId} />;
   }
 
-  return <EpisodePager episodeIds={episodeIds} initialId={initialId} />;
+  // Remount the pager when a new route id is opened so its index cannot remain parked
+  // on the episode from the previous URL.
+  return <EpisodePager key={initialId} episodeIds={episodeIds} initialId={initialId} />;
 }

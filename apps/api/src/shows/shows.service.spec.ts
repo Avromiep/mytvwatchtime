@@ -175,28 +175,27 @@ describe('ShowsService voting', () => {
   });
 });
 
-describe('ShowsService.getShow (anime repair)', () => {
+describe('ShowsService.getShow (structure ownership)', () => {
   let prisma: any;
   let meta: any;
-  let backfill: any;
   let service: ShowsService;
 
   const stored = (over: Record<string, unknown> = {}) => ({
     id: 'm1',
     titles: { en: 'Naruto' },
     metadataRefreshedAt: null, // → needsHydration
+    metadataProvenance: null,
     externalIds: [
       { provider: ExternalProvider.TMDB, value: '11' },
       { provider: ExternalProvider.THE_TVDB, value: '789' },
     ],
-    genres: [{ genre: { slug: 'animation' } }],
+    show: { structureProvider: 'TVDB', structureReason: 'ANIME_TVDB' },
     ...over,
   });
 
   beforeEach(() => {
     prisma = {
       mediaItem: { findUnique: jest.fn() },
-      mediaGenre: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     meta = {
       ensureShowFull: jest.fn().mockResolvedValue('m1'),
@@ -206,89 +205,79 @@ describe('ShowsService.getShow (anime repair)', () => {
       getShowDetail: jest.fn().mockResolvedValue('detail'),
       getShowSeasons: jest.fn().mockResolvedValue([]),
     };
-    backfill = { fixAnimeShowFromTvdb: jest.fn() };
     service = new ShowsService(
       prisma,
       meta,
       { enabled: true } as any,
       { enabled: true } as any,
-      backfill,
+      undefined,
     );
   });
 
-  it('repairs TMDB-structured anime on the fly (no provider refresh afterwards)', async () => {
+  it('never reconciles structure on read and refreshes a stale TVDB owner from TVDB', async () => {
     prisma.mediaItem.findUnique.mockResolvedValue(stored());
-    backfill.fixAnimeShowFromTvdb.mockResolvedValue({ fixed: true, remapped: 50 });
     const res = await service.getShow('m1');
-    expect(backfill.fixAnimeShowFromTvdb).toHaveBeenCalledWith('m1');
     expect(meta.ensureShowFull).not.toHaveBeenCalled();
-    expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
     expect(res).toBe('detail');
   });
 
-  it('refreshes from TVDB when the repair no-ops and metadata is stale', async () => {
-    prisma.mediaItem.findUnique.mockResolvedValue(stored());
-    backfill.fixAnimeShowFromTvdb.mockResolvedValue({ fixed: false, remapped: 0 });
-    await service.getShow('m1');
-    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
-    expect(meta.ensureShowFull).not.toHaveBeenCalled();
-  });
-
-  it('never re-poisons animation shows from TMDB when the fix fails and no TVDB id exists', async () => {
+  it('never re-poisons a TVDB owner from TMDB when no TVDB id exists', async () => {
     prisma.mediaItem.findUnique.mockResolvedValue(
       stored({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
     );
-    backfill.fixAnimeShowFromTvdb.mockResolvedValue({ fixed: false, remapped: 0 });
     await service.getShow('m1');
     expect(meta.ensureShowFull).not.toHaveBeenCalled();
     expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
   });
 
-  it('keeps the TMDB-first refresh for non-animation shows', async () => {
+  it('keeps the TMDB refresh for a typed general-show owner', async () => {
     prisma.mediaItem.findUnique.mockResolvedValue(
-      stored({ genres: [{ genre: { slug: 'drama' } }] }),
+      stored({ show: { structureProvider: 'TMDB', structureReason: 'GENERAL_TMDB' } }),
     );
     await service.getShow('m1');
-    expect(backfill.fixAnimeShowFromTvdb).not.toHaveBeenCalled();
     expect(meta.ensureShowFull).toHaveBeenCalledWith(11, undefined, { skipAiredSeasons: true });
   });
 
-  it('repairs anime structure on the episodes path too (no pre-fix seasons)', async () => {
-    prisma.mediaGenre.findFirst.mockResolvedValue({ mediaId: 'm1' });
-    backfill.fixAnimeShowFromTvdb.mockResolvedValue({ fixed: true, remapped: 50 });
+  it('reads TVDB-owned episodes without running structural reconciliation', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue(stored());
     await service.getSeasons('m1', 'u1');
-    expect(backfill.fixAnimeShowFromTvdb).toHaveBeenCalledWith('m1');
-    // Seasons are read AFTER the shared repair resolves.
     expect(meta.getShowSeasons).toHaveBeenCalledWith('m1', 'u1');
   });
 
-  it('does not touch the repair on the episodes path for non-animation shows', async () => {
-    prisma.mediaGenre.findFirst.mockResolvedValue(null);
+  it('reads TMDB-owned episodes without running structural reconciliation', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue(
+      stored({ show: { structureProvider: 'TMDB', structureReason: 'GENERAL_TMDB' } }),
+    );
     await service.getSeasons('m1');
-    expect(backfill.fixAnimeShowFromTvdb).not.toHaveBeenCalled();
     expect(meta.getShowSeasons).toHaveBeenCalledWith('m1', undefined);
   });
 
-  it('matches the animation genre by slug OR English name on the episodes path', async () => {
-    await service.getSeasons('m1');
-    expect(prisma.mediaGenre.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          mediaId: 'm1',
-          genre: {
-            OR: [{ slug: 'animation' }, { name: { equals: 'Animation', mode: 'insensitive' } }],
-          },
-        }),
+  it('does not let strict anime-looking metadata override a manual TMDB owner', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue(
+      stored({
+        show: {
+          structureProvider: 'TMDB',
+          structureReason: 'MANUAL_OVERRIDE',
+          keywords: ['anime'],
+        },
+        genres: [{ genre: { slug: 'animation', name: 'Animation' } }],
       }),
     );
+    await service.getShow('m1');
+    expect(meta.ensureShowFull).toHaveBeenCalledWith(11, undefined, {
+      skipAiredSeasons: true,
+    });
   });
 
-  it('treats an English-named animation genre as animation even with a localized slug', async () => {
+  it('uses the legacy JSON owner only as a compatibility refresh hint', async () => {
     prisma.mediaItem.findUnique.mockResolvedValue(
-      stored({ genres: [{ genre: { slug: 'animazione', name: 'Animation' } }] }),
+      stored({
+        metadataProvenance: { structureProvider: 'tvdb' },
+        show: { structureProvider: null, structureReason: null },
+      }),
     );
-    backfill.fixAnimeShowFromTvdb.mockResolvedValue({ fixed: true, remapped: 0 });
     await service.getShow('m1');
-    expect(backfill.fixAnimeShowFromTvdb).toHaveBeenCalledWith('m1');
+    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
   });
 });

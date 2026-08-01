@@ -3,6 +3,7 @@
 _Comprehensive knowledge base. Last updated: 2026-07-09._
 
 ## Table of Contents
+
 1. [Product Overview](#1-product-overview)
 2. [Architecture](#2-architecture)
 3. [Monorepo Structure](#3-monorepo-structure)
@@ -50,6 +51,7 @@ Cross-platform (iOS + Android) TV/movie tracker. Users track watched episodes/mo
 ```
 
 **Key rules:**
+
 - Mobile **never** calls third-party APIs directly. All media data flows through backend.
 - Backend normalizes + caches external metadata in PostgreSQL.
 - Heavy work (import, push, image processing, hydration) runs in BullMQ workers.
@@ -108,78 +110,85 @@ TVWatchTime/
 **52 tables** in PostgreSQL. Key relationships:
 
 ### User Data
-| Table | Purpose |
-|-------|---------|
-| `users` | Core account (email, username, passwordHash, role, isSuspended) |
-| `user_profiles` | 1:1 — displayName, bio, avatarUrl, coverUrl, isPrivate |
-| `user_auth_providers` | OAuth links (GOOGLE/APPLE/FACEBOOK/EMAIL + providerUid) |
-| `devices` | Push notification tokens per device |
-| `follows` | Self-referential (follower → target) |
-| `user_stats_summary` | Cached JSON stats (invalidated on watch events) |
+
+| Table                 | Purpose                                                         |
+| --------------------- | --------------------------------------------------------------- |
+| `users`               | Core account (email, username, passwordHash, role, isSuspended) |
+| `user_profiles`       | 1:1 — displayName, bio, avatarUrl, coverUrl, isPrivate          |
+| `user_auth_providers` | OAuth links (GOOGLE/APPLE/FACEBOOK/EMAIL + providerUid)         |
+| `devices`             | Push notification tokens per device                             |
+| `follows`             | Self-referential (follower → target)                            |
+| `user_stats_summary`  | Cached JSON stats (invalidated on watch events)                 |
 
 ### Media Metadata
-| Table | Purpose |
-|-------|---------|
-| `media_items` | Polymorphic SHOW/MOVIE (title, poster, backdrop, status, popularity, addedCount) |
-| `shows` | 1:1 with media_item — yearStart/End, network, runtime, seasonsCount, nextAirDate |
-| `movies` | 1:1 — releaseDate, runtime, country, language |
-| `seasons` | Belongs to show — number, title, isSpecial (S0), episodeCount |
-| `episodes` | Belongs to season — number, title, airDate, airTime, runtimeMinutes, isFinale |
-| `external_ids` | TMDb/IMDb/TVDB/Trakt IDs for dedup + import matching |
-| `genres` / `media_genres` | Genre catalog + many-to-many |
-| `watch_providers` / `media_watch_providers` | Where to watch (Netflix, etc.) |
-| `cast_members` / `media_cast` | Actor catalog + many-to-many with character + sortOrder |
+
+| Table                                       | Purpose                                                                          |
+| ------------------------------------------- | -------------------------------------------------------------------------------- |
+| `media_items`                               | Polymorphic SHOW/MOVIE (title, poster, backdrop, status, popularity, addedCount) |
+| `shows`                                     | 1:1 with media_item — yearStart/End, network, runtime, seasonsCount, nextAirDate |
+| `movies`                                    | 1:1 — releaseDate, runtime, country, language                                    |
+| `seasons`                                   | Belongs to show — number, title, isSpecial (S0), episodeCount                    |
+| `episodes`                                  | Belongs to season — number, title, airDate, airTime, runtimeMinutes, isFinale    |
+| `external_ids`                              | TMDb/IMDb/TVDB/Trakt IDs for dedup + import matching                             |
+| `genres` / `media_genres`                   | Genre catalog + many-to-many                                                     |
+| `watch_providers` / `media_watch_providers` | Where to watch (Netflix, etc.)                                                   |
+| `cast_members` / `media_cast`               | Actor catalog + many-to-many with character + sortOrder                          |
 
 ### User Tracking
-| Table | Purpose |
-|-------|---------|
-| `user_show_status` | watchedCount, totalCount (excl. specials), lastWatchedAt — drives watch-next |
-| `user_episode_status` | Per-episode watched bool + watchedAt + device (WatchDevice) |
-| `user_movie_status` | Per-movie watched bool + watchedAt |
-| `watch_history` | Append-only log — drives stats, charts, leaderboards (runtimeMinutes for time calc) |
-| `watchlist_items` | Shows/movies user wants to watch |
-| `favorites` | Favorite shows/movies (separate from watchlist) |
-| `ratings` | 1-5 stars per episode (single-select vote) |
-| `reactions` | 12 mood types per episode — **multi-select** (one row per user+episode+reaction) |
-| `character_votes` | Favorite character per episode — keyed by `cast_id` (FK → `media_cast.id`) |
+
+| Table                 | Purpose                                                                             |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| `user_show_status`    | watchedCount, totalCount (excl. specials), lastWatchedAt — drives watch-next        |
+| `user_episode_status` | Per-episode watched bool + watchedAt + device (WatchDevice)                         |
+| `user_movie_status`   | Per-movie watched bool + watchedAt                                                  |
+| `watch_history`       | Append-only log — drives stats, charts, leaderboards (runtimeMinutes for time calc) |
+| `watchlist_items`     | Shows/movies user wants to watch                                                    |
+| `favorites`           | Favorite shows/movies (separate from watchlist)                                     |
+| `ratings`             | 1-5 stars per episode (single-select vote)                                          |
+| `reactions`           | 12 mood types per episode — **multi-select** (one row per user+episode+reaction)    |
+| `character_votes`     | Favorite character per episode — keyed by `cast_id` (FK → `media_cast.id`)          |
 
 ### Import System
-| Table | Purpose |
-|-------|---------|
-| `imports` | Job record (sourceType, status, counts, storageKey) |
-| `import_files` | Per-file detection (type, entity, headers, rowCount) |
-| `import_items` | Per-row match status (MATCHED/UNMATCHED/NEEDS_REVIEW/DUPLICATE) |
-| `import_applied_records` | For rollback — records what was created/updated |
-| `import_logs` | Processing logs |
+
+| Table                    | Purpose                                                         |
+| ------------------------ | --------------------------------------------------------------- |
+| `imports`                | Job record (sourceType, status, counts, storageKey)             |
+| `import_files`           | Per-file detection (type, entity, headers, rowCount)            |
+| `import_items`           | Per-row match status (MATCHED/UNMATCHED/NEEDS_REVIEW/DUPLICATE) |
+| `import_applied_records` | For rollback — records what was created/updated                 |
+| `import_logs`            | Processing logs                                                 |
 
 ### Notifications
-| Table | Purpose |
-|-------|---------|
-| `notifications` | In-app notifications (deduped by userId+dedupeKey) |
-| `notification_preferences` | Per-category push/in-app toggles + quiet hours |
-| `push_notification_jobs` | Queued push delivery (status, scheduledFor, attempts) |
+
+| Table                      | Purpose                                               |
+| -------------------------- | ----------------------------------------------------- |
+| `notifications`            | In-app notifications (deduped by userId+dedupeKey)    |
+| `notification_preferences` | Per-category push/in-app toggles + quiet hours        |
+| `push_notification_jobs`   | Queued push delivery (status, scheduledFor, attempts) |
 
 ### Admin
-| Table | Purpose |
-|-------|---------|
-| `admin_audit_logs` | Every admin action |
-| `app_settings` | Key-value settings (encrypted for secrets) |
-| `feature_flags` | Toggle features (comments, imports, push, etc.) |
-| `cron_jobs` / `cron_job_runs` | DB-managed cron schedule + run history |
-| `hydration_jobs` / `hydration_job_items` | TMDb fill jobs with progress |
-| `scheduled_hydrations` | Recurring auto-fill schedules |
+
+| Table                                    | Purpose                                         |
+| ---------------------------------------- | ----------------------------------------------- |
+| `admin_audit_logs`                       | Every admin action                              |
+| `app_settings`                           | Key-value settings (encrypted for secrets)      |
+| `feature_flags`                          | Toggle features (comments, imports, push, etc.) |
+| `cron_jobs` / `cron_job_runs`            | DB-managed cron schedule + run history          |
+| `hydration_jobs` / `hydration_job_items` | TMDb fill jobs with progress                    |
+| `scheduled_hydrations`                   | Recurring auto-fill schedules                   |
 
 ### Other
-| Table | Purpose |
-|-------|---------|
-| `comments` | Threaded comments (1 level deep, parentId) |
-| `comment_images` | Encrypted image metadata (AES-256-GCM, storage keys) |
-| `comment_likes` | Like table |
-| `reports` | Comment moderation reports |
-| `custom_lists` / `custom_list_items` | User-created lists |
-| `activity` | User activity feed |
-| `badges` / `user_badges` | Gamification |
-| `user_stats_snapshots` | Historical stats |
+
+| Table                                | Purpose                                              |
+| ------------------------------------ | ---------------------------------------------------- |
+| `comments`                           | Threaded comments (1 level deep, parentId)           |
+| `comment_images`                     | Encrypted image metadata (AES-256-GCM, storage keys) |
+| `comment_likes`                      | Like table                                           |
+| `reports`                            | Comment moderation reports                           |
+| `custom_lists` / `custom_list_items` | User-created lists                                   |
+| `activity`                           | User activity feed                                   |
+| `badges` / `user_badges`             | Gamification                                         |
+| `user_stats_snapshots`               | Historical stats                                     |
 
 **Special seasons (S0)** are excluded from: progress calculation, watch-next queries, total counts, and stats.
 
@@ -188,6 +197,7 @@ TVWatchTime/
 ## 5. Backend Modules
 
 ### Auth (`auth/`)
+
 - `JwtStrategy` — validates access tokens, checks user exists
 - `AuthService` — register, login, social login (code exchange), refresh, issueSession
 - Social flow: mobile gets authorization code → backend exchanges with provider (Google/Facebook) → verifies → creates/finds user
@@ -195,6 +205,7 @@ TVWatchTime/
 - `OptionalJwtAuthGuard` — for public endpoints that personalize (search, discover)
 
 ### Tracking (`tracking/`) — Global
+
 - `TrackingService.markEpisodeWatched` — upserts status, creates watch_history, bumps show count, emits `watch.episode` event
 - `TrackingService.unmarkEpisodeWatched` — reverses all of the above
 - `markSeasonWatched` / `markMovieWatched` / `unmarkMovieWatched`
@@ -202,7 +213,9 @@ TVWatchTime/
 - `bumpShowCount` excludes specials and aired-only episodes
 
 ### Episode Interaction Voting (`shows/`) — Global
+
 Icon-based voting on watched episodes across four categories. Percentages are hidden until the user votes in a category, then shown for every option (largest-remainder rounding, sums to 100 for single-select; independent for multi-select reactions).
+
 - `ShowsService.getEpisodeDetail` returns an `interactions` object: `{ device, rating, reaction, character }` — each with the user's selection, `total` voters, and per-option `count`s (no voter identities). Cast members carry a stable `creditId` (`media_cast.id`) + `votes`.
 - `voteDevice` / `voteRating` — single-select upsert (one active vote per user+episode).
 - `voteReaction` — **multi-select toggle**: creates a `reactions` row if absent, deletes it if present. `getReactionSection` returns `userVotes[]` (array) + `total` (distinct users who reacted).
@@ -211,6 +224,7 @@ Icon-based voting on watched episodes across four categories. Percentages are hi
 - `packages/shared/src/vote-math.ts` — `computePercentages` (largest-remainder) + `applyVoteChange` (optimistic count recompute), shared by API tests + mobile.
 
 ### Media Metadata (`media-metadata/`)
+
 - `TmdbClient` — central HTTP client with global RPS limiter + 429 backoff (serialized calls across all consumers)
 - `TmdbProvider` — normalizes TMDb responses → `Normalized*` objects
 - `TvmazeProvider` — enriches air times by TVDB/IMDb lookup
@@ -219,6 +233,7 @@ Icon-based voting on watched episodes across four categories. Percentages are hi
 - `ImportMatcher` — title-based matching with confidence scoring
 
 ### Import (`import/`)
+
 - `ImportProcessor` — BullMQ worker: upload → extract → parse → normalize → dedupe → match → preview
 - `ImportService` — upload, confirm (apply), rollback, rebuild show statuses
 - `lib/inference.ts` — TVTime + generic CSV entity detection
@@ -228,17 +243,20 @@ Icon-based voting on watched episodes across four categories. Percentages are hi
 - Daily limit configurable via `IMPORT_DAILY_LIMIT`
 
 ### Notifications (`notifications/`)
+
 - `NotificationService` — creates in-app + schedules push, respects preferences + global push kill-switch + daily push limit
 - `PushService` — Firebase Admin SDK (production) or Expo Push API (Expo Go), cron every 5 min
 - `NotificationScheduler` — hourly episode scan (today only, recency filter, premiere override), daily watchlist reminders, nightly TVmaze refresh
 
 ### Admin (`admin/`)
+
 - `RolesGuard` — hierarchy-based role check (USER < VIEWER < SUPPORT < CONTENT_MANAGER < MODERATOR < ADMIN < SUPER_ADMIN)
 - `CronManagerService` — DB-driven cron scheduling with run history, pause/resume, run-now
 - `AdminService` — stats, charts, media management, user management, hydration jobs, settings
 - `ScheduledHydrations` — recurring auto-fill from TMDb
 
 ### Common
+
 - `FeatureFlagService` — 30s cached flag checks, enforced server-side
 - `SettingService` — AES-256-GCM encrypted settings, 10s cache, `.env` fallback
 - `PrismaService` / `RedisService` — global singletons
@@ -248,6 +266,7 @@ Icon-based voting on watched episodes across four categories. Percentages are hi
 ## 6. Mobile App
 
 ### Navigation (Expo Router)
+
 ```
 (auth)/login.tsx          → Email + Google + Facebook
 (auth)/register.tsx       → Email + social
@@ -267,16 +286,19 @@ comments.tsx              → Composer + image picker + nested threads + @mentio
 ```
 
 ### Theme
+
 - Background: `#0F1115`, Surface: `#171A21`, Accent: `#FFD60A` (yellow), Watched: `#22C55E` (green), Danger: `#EF4444`
 - Progress bars: yellow when partial, green when 100%
 
 ### Responsive Grids
+
 - `PosterCard` — accepts `style` prop (default marginRight, overridable to 0 in grids)
 - Grids use chunked rows with `justifyContent: space-between` (no flexWrap/gap)
 - `minCardWidth` prop: 110px (shows, 3/row) or 160px (movies, 2/row)
 - Tablets auto-scale (more columns)
 
 ### Push Notifications
+
 - `usePushNotifications` hook — requests permission, generates Expo push token, registers with backend
 - Requires EAS projectId in `app.json → extra.eas.projectId`
 - Skip silently if no projectId configured
@@ -286,32 +308,34 @@ comments.tsx              → Composer + image picker + nested threads + @mentio
 ## 7. Admin Console
 
 ### Pages
-| Route | Purpose |
-|-------|---------|
-| `/` | Dashboard: 8 stat cards + 4 charts |
-| `/analytics` | Overview, media, watch, notifications tabs |
-| `/media` | Browse all shows/movies (searchable, filterable) |
-| `/media/[id]` | Detail: seasons, cast, externals, rehydrate button |
-| `/users` | User table with search, role badges, suspend |
-| `/users/[id]` | Full user profile: stats, auth, devices, activity, role editor |
-| `/jobs` | TMDb hydration jobs: 12 types, pages selector, live progress, cancel/retry |
-| `/scheduled-hydrations` | Recurring auto-fill schedules with custom cron |
-| `/cron` | System cron manager: enable/disable, edit schedule, run-now, history |
-| `/admins` | Admin team list + audit trail |
-| `/logs` | Audit logs with metadata |
-| `/settings` | All settings (encrypted secrets, feature flags, system info) |
+
+| Route                   | Purpose                                                                    |
+| ----------------------- | -------------------------------------------------------------------------- |
+| `/`                     | Dashboard: 8 stat cards + 4 charts                                         |
+| `/analytics`            | Overview, media, watch, notifications tabs                                 |
+| `/media`                | Browse all shows/movies (searchable, filterable)                           |
+| `/media/[id]`           | Detail: seasons, cast, externals, rehydrate button                         |
+| `/users`                | User table with search, role badges, suspend                               |
+| `/users/[id]`           | Full user profile: stats, auth, devices, activity, role editor             |
+| `/jobs`                 | TMDb hydration jobs: 12 types, pages selector, live progress, cancel/retry |
+| `/scheduled-hydrations` | Recurring auto-fill schedules with custom cron                             |
+| `/cron`                 | System cron manager: enable/disable, edit schedule, run-now, history       |
+| `/admins`               | Admin team list + audit trail                                              |
+| `/logs`                 | Audit logs with metadata                                                   |
+| `/settings`             | All settings (encrypted secrets, feature flags, system info)               |
 
 ### Role Matrix
-| Action | Viewer | Support | Content Mgr | Admin | Super Admin |
-|--------|--------|---------|-------------|-------|-------------|
-| View dashboard | ✅ | ✅ | ✅ | ✅ | ✅ |
-| View media | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Trigger hydration | — | — | ✅ | ✅ | ✅ |
-| View users | — | ✅ | ✅ | ✅ | ✅ |
-| Manage users (role/suspend) | — | — | — | ✅ | ✅ |
-| Edit settings | — | — | — | ✅ (masked) | ✅ (full) |
-| Manage admins | — | — | — | ✅ | ✅ |
-| Reveal secrets | — | — | — | — | ✅ |
+
+| Action                      | Viewer | Support | Content Mgr | Admin       | Super Admin |
+| --------------------------- | ------ | ------- | ----------- | ----------- | ----------- |
+| View dashboard              | ✅     | ✅      | ✅          | ✅          | ✅          |
+| View media                  | ✅     | ✅      | ✅          | ✅          | ✅          |
+| Trigger hydration           | —      | —       | ✅          | ✅          | ✅          |
+| View users                  | —      | ✅      | ✅          | ✅          | ✅          |
+| Manage users (role/suspend) | —      | —       | —           | ✅          | ✅          |
+| Edit settings               | —      | —       | —           | ✅ (masked) | ✅ (full)   |
+| Manage admins               | —      | —       | —           | ✅          | ✅          |
+| Reveal secrets              | —      | —       | —           | —           | ✅          |
 
 ---
 
@@ -320,32 +344,35 @@ comments.tsx              → Composer + image picker + nested threads + @mentio
 All endpoints under `/api`. Auth: `Authorization: Bearer <token>`.
 
 ### Auth
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| POST | `/auth/register` | — | Email register |
-| POST | `/auth/login` | — | Email login |
-| POST | `/auth/social` | — | OAuth (provider + authorizationCode + redirectUri) |
-| POST | `/auth/refresh` | — | Refresh token |
+
+| Method | Path             | Auth | Purpose                                            |
+| ------ | ---------------- | ---- | -------------------------------------------------- |
+| POST   | `/auth/register` | —    | Email register                                     |
+| POST   | `/auth/login`    | —    | Email login                                        |
+| POST   | `/auth/social`   | —    | OAuth (provider + authorizationCode + redirectUri) |
+| POST   | `/auth/refresh`  | —    | Refresh token                                      |
 
 ### Profile & Devices
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/me` | Current user |
-| PATCH | `/me` | Update profile |
-| DELETE | `/me` | Delete account |
-| POST | `/devices/register` | Register push token |
-| DELETE | `/devices/:id` | Remove device |
+
+| Method | Path                | Purpose             |
+| ------ | ------------------- | ------------------- |
+| GET    | `/me`               | Current user        |
+| PATCH  | `/me`               | Update profile      |
+| DELETE | `/me`               | Delete account      |
+| POST   | `/devices/register` | Register push token |
+| DELETE | `/devices/:id`      | Remove device       |
 
 ### Search & Discover (public, optional auth)
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/search?q=&type=&genre=&excludeGenres=&sort=&country=&hideAnime=` | Search shows/movies (filters: genre exclusion csv, popularity\|releaseDate sort, ISO origin country, anime toggle) |
-| GET | `/discover/shows` | Discover with filters |
-| GET | `/discover/movies` | Discover movies |
-| GET | `/trending/shows` | Trending (same filter params) |
-| GET | `/trending/movies` | Trending (same filter params) |
-| GET | `/discover/sections` | Home sections (same filter params) |
-| GET | `/feed?cursor=&limit=` | Activity feed: me + followings (watch, watchlist, favorite, rating, reaction, comment; import-sourced rows excluded; cursor-paginated) |
+
+| Method | Path                                                               | Purpose                                                                                                                                |
+| ------ | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/search?q=&type=&genre=&excludeGenres=&sort=&country=&hideAnime=` | Search shows/movies (filters: genre exclusion csv, popularity\|releaseDate sort, ISO origin country, anime toggle)                     |
+| GET    | `/discover/shows`                                                  | Discover with filters                                                                                                                  |
+| GET    | `/discover/movies`                                                 | Discover movies                                                                                                                        |
+| GET    | `/trending/shows`                                                  | Trending (same filter params)                                                                                                          |
+| GET    | `/trending/movies`                                                 | Trending (same filter params)                                                                                                          |
+| GET    | `/discover/sections`                                               | Home sections (same filter params)                                                                                                     |
+| GET    | `/feed?cursor=&limit=`                                             | Activity feed: me + followings (watch, watchlist, favorite, rating, reaction, comment; import-sourced rows excluded; cursor-paginated) |
 
 Explore filter behavior: `hideAnime` is OR-ed with the per-user profile setting
 `UserProfile.hideAnimeInExplore` (PATCH `/me`, cached-flagged Redis keys); anime detection =
@@ -360,129 +387,141 @@ served on show/movie detail DTOs; backfill via Metadata Health `recommendationsM
 the daily `recommendations_backfill` cron (500/run).
 
 ### Shows & Episodes
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/shows/:id` | Detail (auto-hydrates) |
-| GET | `/shows/:id/episodes` | Seasons + episodes |
-| GET | `/episodes/:id` | Episode detail (includes `interactions` aggregates) |
-| POST/DELETE | `/episodes/:id/watched` | Mark/unmark |
-| PUT | `/episodes/:id/vote/device` | Single-select device vote → section |
-| PUT | `/episodes/:id/vote/rating` | Single-select 1–5 rating → section |
-| PUT | `/episodes/:id/vote/reaction` | Multi-select reaction toggle → section |
-| PUT | `/episodes/:id/vote/character` | Single-select favorite (by castId) → section |
-| POST/DELETE | `/seasons/:id/watched` | Mark whole season |
-| POST/DELETE | `/shows/:id/watchlist` | Watchlist toggle |
-| POST/DELETE | `/shows/:id/favorite` | Favorite toggle |
+
+| Method      | Path                           | Purpose                                             |
+| ----------- | ------------------------------ | --------------------------------------------------- |
+| GET         | `/shows/:id`                   | Detail (auto-hydrates)                              |
+| GET         | `/shows/:id/episodes`          | Seasons + episodes                                  |
+| GET         | `/episodes/:id`                | Episode detail (includes `interactions` aggregates) |
+| POST/DELETE | `/episodes/:id/watched`        | Mark/unmark                                         |
+| PUT         | `/episodes/:id/vote/device`    | Single-select device vote → section                 |
+| PUT         | `/episodes/:id/vote/rating`    | Single-select 1–5 rating → section                  |
+| PUT         | `/episodes/:id/vote/reaction`  | Multi-select reaction toggle → section              |
+| PUT         | `/episodes/:id/vote/character` | Single-select favorite (by castId) → section        |
+| POST/DELETE | `/seasons/:id/watched`         | Mark whole season                                   |
+| POST/DELETE | `/shows/:id/watchlist`         | Watchlist toggle                                    |
+| POST/DELETE | `/shows/:id/favorite`          | Favorite toggle                                     |
 
 ### Movies
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/movies/:id` | Detail |
-| POST/DELETE | `/movies/:id/watched` | Mark/unmark |
+
+| Method      | Path                    | Purpose          |
+| ----------- | ----------------------- | ---------------- |
+| GET         | `/movies/:id`           | Detail           |
+| POST/DELETE | `/movies/:id/watched`   | Mark/unmark      |
 | POST/DELETE | `/movies/:id/watchlist` | Watchlist toggle |
-| POST/DELETE | `/movies/:id/favorite` | Favorite toggle |
+| POST/DELETE | `/movies/:id/favorite`  | Favorite toggle  |
 
 ### Library
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/me/watch-next` | Watch next (grouped by recency) |
-| GET | `/me/upcoming` | Upcoming calendar (past 7d + future) |
-| GET | `/me/history` | Watch history (paginated) |
-| GET | `/me/shows/progress` | Shows by status (watching/notStarted/finished) |
+
+| Method | Path                 | Purpose                                        |
+| ------ | -------------------- | ---------------------------------------------- |
+| GET    | `/me/watch-next`     | Watch next (grouped by recency)                |
+| GET    | `/me/upcoming`       | Upcoming calendar (past 7d + future)           |
+| GET    | `/me/history`        | Watch history (paginated)                      |
+| GET    | `/me/shows/progress` | Shows by status (watching/notStarted/finished) |
 
 ### Collections
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/me/watchlist?type=` | Watchlist |
-| GET | `/me/favorites/shows` | Favorite shows |
-| GET | `/me/favorites/movies` | Favorite movies |
+
+| Method | Path                   | Purpose         |
+| ------ | ---------------------- | --------------- |
+| GET    | `/me/watchlist?type=`  | Watchlist       |
+| GET    | `/me/favorites/shows`  | Favorite shows  |
+| GET    | `/me/favorites/movies` | Favorite movies |
 
 ### Stats & Badges
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/me/stats/summary` | Summary (cached) |
-| GET | `/me/stats/shows` | Detailed show stats |
-| GET | `/me/stats/movies` | Detailed movie stats |
-| GET | `/me/stats/leaderboard?type=` | Watch-time ranking |
-| GET | `/badges` | All badges |
-| GET | `/me/badges` | User badges + progress |
+
+| Method | Path                          | Purpose                |
+| ------ | ----------------------------- | ---------------------- |
+| GET    | `/me/stats/summary`           | Summary (cached)       |
+| GET    | `/me/stats/shows`             | Detailed show stats    |
+| GET    | `/me/stats/movies`            | Detailed movie stats   |
+| GET    | `/me/stats/leaderboard?type=` | Watch-time ranking     |
+| GET    | `/badges`                     | All badges             |
+| GET    | `/me/badges`                  | User badges + progress |
 
 ### Lists
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET/POST | `/me/lists` | List operations |
-| GET/PATCH/DELETE | `/lists/:id` | Manage list |
-| POST/DELETE | `/lists/:id/items` | Add/remove items |
+
+| Method           | Path               | Purpose          |
+| ---------------- | ------------------ | ---------------- |
+| GET/POST         | `/me/lists`        | List operations  |
+| GET/PATCH/DELETE | `/lists/:id`       | Manage list      |
+| POST/DELETE      | `/lists/:id/items` | Add/remove items |
 
 ### Notifications
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/me/notifications` | List (paginated) |
-| PATCH | `/me/notifications/:id/read` | Mark read |
-| POST | `/me/notifications/mark-all-read` | Mark all |
-| GET/PATCH | `/me/notification-preferences` | Preferences |
+
+| Method    | Path                              | Purpose          |
+| --------- | --------------------------------- | ---------------- |
+| GET       | `/me/notifications`               | List (paginated) |
+| PATCH     | `/me/notifications/:id/read`      | Mark read        |
+| POST      | `/me/notifications/mark-all-read` | Mark all         |
+| GET/PATCH | `/me/notification-preferences`    | Preferences      |
 
 ### Import
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/imports/upload` | Upload ZIP/CSV/JSON |
-| GET | `/imports/:id` | Status |
-| GET | `/imports/:id/items?status=&entity=` | Preview (infinite scroll) |
-| PATCH | `/imports/:id/items/:itemId` | Manual fix |
-| POST | `/imports/:id/confirm` | Apply |
-| POST | `/imports/:id/cancel` | Cancel |
-| POST | `/imports/:id/rollback` | Undo |
-| DELETE | `/imports/:id` | Cleanup |
+
+| Method | Path                                 | Purpose                   |
+| ------ | ------------------------------------ | ------------------------- |
+| POST   | `/imports/upload`                    | Upload ZIP/CSV/JSON       |
+| GET    | `/imports/:id`                       | Status                    |
+| GET    | `/imports/:id/items?status=&entity=` | Preview (infinite scroll) |
+| PATCH  | `/imports/:id/items/:itemId`         | Manual fix                |
+| POST   | `/imports/:id/confirm`               | Apply                     |
+| POST   | `/imports/:id/cancel`                | Cancel                    |
+| POST   | `/imports/:id/rollback`              | Undo                      |
+| DELETE | `/imports/:id`                       | Cleanup                   |
 
 ### Comments & Social
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/comments?threadType=&threadId=` | List comments |
-| POST | `/comments` | Create (nested replies, any depth) |
-| GET | `/comments/participants` | @mention suggestions |
-| GET | `/comments/:id/replies?depth=1\|2` | Replies (depth=2 adds each child's first children) |
-| POST/DELETE | `/comments/:id/like` | Like/unlike |
-| POST | `/comments/:id/report` | Report |
-| POST/DELETE | `/users/:id/follow` | Follow/unfollow |
-| POST | `/comments/:commentId/image` | Upload image |
-| GET | `/comment-images/:id` | Serve decrypted image |
-| GET | `/comment-images/:id/thumbnail` | Serve thumbnail |
-| DELETE | `/comment-images/:id` | Delete image |
+
+| Method      | Path                               | Purpose                                            |
+| ----------- | ---------------------------------- | -------------------------------------------------- |
+| GET         | `/comments?threadType=&threadId=`  | List comments                                      |
+| POST        | `/comments`                        | Create (nested replies, any depth)                 |
+| GET         | `/comments/participants`           | @mention suggestions                               |
+| GET         | `/comments/:id/replies?depth=1\|2` | Replies (depth=2 adds each child's first children) |
+| POST/DELETE | `/comments/:id/like`               | Like/unlike                                        |
+| POST        | `/comments/:id/report`             | Report                                             |
+| POST/DELETE | `/users/:id/follow`                | Follow/unfollow                                    |
+| POST        | `/comments/:commentId/image`       | Upload image                                       |
+| GET         | `/comment-images/:id`              | Serve decrypted image                              |
+| GET         | `/comment-images/:id/thumbnail`    | Serve thumbnail                                    |
+| DELETE      | `/comment-images/:id`              | Delete image                                       |
 
 ### Feature Flags
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| GET | `/feature-flags` | Public | All flags |
+
+| Method | Path             | Auth   | Purpose   |
+| ------ | ---------------- | ------ | --------- |
+| GET    | `/feature-flags` | Public | All flags |
 
 ### Admin (all require JWT + role)
-| Method | Path | Min Role |
-|--------|------|----------|
-| GET | `/admin/stats` | VIEWER |
-| GET | `/admin/charts` | VIEWER |
-| GET | `/admin/media` | VIEWER |
-| GET | `/admin/media/:id` | VIEWER |
-| GET | `/admin/users` | SUPPORT |
-| PATCH | `/admin/users/:id` | ADMIN |
-| GET | `/admin/admins` | ADMIN |
-| POST | `/admin/jobs/hydrate` | CONTENT_MANAGER |
-| GET | `/admin/jobs` | VIEWER |
-| POST | `/admin/jobs/:id/cancel` | CONTENT_MANAGER |
-| POST | `/admin/jobs/:id/retry` | CONTENT_MANAGER |
-| CRUD | `/admin/scheduled-hydrations` | ADMIN |
-| GET | `/admin/cron` | VIEWER |
-| PATCH | `/admin/cron/:name` | ADMIN |
-| POST | `/admin/cron/:name/trigger` | CONTENT_MANAGER |
-| GET | `/admin/settings` | ADMIN |
-| PATCH | `/admin/settings/:key` | SUPER_ADMIN |
-| GET | `/admin/settings/:key` (decrypted) | SUPER_ADMIN |
-| GET/PATCH | `/admin/feature-flags` | ADMIN |
-| GET | `/admin/audit-logs` | ADMIN |
+
+| Method    | Path                               | Min Role        |
+| --------- | ---------------------------------- | --------------- |
+| GET       | `/admin/stats`                     | VIEWER          |
+| GET       | `/admin/charts`                    | VIEWER          |
+| GET       | `/admin/media`                     | VIEWER          |
+| GET       | `/admin/media/:id`                 | VIEWER          |
+| GET       | `/admin/users`                     | SUPPORT         |
+| PATCH     | `/admin/users/:id`                 | ADMIN           |
+| GET       | `/admin/admins`                    | ADMIN           |
+| POST      | `/admin/jobs/hydrate`              | CONTENT_MANAGER |
+| GET       | `/admin/jobs`                      | VIEWER          |
+| POST      | `/admin/jobs/:id/cancel`           | CONTENT_MANAGER |
+| POST      | `/admin/jobs/:id/retry`            | CONTENT_MANAGER |
+| CRUD      | `/admin/scheduled-hydrations`      | ADMIN           |
+| GET       | `/admin/cron`                      | VIEWER          |
+| PATCH     | `/admin/cron/:name`                | ADMIN           |
+| POST      | `/admin/cron/:name/trigger`        | CONTENT_MANAGER |
+| GET       | `/admin/settings`                  | ADMIN           |
+| PATCH     | `/admin/settings/:key`             | SUPER_ADMIN     |
+| GET       | `/admin/settings/:key` (decrypted) | SUPER_ADMIN     |
+| GET/PATCH | `/admin/feature-flags`             | ADMIN           |
+| GET       | `/admin/audit-logs`                | ADMIN           |
 
 ---
 
 ## 9. Auth & Security
 
 ### JWT Flow
+
 1. Mobile sends email/password or OAuth code → `/auth/login` or `/auth/social`
 2. Backend returns `{ accessToken (15m), refreshToken (30d), user }`
 3. Mobile stores both in `expo-secure-store`
@@ -490,6 +529,7 @@ the daily `recommendations_backfill` cron (500/run).
 5. Refresh fails → redirect to login
 
 ### OAuth Code Exchange
+
 - Mobile opens browser via `expo-auth-session` with PKCE
 - User authenticates at Google/Facebook
 - Redirects back with authorization code
@@ -498,17 +538,20 @@ the daily `recommendations_backfill` cron (500/run).
 - Verifies ID token / access token → creates/finds user
 
 ### Roles & Permissions
+
 - Stored on `users.role` enum
 - `RolesGuard` checks hierarchy: any role ≥ required minimum passes
 - Enforced server-side on every admin endpoint
 
 ### Encryption
+
 - **Comment images:** AES-256-GCM envelope encryption (random data key per image, wrapped by master key)
 - **Admin settings:** AES-256-GCM for sensitive values (API keys, secrets)
 - **Master key:** `ENCRYPTION_MASTER_KEY` env (32 bytes)
 - Encrypted data never sent to mobile app
 
 ### Image Moderation
+
 - OpenAI `omni-moderation-latest` API
 - Text + image sent together
 - Rejects: sexual, violence, self-harm, hate, illicit
@@ -520,18 +563,21 @@ the daily `recommendations_backfill` cron (500/run).
 ## 10. Metadata System
 
 ### TMDb Integration
+
 - **Endpoints used:** `/search/tv`, `/search/movie`, `/tv/{id}`, `/movie/{id}`, `/discover/tv`, `/discover/movie`, `/trending/*`, `/tv/popular`, `/tv/top_rated`, `/tv/airing_today`, `/tv/on_the_air`, `/movie/popular`, `/movie/top_rated`, `/movie/upcoming`, `/movie/now_playing`, `/genre/*`
 - **Rate limiting:** Global serialized call chain, configurable RPS (default 40), 429 backoff with Retry-After + exponential + jitter
 - **Image URLs:** `https://image.tmdb.org/t/p/{size}{path}` — stored in DB, mobile loads directly from TMDb CDN
 
 ### Hydration Flow
+
 1. **Light upsert** (search/discover): creates stub MediaItem + external_ids, no seasons
 2. **Full hydrate** (detail view, admin jobs, import matching): fetches show + all seasons + episodes + cast + providers + externals
-3. **Upsert by (seasonId, number)**: preserves user progress across refreshes
+3. **Owner-aware episode sync**: exact provider episode identity wins; S/E is used only inside the verified canonical show and only when it cannot reuse a foreign/legacy row. Provider switches run through `StructureRemapService` so user progress is transferred before stale rows are deleted or quarantined.
 4. **Special seasons (S0):** stored but excluded from counts/progress/watch-next
 5. **TVmaze enrichment:** per-show, skips if already hydrated, nightly cron for RETURNING shows with upcoming episodes
 
 ### Matching (Import)
+
 1. DB exact normalized title match (0.9 confidence)
 2. DB core-title (strip parentheticals) match (0.85)
 3. DB contains + normalized (0.8)
@@ -544,18 +590,20 @@ the daily `recommendations_backfill` cron (500/run).
 6. Per-show dedup: one lookup, all episodes resolved locally
 
 ### External-ID matching (Import, TVDB/IMDB/Trakt ids)
-1. TVDB series id (TV Time `s_id`/`series_id`, Trakt `ids.tvdb`): local `external_ids` mapping (0.95) → **exact TMDB `/find?external_source=tvdb_id`** (single call, never title-search verification) → direct TVDB fetch (0.85) → refuse title fallback. **All** distinct ids collected across a title's rows are tried in order (TVDB merges leave dead ids in exports). IMDB ids: local mapping → `/find?external_source=imdb_id` (0.9).
-2. **Anime is TVDB-authoritative**: when /find shows Animation (genre 16) + JP origin, the show gets a TVDB-backed record (0.9) + TVDB-first hydration (`providerPref` in the matcher) because TMDB anime season/episode structures are unreliable; the TMDB id is still attached for cross-lookups. Anime movies stay TMDB-first (no season structure).
-3. Episode resolution chain: local `episode_external_ids` (written by show hydration — TMDB path stores TMDB episode ids, TVDB path stores TVDB episode ids) → season/episode → **TMDB `/find` recovery** with the TVDB episode id (returns TMDB's own numbering; runs only on local-resolution failures).
-4. Anime classification evidence: TVDB extended genres are mapped (previously dropped), and TMDB hydration persists `shows.original_language` / `shows.origin_countries` — fed to the classifier via `inputFromMedia`, making the animation+JP "probable anime" tier reachable in production.
-5. Show-level recovery: when a show fails all id + title paths, a TVDB **episode** id from its rows identifies it via `/find` (returns the parent TMDB show) — covers translated titles and episode rows without a series id.
-6. Structural guard: after show hydration, the import's S/E footprint is compared to the stored structure; when it can't contain the footprint (wrong-provider structure — anthologies, reboot continuations, split/merged hour-longs — or poisoned partial hydration), the show is re-hydrated from TVDB (union upsert, never deletes) before episode resolution.
+
+1. Compatible identity precedence is explicit TMDB id → IMDb through TMDB `/find` → TVDB through TMDB `/find`/TVDB → validated title/year. Provider/entity kind is part of the identity. A sibling-kind hit is logged and retained in raw import evidence but is never attached to an incompatible movie/show row; the apply-time type guard remains a final defense.
+2. **Anime shows are TVDB-authoritative only under the strict TMDB rule**: genre id 16 (`Animation`) and the TMDB `anime` keyword must both be present. TMDB's verified TVDB series cross-id selects TVDB structure. If that cross-id or TVDB hydration is unavailable, the import retains an identity-only pending stub and never writes temporary TMDB seasons. Anime movies remain TMDB-owned.
+3. Episode resolution uses owner-aware aliases: TMDB-owned shows translate imported TVDB episode ids through TMDB `/find`, attach both the canonical TMDB episode id and original TVDB alias to one active row, then allow unique in-show S/E fallback for regular episodes. TVDB-owned anime resolves TVDB aliases directly. Specials require exact episode ids.
+4. Kitsu/Jikan, Japanese origin/language, Animation alone, and the `anime` keyword alone may enrich evidence but cannot classify, route, hydrate structure, or merge media.
+5. Show-level recovery from a TVDB episode id still verifies the parent identity and media type before attachment. Missing/dead/irreconcilable episodes become audited `SKIPPED` items; confirmation continues for valid sections.
+6. Import footprint checks are diagnostic only. They never union a second provider graph into the show; only the persisted owner may call `syncSeasons`, and an owner change uses the locked remap workflow.
 
 ---
 
 ## 11. Import System
 
 ### Supported Sources
+
 - **ZIP** containing CSV files (TVTime GDPR export), JSON files (Trakt GDPR export), the mixed JSON+CSV layout (TVTime JSON GDPR export), or dated `tvtime-*` JSON files (TV Time Out browser-extension export)
 - **Standalone CSV** (generic)
 - **Standalone JSON** (flexible schema; Trakt-shaped filenames route to the Trakt pipeline, TVTime-shaped ones — `shows.json`/`movies.json`/`favorites.json`/`lists.json` — to the TVTime JSON pipeline, dated `tvtime-series-*`/`tvtime-movies-*` ones to the TV Time Out pipeline)
@@ -563,53 +611,58 @@ the daily `recommendations_backfill` cron (500/run).
 The provider format is auto-detected (`isTraktArchive` first, then `isTvTimeJsonArchive`, then `isTvTimeOutArchive`, on zip entry names / upload filename) and persisted as `Import.format` (`'tvtime' | 'trakt'`; the TVTime JSON and TV Time Out exports stay `'tvtime'` — same underlying account, shared conflict domain). The apply stage tags `Rating`/`Reaction`/`Comment`/`CustomList` records with `source = TVTIME | TRAKT` (Prisma `ListSource`), so both imports stay idempotent independently and never overwrite manual/local data.
 
 ### TV Time Out Files Processed
-| File | Entity | Notes |
-|------|--------|-------|
-| `tvtime-series-*.json` | Watched episodes + watchlist + favorites | Every episode carries a TVDB id; `watchCount = max(1, watched_count, rewatch_count + 1)`; fully-unwatched shows → WATCHLIST_SHOW; specials resolve only via the TVDB episode external-id path |
-| `tvtime-movies-*.json` | Watched movies / watchlist / favorites | `is_watched=false` → WATCHLIST_MOVIE; `watchCount = rewatch_count + 1` |
-| `tvtime-failed-*.json` | — | Shows the extension couldn't export; WARN-logged only, never staged |
-| `tvtime-summary-*.html` | — | Unsupported + counted |
+
+| File                    | Entity                                   | Notes                                                                                                                                                                                         |
+| ----------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tvtime-series-*.json`  | Watched episodes + watchlist + favorites | Every episode carries a TVDB id; `watchCount = max(1, watched_count, rewatch_count + 1)`; fully-unwatched shows → WATCHLIST_SHOW; specials resolve only via the TVDB episode external-id path |
+| `tvtime-movies-*.json`  | Watched movies / watchlist / favorites   | `is_watched=false` → WATCHLIST_MOVIE; `watchCount = rewatch_count + 1`                                                                                                                        |
+| `tvtime-failed-*.json`  | —                                        | Shows the extension couldn't export; WARN-logged only, never staged                                                                                                                           |
+| `tvtime-summary-*.html` | —                                        | Unsupported + counted                                                                                                                                                                         |
 
 No ratings/emotions/comments/lists exist in this format; show `status` is not imported.
 
 ### TVTime Files Processed
-| File | Entity | Rows |
-|------|--------|------|
-| `seen_episode_source.csv` | Watched episodes | 1,380 |
-| `tracking-prod-records.csv` (v1) | Watched episodes + watchlist + movies | 675 watch events |
-| `tracking-prod-records-v2.csv` | Watched episodes (per-episode rows) + watchlist | 8,696 episodes |
-| `user_tv_show_data.csv` | Watchlist + favorites | 422 |
-| `followed_tv_show.csv` | Watchlist (active shows) | 355 |
+
+| File                             | Entity                                          | Rows             |
+| -------------------------------- | ----------------------------------------------- | ---------------- |
+| `seen_episode_source.csv`        | Watched episodes                                | 1,380            |
+| `tracking-prod-records.csv` (v1) | Watched episodes + watchlist + movies           | 675 watch events |
+| `tracking-prod-records-v2.csv`   | Watched episodes (per-episode rows) + watchlist | 8,696 episodes   |
+| `user_tv_show_data.csv`          | Watchlist + favorites                           | 422              |
+| `followed_tv_show.csv`           | Watchlist (active shows)                        | 355              |
 
 ### Trakt Files Processed
-| File | Entity | Notes |
-|------|--------|-------|
-| `watched-history-*.json` | Watched episodes + movies | Authoritative per-play history; collapsed per item (`watchCount` = plays, `watchedAt` = earliest play) |
-| `watched-movies-*.json` | Watched movies | Aggregate fallback only (no history files); superseded otherwise |
-| `watched-shows-*.json` | — | Aggregate-only shows skipped (episode rows are never fabricated) |
-| `ratings-{shows,episodes,movies}.json` | Ratings | Trakt 1–10 → `clamp(round(r/2),1,5)`; `ratings-seasons` unsupported |
-| `lists-watchlist.json` | Watchlist | movie/show rows only |
-| `lists-favorites.json` | Favorites | movie/show rows only |
-| `lists-lists.json` | Custom lists | `privacy=public` → PUBLIC, else PRIVATE |
-| `comments-{episodes,movies,shows}.json` | Comments | Top-level only (`parent_id` skipped); reviews imported as comments |
-| `user-settings.json` | — | `browsing.locale` → archive language for title-fallback matching |
-| everything else | — | `collection-*`, `hidden-*`, `likes-*`, `network-*`, `notes-*`, `user-*`, `watched-playback` unsupported + counted |
+
+| File                                    | Entity                    | Notes                                                                                                             |
+| --------------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `watched-history-*.json`                | Watched episodes + movies | Authoritative per-play history; collapsed per item (`watchCount` = plays, `watchedAt` = earliest play)            |
+| `watched-movies-*.json`                 | Watched movies            | Aggregate fallback only (no history files); superseded otherwise                                                  |
+| `watched-shows-*.json`                  | —                         | Aggregate-only shows skipped (episode rows are never fabricated)                                                  |
+| `ratings-{shows,episodes,movies}.json`  | Ratings                   | Trakt 1–10 → `clamp(round(r/2),1,5)`; `ratings-seasons` unsupported                                               |
+| `lists-watchlist.json`                  | Watchlist                 | movie/show rows only                                                                                              |
+| `lists-favorites.json`                  | Favorites                 | movie/show rows only                                                                                              |
+| `lists-lists.json`                      | Custom lists              | `privacy=public` → PUBLIC, else PRIVATE                                                                           |
+| `comments-{episodes,movies,shows}.json` | Comments                  | Top-level only (`parent_id` skipped); reviews imported as comments                                                |
+| `user-settings.json`                    | —                         | `browsing.locale` → archive language for title-fallback matching                                                  |
+| everything else                         | —                         | `collection-*`, `hidden-*`, `likes-*`, `network-*`, `notes-*`, `user-*`, `watched-playback` unsupported + counted |
 
 Trakt matching is external-ID-first: TMDB id → TVDB id (authority gate, no title fallback) → IMDB id (local lookup only) → title fallback. Episodes resolve via `EpisodeExternalId` (TMDB then TVDB) with S/E fallback.
 
 ### TVTime JSON Files Processed
-| File | Entity | Notes |
-|------|--------|-------|
-| `shows.json` | Watched episodes | Nested seasons/episodes with TVDB ids; `imdb:"-1"` sentinel → null; non-special S/E footprint feeds the structural guard |
-| `movies.json` | Watched movies + watchlist | `is_watched=true` → watched (`watched_at`), `false` → WATCHLIST_MOVIE (`created_at`) |
-| `favorites.json` | Favorites | FAVORITE_SHOW/MOVIE via `added_at` |
-| `lists.json` | Custom lists | `is_public` → PUBLIC when true; `sourceKey = tvtime:list:<normName>` |
-| `activity_history.csv` | Show watchlist ONLY | Parsed solely for `type=show && is_watchlisted=true` (the flag exists nowhere in the JSON); all other rows ignored |
-| `favorites.csv`, `list_*.csv`, other CSVs | — | Flattened duplicates of the JSON → unsupported + counted |
+
+| File                                      | Entity                     | Notes                                                                                                                    |
+| ----------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `shows.json`                              | Watched episodes           | Nested seasons/episodes with TVDB ids; `imdb:"-1"` sentinel → null; non-special S/E footprint feeds the structural guard |
+| `movies.json`                             | Watched movies + watchlist | `is_watched=true` → watched (`watched_at`), `false` → WATCHLIST_MOVIE (`created_at`)                                     |
+| `favorites.json`                          | Favorites                  | FAVORITE_SHOW/MOVIE via `added_at`                                                                                       |
+| `lists.json`                              | Custom lists               | `is_public` → PUBLIC when true; `sourceKey = tvtime:list:<normName>`                                                     |
+| `activity_history.csv`                    | Show watchlist ONLY        | Parsed solely for `type=show && is_watchlisted=true` (the flag exists nowhere in the JSON); all other rows ignored       |
+| `favorites.csv`, `list_*.csv`, other CSVs | —                          | Flattened duplicates of the JSON → unsupported + counted                                                                 |
 
 Ratings live inside the JSON files as a nullable 1–10 `rating` field (shows/movies + favorites/lists embedded seasons) → `clamp(round(r/2),1,5)`; episode ratings deduped by TVDB episode id across all files; `voteKey=null` → stable `episode:<id>`/`media:<id>` apply identity. `special:true` episodes (embedded in regular season numbers) resolve ONLY via the TVDB episode external-id path — never S/E-matched — and are skipped+counted when unresolved. Show `status` (`up_to_date`/`continuing`/…) is not imported.
 
 ### Pipeline (BullMQ Worker)
+
 1. `uploaded` → `queued` → `extracting` (safe ZIP inspection)
 2. `parsing` (CSV with delimiter detection, or native JSON parse for Trakt)
 3. `normalizing` (entity inference + field mapping)
@@ -619,6 +672,7 @@ Ratings live inside the JSON files as a nullable 1–10 `rating` field (shows/mo
 7. `completed` (rebuilds user_show_status, invalidates stats)
 
 ### Apply Logic
+
 - Episodes: upsert `user_episode_status` + create `watch_history` (with runtimeMinutes)
 - Movies: upsert `user_movie_status` + create `watch_history`
 - Watchlist: skip if already exists
@@ -630,16 +684,18 @@ Ratings live inside the JSON files as a nullable 1–10 `rating` field (shows/mo
 ## 12. Notifications
 
 ### Types
-| Category | Trigger | Channel |
-|----------|---------|---------|
-| EPISODE_TODAY | Episode airs today, show watched ≤30d or premiere | In-app + Push |
-| WATCHLIST_REMINDER | Show not watched 14+ days | In-app + Push |
-| BADGE | Milestone unlocked | In-app + Push |
-| FOLLOW | New follower | In-app + Push |
-| COMMENT_LIKE | Comment liked | In-app + Push |
-| COMMENT_REPLY | Reply received | In-app + Push |
+
+| Category           | Trigger                                           | Channel       |
+| ------------------ | ------------------------------------------------- | ------------- |
+| EPISODE_TODAY      | Episode airs today, show watched ≤30d or premiere | In-app + Push |
+| WATCHLIST_REMINDER | Show not watched 14+ days                         | In-app + Push |
+| BADGE              | Milestone unlocked                                | In-app + Push |
+| FOLLOW             | New follower                                      | In-app + Push |
+| COMMENT_LIKE       | Comment liked                                     | In-app + Push |
+| COMMENT_REPLY      | Reply received                                    | In-app + Push |
 
 ### Push Rules
+
 - Max pushes per user per day: configurable (`MAX_PUSH_NOTIFICATIONS_PER_USER_PER_DAY`, default 3)
 - Priority: season premieres first, then most recently watched
 - Deduped per (user, episode, day)
@@ -648,6 +704,7 @@ Ratings live inside the JSON files as a nullable 1–10 `rating` field (shows/mo
 - Per-category user preferences respected
 
 ### Delivery
+
 - **Expo Go:** Expo Push API (`https://exp.host/--/api/v2/push/send`) with `EXPO_ACCESS_TOKEN`
 - **Dev Build:** Firebase google-services.json in `android/app/` + gradle plugins in both `build.gradle` files. Requires `JAVA_HOME` set. Firebase auto-initializes at app startup.
 - **Production:** Firebase Admin SDK (FCM for Android, APNs for iOS via FCM)
@@ -655,13 +712,15 @@ Ratings live inside the JSON files as a nullable 1–10 `rating` field (shows/mo
 - Dispatch cron: every 5 minutes
 
 ### Push Modes (for self-hosted backends)
-| Mode | Config | How it works |
-|------|--------|-------------|
-| `expo` (default) | `EXPO_ACCESS_TOKEN` set | Backend sends directly via Expo Push API |
-| `relay` | `PUSH_MODE=relay` + `PUSH_RELAY_URL=https://public-server/api` | Backend sends to public relay → public server delivers via Expo |
-| `none` | `PUSH_MODE=none` | No push delivery (in-app only) |
+
+| Mode             | Config                                                         | How it works                                                    |
+| ---------------- | -------------------------------------------------------------- | --------------------------------------------------------------- |
+| `expo` (default) | `EXPO_ACCESS_TOKEN` set                                        | Backend sends directly via Expo Push API                        |
+| `relay`          | `PUSH_MODE=relay` + `PUSH_RELAY_URL=https://public-server/api` | Backend sends to public relay → public server delivers via Expo |
+| `none`           | `PUSH_MODE=none`                                               | No push delivery (in-app only)                                  |
 
 ### Push Relay (public instance)
+
 - `POST /api/push/relay` — public, no auth
 - Accepts: `{ token, title, body, data }`
 - Rate limited per token via Redis: `PUSH_RELAY_RATE_LIMIT` (default 10 per `PUSH_RELAY_RATE_WINDOW_MINUTES` default 10 min)
@@ -669,19 +728,21 @@ Ratings live inside the JSON files as a nullable 1–10 `rating` field (shows/mo
 - Self-hosted users still get push because the mobile app registers its Expo token with whatever backend it connects to
 
 ### Scheduled Jobs (DB-managed)
-| Job | Schedule | Purpose |
-|-----|----------|---------|
-| `episode_notifications` | Hourly | Scan today's episodes, create notifications |
-| `push_dispatch` | Every 5 min | Send due push jobs |
-| `watchlist_reminders` | Daily 3 AM | Stale show reminders |
-| `tvmaze_airtimes` | Daily 3 AM | Enrich missing air times |
-| `scheduled_hydrations` | Hourly | Run enabled auto-fill schedules |
+
+| Job                     | Schedule    | Purpose                                     |
+| ----------------------- | ----------- | ------------------------------------------- |
+| `episode_notifications` | Hourly      | Scan today's episodes, create notifications |
+| `push_dispatch`         | Every 5 min | Send due push jobs                          |
+| `watchlist_reminders`   | Daily 3 AM  | Stale show reminders                        |
+| `tvmaze_airtimes`       | Daily 3 AM  | Enrich missing air times                    |
+| `scheduled_hydrations`  | Hourly      | Run enabled auto-fill schedules             |
 
 ---
 
 ## 13. Comments & Images
 
 ### Comment System
+
 - Reddit-style nested threads: replies nest to any depth (server cap `MAX_COMMENT_DEPTH = 25`).
   Each comment stores `depth` (0 = top-level) and `rootId` (top-level ancestor id); both are
   set at creation and were backfilled for legacy one-level replies.
@@ -708,6 +769,7 @@ Ratings live inside the JSON files as a nullable 1–10 `rating` field (shows/mo
 - Image support: one image per comment
 
 ### Image Pipeline
+
 ```
 Mobile: expo-image-picker → expo-image-manipulator (resize 1600px, JPEG 0.8) → upload
 Backend: → temp S3 (quarantine) → magic bytes validation → Sharp decode → OpenAI moderation
@@ -722,30 +784,34 @@ Delivery: backend fetches encrypted from S3 → decrypts → streams WebP to mob
 ## 14. Stats & Gamification
 
 ### Stats Caching
+
 - `user_stats_summary` — JSON cache, invalidated on: watch/unwatch, import, rate, follow, badge unlock
 - Recomputed lazily on next read
 
 ### Stats Content
+
 - **Summary:** TV time (months/days/hours), movie time, episodes/movies watched, remaining, added
 - **Shows:** time chart, episodes chart, biggest marathons, top genres/networks, ratings, comments, catch-up speed + prediction, remaining episodes
 - **Movies:** time chart, movies chart, top genres, ratings, comments, remaining, catch-up prediction
 - **Season ratings:** per-episode ratings, swipeable seasons, SVG line chart (0-5 scale, user ratings only, unrated = 0, TMDb fallback configurable via `USE_API_FOR_EPISODES_CHART`)
 
 ### Badges (10)
-| Badge | Category | Threshold |
-|-------|----------|-----------|
-| First Steps | WATCH | 1 episode |
-| Getting Into It | WATCH | 10 episodes |
-| Marathoner | MARATHON | 100 episodes |
-| Cinephile | WATCH | 25 movies |
-| Movie Buff | WATCH | 100 movies |
-| Big Marathon | MARATHON | 6 episodes in 1 day |
-| Critic | RATING | 10 ratings |
-| Voice | COMMENT | 5 comments |
-| Social Butterfly | FOLLOW | 5 follows |
-| Welcome Aboard | APP_USAGE | First sign-in |
+
+| Badge            | Category  | Threshold           |
+| ---------------- | --------- | ------------------- |
+| First Steps      | WATCH     | 1 episode           |
+| Getting Into It  | WATCH     | 10 episodes         |
+| Marathoner       | MARATHON  | 100 episodes        |
+| Cinephile        | WATCH     | 25 movies           |
+| Movie Buff       | WATCH     | 100 movies          |
+| Big Marathon     | MARATHON  | 6 episodes in 1 day |
+| Critic           | RATING    | 10 ratings          |
+| Voice            | COMMENT   | 5 comments          |
+| Social Butterfly | FOLLOW    | 5 follows           |
+| Welcome Aboard   | APP_USAGE | First sign-in       |
 
 ### Leaderboard
+
 - Watch-time ranking among mutuals (users you follow who follow you back)
 - Types: shows, movies, combined
 - Top 10 + user's position (if outside top 10, separator + highlighted row)
@@ -756,27 +822,31 @@ Delivery: backend fetches encrypted from S3 → decrypts → streams WebP to mob
 ## 15. Background Jobs
 
 ### BullMQ Queues
-| Queue | Worker | Purpose |
-|-------|--------|---------|
-| `imports` | `ImportProcessor` | Parse + match + preview |
-| `comment-images` | `CommentImageProcessor` | Validate → moderate → process → encrypt → upload |
-| (inline) | `AdminService.processHydrationJob` | TMDb hydration per item |
+
+| Queue            | Worker                             | Purpose                                          |
+| ---------------- | ---------------------------------- | ------------------------------------------------ |
+| `imports`        | `ImportProcessor`                  | Parse + match + preview                          |
+| `comment-images` | `CommentImageProcessor`            | Validate → moderate → process → encrypt → upload |
+| (inline)         | `AdminService.processHydrationJob` | TMDb hydration per item                          |
 
 ### NestJS Schedule Crons
-| Cron | Schedule | Purpose |
-|------|----------|---------|
-| `PushService.dispatchDue` | Every 5 min | Send due push jobs |
-| `NotificationScheduler.scheduleEpisodeNotifications` | Hourly | Today's episode notifications |
-| `NotificationScheduler.watchlistReminders` | Daily 3 AM | Stale show reminders |
-| `NotificationScheduler.refreshAirtimes` | Daily 3 AM | TVmaze enrichment |
-| `CronManagerService` (DB-driven) | Configurable | 5 system jobs + scheduled hydrations |
+
+| Cron                                                 | Schedule     | Purpose                              |
+| ---------------------------------------------------- | ------------ | ------------------------------------ |
+| `PushService.dispatchDue`                            | Every 5 min  | Send due push jobs                   |
+| `NotificationScheduler.scheduleEpisodeNotifications` | Hourly       | Today's episode notifications        |
+| `NotificationScheduler.watchlistReminders`           | Daily 3 AM   | Stale show reminders                 |
+| `NotificationScheduler.refreshAirtimes`              | Daily 3 AM   | TVmaze enrichment                    |
+| `CronManagerService` (DB-driven)                     | Configurable | 5 system jobs + scheduled hydrations |
 
 ---
 
 ## 16. Admin System
 
 ### Feature Flags
+
 Stored in `feature_flags` table. Enforced via `FeatureFlagService` (30s cache):
+
 - `comments_enabled` — blocks POST /comments
 - `imports_enabled` — blocks upload + mobile shows disabled state
 - `push_notifications` — global push kill switch
@@ -784,7 +854,9 @@ Stored in `feature_flags` table. Enforced via `FeatureFlagService` (30s cache):
 - `recommendations` — ready for "Top For You"
 
 ### Settings
+
 Stored in `app_settings` (encrypted for secrets). Enforced via `SettingService` (10s cache, `.env` fallback):
+
 - TMDb: API key, language, RPS
 - TVmaze: enabled, API key
 - Trakt: client ID/secret
@@ -793,9 +865,11 @@ Stored in `app_settings` (encrypted for secrets). Enforced via `SettingService` 
 - Images: max long edge, WebP quality, thumbnail settings
 
 ### Hydration Jobs
+
 12 types: trending shows/movies, popular shows/movies, top-rated shows/movies, upcoming/now-playing movies, airing today, on the air, single show/movie by ID.
 
 ### Scheduled Hydrations
+
 Recurring auto-fill: pick type + pages + cron schedule → runs automatically → tracks last run + job ID.
 
 ---
@@ -803,6 +877,7 @@ Recurring auto-fill: pick type + pages + cron schedule → runs automatically �
 ## 17. Environment Variables
 
 See `.env.example` for full list. Key categories:
+
 - **Core:** `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `CORS_ORIGINS`
 - **OAuth:** `GOOGLE_CLIENT_ID/SECRET`, `FACEBOOK_APP_ID/SECRET`, `APPLE_*`
 - **TMDb:** `TMDB_API_KEY`, `TMDB_RPS` (default 40), `TMDB_LANGUAGE`
@@ -817,13 +892,14 @@ See `.env.example` for full list. Key categories:
 - **Jobs:** `METADATA_REFRESH_CRON`, `NOTIFICATIONS_DISPATCH_CRON`
 
 ### Mobile Config (`app.json → extra`)
-| Key | Purpose | Default |
-|-----|---------|---------|
-| `apiBaseUrl` | Default backend URL (public instance) | `http://192.168.1.239:4000/api` |
-| `publicApiUrl` | Public instance URL for push relay (constant, never changes) | `https://api.tvwatchtime.org/api` |
-| `googleClientId` | Google OAuth Web Client ID | (set) |
-| `facebookAppId` | Facebook App ID | (set) |
-| `eas.projectId` | EAS project ID for push tokens | (set in local app.json) |
+
+| Key              | Purpose                                                      | Default                           |
+| ---------------- | ------------------------------------------------------------ | --------------------------------- |
+| `apiBaseUrl`     | Default backend URL (public instance)                        | `http://192.168.1.239:4000/api`   |
+| `publicApiUrl`   | Public instance URL for push relay (constant, never changes) | `https://api.tvwatchtime.org/api` |
+| `googleClientId` | Google OAuth Web Client ID                                   | (set)                             |
+| `facebookAppId`  | Facebook App ID                                              | (set)                             |
+| `eas.projectId`  | EAS project ID for push tokens                               | (set in local app.json)           |
 
 When user checks "Self-hosted backend" on login, `apiBaseUrl` is overridden by SecureStore. `publicApiUrl` always stays constant (push relay uses it).
 
@@ -834,6 +910,7 @@ All settings (except core connection strings) can be overridden via the admin co
 ## 18. Deployment
 
 ### Development
+
 ```bash
 docker compose up -d          # PostgreSQL + Redis + MinIO
 pnpm install
@@ -844,7 +921,9 @@ pnpm --filter @tvwatch/admin dev  # Admin :3000
 ```
 
 ### Self-Hosted Support
+
 The mobile app supports connecting to either the public backend or a self-hosted instance:
+
 - Login screen has a "Self-hosted backend" checkbox
 - When checked: shows URL input, hides social login (email/password only)
 - URL stored in SecureStore, editable in Settings
@@ -853,7 +932,9 @@ The mobile app supports connecting to either the public backend or a self-hosted
 - Same app binary works for both public and self-hosted users
 
 ### Dev Build (Android)
+
 Prerequisites: Android Studio + SDK 36, JDK 18, Firebase project
+
 ```bash
 # 1. Configure
 cp .env.example .env
@@ -864,12 +945,15 @@ cd apps/mobile
 npx expo prebuild --platform android --clean
 npx expo run:android
 ```
+
 Windows notes:
+
 - Use `node-linker=hoisted` in `.npmrc`
 - Set `JAVA_HOME` as User environment variable
 - SDK 54 recommended (SDK 57+ requires react-native-worklets CMake build)
 
 ### Production
+
 - **Backend:** Docker container (Node.js)
 - **Database:** Managed PostgreSQL
 - **Redis:** Managed Redis
@@ -878,6 +962,7 @@ Windows notes:
 - **Admin:** Vercel / Netlify / Docker
 
 ### Build
+
 ```bash
 eas build --platform all      # Mobile standalone builds
 eas submit --platform all     # Submit to stores
@@ -888,9 +973,11 @@ eas submit --platform all     # Submit to stores
 ## 19. TVDB Integration
 
 ### Overview
+
 TVDB (thetvdb.com) is a second metadata provider alongside TMDb. TVDB has a larger database for some shows.
 
 ### Architecture
+
 ```
 DiscoveryService.search()
   ├── TmdbProvider.searchShows() → TMDb API
@@ -903,24 +990,28 @@ DiscoveryService.search()
 ```
 
 ### Configuration
-| Var | Default | Purpose |
-|-----|---------|---------|
-| `TVDB_API_KEY` | — | Enables TVDB search + hydration |
-| `TVDB_RPS` | `0` (unlimited) | Rate limit (0 = unlimited) |
+
+| Var            | Default         | Purpose                         |
+| -------------- | --------------- | ------------------------------- |
+| `TVDB_API_KEY` | —               | Enables TVDB search + hydration |
+| `TVDB_RPS`     | `0` (unlimited) | Rate limit (0 = unlimited)      |
 
 ### TVDB API Client (`tvdb.client.ts`)
+
 - JWT auth: `POST /login` with `{ apikey }` → token cached 7 days
 - Rate limiting: same serialize/chain pattern as TMDb
 - `rps = 0` skips rate limiting entirely
 - Automatic re-auth on 401, retry on 429
 
 ### TVDB Provider (`tvdb.provider.ts`)
+
 - `searchShows(query)` — TVDB `/search?query=...&type=series`
 - `getShow(tvdbId)` — TVDB `/series/{id}/extended` → full seasons, episodes, artworks, cast
 - Maps TVDB data to `NormalizedShow` format (same as TMDb provider)
 - Artwork via `TvdbClient.artwork()` — prefixes `https://artworks.thetvdb.com/banners/` only for **relative** paths (idempotent: skips already-absolute URLs). `mapper.util.normalizeImageUrl()` additionally heals any previously double-prefixed URLs at serve time.
 
 ### Hydration
+
 - Shows with TVDB ID only (no TMDb) hydrate from TVDB via `ensureShowFullTvdb()`
 - `ShowsService.getShow()` checks for TMDB first, falls back to TVDB
 
@@ -929,27 +1020,31 @@ DiscoveryService.search()
 ## 20. Moderation System
 
 ### Report Types
-| Type | Target | Endpoints |
-|------|--------|-----------|
-| COMMENT | Comment | `POST /comments/:id/report` |
-| IMAGE | Comment image | `POST /images/:id/report` |
-| USER | User profile | `POST /users/:id/report` |
+
+| Type    | Target        | Endpoints                   |
+| ------- | ------------- | --------------------------- |
+| COMMENT | Comment       | `POST /comments/:id/report` |
+| IMAGE   | Comment image | `POST /images/:id/report`   |
+| USER    | User profile  | `POST /users/:id/report`    |
 
 ### Block System
+
 - `POST /users/:id/block` — blocks user, auto-unfollows
 - Blocked users' comments are filtered out in `CommentsService.list()` and `.replies()`
 - `GET /me/blocked` — list blocked users
 
 ### Admin Moderation
-| Endpoint | Role | Purpose |
-|----------|------|---------|
-| `GET /admin/moderation/reported-comments` | MODERATOR+ | Comments with report counts + reasons |
-| `GET /admin/moderation/reported-images` | MODERATOR+ | Images with report counts |
-| `GET /admin/moderation/reported-users` | MODERATOR+ | Users with report count + deleted comment count |
-| `DELETE /admin/moderation/comments/:id` | MODERATOR+ | Admin-delete comment (hides + resolves reports) |
-| `POST /admin/moderation/dismiss` | MODERATOR+ | Dismiss reports for a target |
+
+| Endpoint                                  | Role       | Purpose                                         |
+| ----------------------------------------- | ---------- | ----------------------------------------------- |
+| `GET /admin/moderation/reported-comments` | MODERATOR+ | Comments with report counts + reasons           |
+| `GET /admin/moderation/reported-images`   | MODERATOR+ | Images with report counts                       |
+| `GET /admin/moderation/reported-users`    | MODERATOR+ | Users with report count + deleted comment count |
+| `DELETE /admin/moderation/comments/:id`   | MODERATOR+ | Admin-delete comment (hides + resolves reports) |
+| `POST /admin/moderation/dismiss`          | MODERATOR+ | Dismiss reports for a target                    |
 
 ### Schema
+
 - `Report` model: `reporterId`, `targetType` (COMMENT/IMAGE/USER), `commentId`, `commentImageId`, `reportedUserId`, `reason`, `status`
 - `Block` model: `blockerId`, `blockedId` (unique together)
 - `Comment.adminDeleted` — tracks admin-deleted comments
@@ -959,17 +1054,20 @@ DiscoveryService.search()
 ## 21. Data Export & Deletion
 
 ### Data Export
+
 - `POST /me/export-request` — generates JSON with user's data, returns download URL
 - `GET /me/export-download?token=xxx` — serves the file (public, token-based)
 - Expires in 24h, hourly cron deletes expired files
 - Export includes: profile (no email/password), watch history, ratings, watchlist, favorites, comments, badges
 
 ### Data Deletion
+
 - `POST /data-deletion/request` (public) — email input, creates token, sends email
 - `GET /data-deletion/confirm?token=xxx` (public) — validates, cascade-deletes user, redirects to success page
 - Public site form at `tvwatchtime.org/delete-account`
 
 ### Password Reset
+
 - `POST /auth/forgot-password` (public) — email input, creates reset token (1h expiry), sends email
 - `POST /auth/reset-password` (public) — token + new password
 - Public site form at `tvwatchtime.org/reset-password`
@@ -979,25 +1077,29 @@ DiscoveryService.search()
 ## 22. Performance Tuning
 
 ### Redis Caching
-| Data | TTL | Invalidated by |
-|------|-----|----------------|
-| Search results | 10 min | TTL expiry |
-| Watch Next feed | 30 sec | Episode mark/unmark |
+
+| Data              | TTL    | Invalidated by      |
+| ----------------- | ------ | ------------------- |
+| Search results    | 10 min | TTL expiry          |
+| Watch Next feed   | 30 sec | Episode mark/unmark |
 | Upcoming episodes | 60 sec | Episode mark/unmark |
-| Feature flags | 30 sec | TTL expiry |
-| Settings | 10 sec | TTL expiry |
+| Feature flags     | 30 sec | TTL expiry          |
+| Settings          | 10 sec | TTL expiry          |
 
 ### Database
+
 - `DATABASE_CONNECTION_LIMIT` — Prisma pool size (default 20)
 - Postgres tuning: `POSTGRES_SHARED_BUFFERS`, `POSTGRES_MAX_CONNECTIONS`, `POSTGRES_CACHE_SIZE`, `POSTGRES_WORK_MEM`
 - All configurable for any server size
 
 ### External API Rate Limits
+
 - `TMDB_RPS=0` — unlimited (automatic backoff on 429)
 - `TVDB_RPS=0` — unlimited
 - Both implement: Retry-After header parsing, exponential with jitter, max 4 retries, 30s cap
 
 ### Worker Concurrency
+
 - `IMPORT_WORKER_CONCURRENCY` — import processing workers (default 2)
 - `COMMENT_IMAGE_WORKER_CONCURRENCY` — image processing workers (default 2)
 
@@ -1008,6 +1110,7 @@ See `production-docs/scaling.md` for multi-instance deployment + recommended val
 ## 23. Notification System (Detailed)
 
 ### Episode Notifications
+
 - **Schedule**: hourly cron finds episodes airing today
 - **Eligibility**: users who watched ≥1 episode (cross-referenced with `userEpisodeStatus`)
 - **Series premiere** (S1E1): notifies watchlist users only
@@ -1016,10 +1119,12 @@ See `production-docs/scaling.md` for multi-instance deployment + recommended val
 - **Configurable**: `NOTIFICATION_SPREAD_START_HOUR` (default 12 UTC)
 
 ### Watchlist Reminders
+
 - **Schedule**: daily at 6 PM UTC (`0 22 * * *`)
 - **Max 1 per user per day** — picks the most recently watched show with remaining episodes
 - **Skips fully-watched shows** — checks for remaining unwatched aired episodes before sending
 
 ### TVmaze Air Time Refresh
+
 - **Schedule**: daily at 3 AM UTC (`0 7 * * *`)
 - Only RETURNING shows tracked by users with upcoming episodes missing air times

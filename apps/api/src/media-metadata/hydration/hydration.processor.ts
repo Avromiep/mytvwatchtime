@@ -5,6 +5,7 @@ import { RedisService } from '../../common/redis/redis.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { CandidateDetectorService } from '../classification/candidate-detector.service';
 import { ClassifierService } from '../classification/classifier.service';
+import type { CandidateInput } from '../classification/types';
 import { AnimeMatchService } from '../matching/anime-match.service';
 import { TvdbProvider } from '../providers/tvdb.provider';
 import { TmdbProvider } from '../providers/tmdb.provider';
@@ -73,11 +74,12 @@ export class HydrationProcessor implements OnModuleInit {
    *  classification enqueue storm would saturate Kitsu/Jikan during import waves. */
   async tvdbRehydrate(data: { mediaId: string; tvdbId: number }): Promise<void> {
     if (!this.tvdb.enabled) return;
-    await this.prisma.mediaItem
-      .update({ where: { id: data.mediaId }, data: { metadataRefreshedAt: null } })
-      .catch(() => undefined);
-    await this.meta.ensureShowFullTvdb(data.tvdbId, undefined, { skipClassification: true });
-    this.logger.debug(`tvdb-rehydrate: ${data.mediaId} hydrated from TVDB ${data.tvdbId}`);
+    await this.meta.ensureShowFullTvdb(data.tvdbId, undefined, {
+      skipClassification: true,
+      writeScope: 'CAST_ONLY',
+      forceRefresh: true,
+    });
+    this.logger.debug(`tvdb-rehydrate: ${data.mediaId} refreshed TVDB cast ${data.tvdbId}`);
   }
 
   /** Stage 1: candidate detection. For a local row, chains into hydration; for an
@@ -137,45 +139,39 @@ export class HydrationProcessor implements OnModuleInit {
     }
   }
 
-  /** Stage 3 (terminal, mediaId): detect → match → classify → persist. Reuses cached
-   *  provider search so it is cheap + idempotent.
-   *
-   *  The TMDB `anime` keyword short-circuits provider matching entirely (no Kitsu/Jikan
-   *  calls). A FAILED anime match (Kitsu/Jikan outage, rate limit) must NOT persist a
-   *  degraded classification — the check stays pending and the job is retried
-   *  (attempts/backoff), then re-triggered wholesale by the next hydration-versioned
-   *  classify. A SUCCESSFUL match with a negative result is a real answer: it persists
-   *  (GENERAL) and is not re-checked until new hydration data arrives. */
+  /** Stage 3 (terminal, mediaId): strict TMDB classification. Kitsu/Jikan are never
+   * consulted here; their matches are optional identity/enrichment evidence only. */
   async animeHydrate(mediaId: string): Promise<void> {
     const media = await this.loadMedia(mediaId);
     if (!media || media.manualClassification) return;
-    // Already confirmed ANIME: provider re-matching can only add failure noise — a
-    // confirmed verdict is terminal (re-hydration version bumps don't weaken it).
-    // GENERAL-confirmed stays re-checkable: new hydration data may turn a stub-era
-    // negative into a candidate (that re-check is by design).
-    if (media.contentClassification === 'ANIME' && media.classificationTier === 'confirmed') {
-      return;
-    }
     const input = this.inputFromMedia(media);
-    // Old row (predates keywords persistence): one light TMDB keywords lookup BEFORE any
-    // Kitsu/Jikan call — persisted so it never re-checks ([] = checked, none found).
-    const keywordsRaw = media.type === 'MOVIE' ? media.movie?.keywords : media.show?.keywords;
-    if (keywordsRaw == null) {
-      const fetched = await this.fetchKeywords(media);
-      if (fetched) input.keywords = fetched;
+    const tmdbExt = media.externalIds.find(
+      (e: any) =>
+        e.provider === 'TMDB' &&
+        e.providerEntityKind === (media.type === 'MOVIE' ? 'MOVIE' : 'SERIES'),
+    );
+    if (!tmdbExt || !this.tmdb.enabled) return;
+    try {
+      const profile =
+        media.type === 'MOVIE'
+          ? await this.tmdb.getMovieRoutingProfile(Number(tmdbExt.value))
+          : await this.tmdb.getShowRoutingProfile(Number(tmdbExt.value));
+      input.tmdbGenreIds = profile.genreIds;
+      input.keywords = profile.keywords;
+      if (media.type === 'MOVIE') {
+        await this.prisma.movie
+          .update({ where: { mediaId }, data: { keywords: profile.keywords } })
+          .catch(() => undefined);
+      } else {
+        await this.prisma.show
+          .update({ where: { mediaId }, data: { keywords: profile.keywords } })
+          .catch(() => undefined);
+      }
+    } catch {
+      return; // provider unavailable: do not persist a false GENERAL verdict
     }
     const candidate = this.detector.detect(input);
-    let match = null;
-    // TMDB `anime` keyword is decisive — skip the Kitsu/Jikan calls entirely.
-    if (candidate.isCandidate && !candidate.signals.includes('anime_keyword')) {
-      // Let the error propagate (BullMQ retry) instead of classifying on missing evidence.
-      match = await this.animeMatch.matchAnime({
-        title: media.title,
-        year: media.show?.yearStart ?? media.movie?.releaseYear ?? null,
-        structuralType: media.type,
-      });
-    }
-    const result = this.classifier.classify(candidate, match);
+    const result = this.classifier.classify(candidate, null);
     await this.persist(
       mediaId,
       result.classification as ContentClassification,
@@ -184,33 +180,6 @@ export class HydrationProcessor implements OnModuleInit {
       result.evidence,
       media.manualClassification,
     );
-  }
-
-  /** One light TMDB keywords lookup for rows that predate keywords persistence. Returns
-   *  null on provider error (stays eligible for a later retry — never persisted then). */
-  private async fetchKeywords(media: {
-    id: string;
-    type: string;
-    externalIds: { provider: string; value: string }[];
-  }): Promise<string[] | null> {
-    if (!this.tmdb.enabled) return null;
-    const tmdbExt = media.externalIds.find((e) => e.provider === 'TMDB');
-    if (!tmdbExt) return null;
-    const isMovie = media.type === 'MOVIE';
-    const keywords = isMovie
-      ? await this.tmdb.getMovieKeywords(Number(tmdbExt.value))
-      : await this.tmdb.getShowKeywords(Number(tmdbExt.value));
-    if (!keywords) return null;
-    if (isMovie) {
-      await this.prisma.movie
-        .update({ where: { mediaId: media.id }, data: { keywords } })
-        .catch(() => undefined);
-    } else {
-      await this.prisma.show
-        .update({ where: { mediaId: media.id }, data: { keywords } })
-        .catch(() => undefined);
-    }
-    return keywords;
   }
 
   /** Background TVDB search: store TVDB-only results as provisional candidates (Redis TTL),
@@ -267,11 +236,11 @@ export class HydrationProcessor implements OnModuleInit {
     });
   }
 
-  private inputFromMedia(m: any) {
+  private inputFromMedia(m: any): CandidateInput {
     return {
       genres: (m.genres ?? []).map((g: any) => g?.genre?.name).filter(Boolean) as string[],
-      // JP-origin evidence for the classifier's animation+JP "probable anime" tier
-      // (persisted on Show by TMDB hydration; null/[] for TVDB-hydrated shows).
+      // Origin/language remain enrichment evidence only. They cannot classify anime or
+      // select structural ownership without the strict TMDB genre+keyword rule.
       originalLanguage: m.show?.originalLanguage ?? null,
       originCountries: m.show?.originCountries ?? [],
       // TMDB keyword signal (persisted by TMDB hydration; the `anime` keyword is strong).
@@ -286,9 +255,11 @@ export class HydrationProcessor implements OnModuleInit {
     };
   }
 
-  private inputFromSnapshot(s: any) {
+  private inputFromSnapshot(s: any): CandidateInput {
     return {
       genres: s.genres ?? [],
+      tmdbGenreIds: s.genreIds ?? [],
+      keywords: s.keywords ?? [],
       externalIds: s.externalIds ?? [
         { provider: s.provider, providerEntityKind: s.providerEntityKind, value: s.value },
       ],

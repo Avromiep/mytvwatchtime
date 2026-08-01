@@ -5,7 +5,8 @@ const D2 = new Date('2024-01-12T00:00:00Z');
 
 function mockPrisma() {
   const p: any = {
-    show: { findUnique: jest.fn() },
+    show: { findUnique: jest.fn(), update: jest.fn().mockResolvedValue({}) },
+    externalId: { findFirst: jest.fn().mockResolvedValue(null) },
     userEpisodeStatus: {
       findMany: jest.fn().mockResolvedValue([]),
       findUnique: jest.fn().mockResolvedValue(null),
@@ -42,10 +43,12 @@ function mockPrisma() {
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       count: jest.fn().mockResolvedValue(0),
     },
+    externalReview: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     episode: {
       delete: jest.fn().mockResolvedValue({}),
       deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
       update: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     episodeExternalId: {
       create: jest.fn().mockResolvedValue({}),
@@ -67,6 +70,7 @@ const ep = (over: Record<string, unknown>) => ({
   number: 1,
   title: 'Episode',
   airDate: null,
+  structureState: 'ACTIVE',
   externalIds: [{ provider: 'TMDB' }],
   ...over,
 });
@@ -100,7 +104,63 @@ describe('StructureRemapService', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  it('previews against fresh provider metadata instead of a stale stored canonical row', async () => {
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('s-old', 5, [
+          ep({
+            id: 'old-s5e16',
+            number: 16,
+            title: "It's a Hard Doc Life",
+            airDate: new Date('2020-04-18T00:00:00.000Z'),
+            externalIds: [{ provider: 'THE_TVDB', value: 'tvdb-old' }],
+          }),
+        ]),
+        season('s-canonical', 5, [
+          ep({
+            id: 'stored-target',
+            number: 14,
+            title: 'The Great McStuffins Meltdown (1)',
+            airDate: new Date('2020-03-07T00:00:00.000Z'),
+            externalIds: [{ provider: 'TMDB', value: '2699192' }],
+          }),
+        ]),
+      ]),
+    );
+
+    const storedOnly = await service.remapShow('m1', { dryRun: true, canonical: 'tmdb' });
+    const livePreview = await service.previewShowAgainstSnapshot('m1', 'tmdb', [
+      {
+        tmdbId: 5,
+        number: 5,
+        title: 'Season 5',
+        episodeCount: 1,
+        isSpecial: false,
+        episodes: [
+          {
+            tmdbId: 2699192,
+            number: 14,
+            title: "It's a Hard Doc Life",
+            airDate: '2020-04-18T00:00:00.000Z',
+            isFinale: false,
+          },
+        ],
+      },
+    ]);
+
+    expect(storedOnly).toMatchObject({ stale: 1, mapped: 0, episodesRemoved: 1 });
+    expect(livePreview).toMatchObject({
+      stale: 1,
+      mapped: 1,
+      episodesRemoved: 0,
+      matchRules: { 'absolute+date': 1 },
+      dryRun: true,
+    });
+  });
+
   it('transfers all user data from a stale row to the airDate-matched fresh row', async () => {
+    const redis = { delByPattern: jest.fn().mockResolvedValue(1) };
+    service = new StructureRemapService(prisma, redis as any);
     prisma.show.findUnique.mockResolvedValue(
       showWith([
         season('s1', 1, [ep({ id: 'old', number: 30, title: 'The Forest', airDate: D })]),
@@ -124,13 +184,28 @@ describe('StructureRemapService', () => {
         watchedAt: D2,
         watchCount: 2,
         device: 'TV',
+        createdAt: new Date('2024-01-01'),
+        updatedAt: new Date('2024-02-01'),
       },
     ]);
     prisma.watchHistory.updateMany.mockResolvedValue({ count: 3 });
     prisma.rating.findMany.mockResolvedValue([
-      { id: 'r1', userId: 'u1', episodeId: 'old', rating: 5 },
+      {
+        id: 'r1',
+        userId: 'u1',
+        episodeId: 'old',
+        rating: 5,
+        source: 'TVTIME',
+        createdAt: new Date('2024-03-01'),
+        updatedAt: new Date('2024-03-01'),
+      },
     ]);
-    prisma.rating.findFirst.mockResolvedValue({ id: 'r-target' }); // user already rated the target
+    prisma.rating.findFirst.mockResolvedValue({
+      id: 'r-target',
+      source: 'MANUAL',
+      createdAt: new Date('2024-01-01'),
+      updatedAt: new Date('2024-01-01'),
+    }); // manual target wins even when the imported source is newer
     prisma.reaction.findMany.mockResolvedValue([
       { id: 're1', userId: 'u1', episodeId: 'old', reaction: 'HAPPY' },
     ]);
@@ -138,6 +213,7 @@ describe('StructureRemapService', () => {
       { id: 'v1', userId: 'u1', episodeId: 'old', castId: 'c1' },
     ]);
     prisma.comment.updateMany.mockResolvedValue({ count: 2 });
+    prisma.externalReview.updateMany.mockResolvedValue({ count: 1 });
 
     const res = await service.remapShow('m1');
 
@@ -151,6 +227,7 @@ describe('StructureRemapService', () => {
       reactionsMoved: 1,
       votesMoved: 1,
       commentsMoved: 2,
+      externalReviewsMoved: 1,
       episodesRemoved: 1,
     });
     // Status re-pointed (no target row), watch history re-pointed with the new S/E numbers.
@@ -179,10 +256,18 @@ describe('StructureRemapService', () => {
       where: { threadType: 'EPISODE', threadId: 'old' },
       data: { threadId: 'new' },
     });
+    expect(prisma.externalReview.updateMany).toHaveBeenCalledWith({
+      where: { episodeId: 'old' },
+      data: { episodeId: 'new' },
+    });
     expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'old' } });
     expect(prisma.userShowStatus.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ where: { userId_mediaId: { userId: 'u1', mediaId: 'm1' } } }),
     );
+    expect(redis.delByPattern).toHaveBeenCalledWith('watchnext:u1:v2:*');
+    expect(redis.delByPattern).toHaveBeenCalledWith('watchnext:u1:paused:*');
+    expect(redis.delByPattern).toHaveBeenCalledWith('upcoming:u1:*');
+    expect(redis.delByPattern).toHaveBeenCalledWith('showsprogress:u1:v3:*');
   });
 
   it('merges into the target status row when the user already has one', async () => {
@@ -209,6 +294,8 @@ describe('StructureRemapService', () => {
         watchedAt: D2,
         watchCount: 2,
         device: 'TV',
+        createdAt: new Date('2024-01-01'),
+        updatedAt: new Date('2024-02-01'),
       },
     ]);
     prisma.userEpisodeStatus.findUnique.mockResolvedValue({
@@ -219,6 +306,8 @@ describe('StructureRemapService', () => {
       watchedAt: null,
       watchCount: 1,
       device: null,
+      createdAt: new Date('2024-01-01'),
+      updatedAt: new Date('2024-01-15'),
     });
 
     const res = await service.remapShow('m1');
@@ -231,10 +320,22 @@ describe('StructureRemapService', () => {
     expect(prisma.userEpisodeStatus.delete).toHaveBeenCalledWith({ where: { id: 'ues-old' } });
   });
 
-  it('falls back to exact-title matching when there is no airDate', async () => {
+  it('maps specials only through an exact external id', async () => {
     prisma.show.findUnique.mockResolvedValue(
       showWith([
-        season('s0', 0, [ep({ id: 'old', number: 3, title: 'OVA: Memory Snow' })], true),
+        season(
+          's0',
+          0,
+          [
+            ep({
+              id: 'old',
+              number: 3,
+              title: 'OVA: Memory Snow',
+              externalIds: [{ provider: 'TMDB', value: 'special-1' }],
+            }),
+          ],
+          true,
+        ),
         season(
           's0',
           0,
@@ -243,7 +344,10 @@ describe('StructureRemapService', () => {
               id: 'new',
               number: 1,
               title: 'OVA: Memory Snow',
-              externalIds: [{ provider: 'THE_TVDB' }],
+              externalIds: [
+                { provider: 'TMDB', value: 'special-1' },
+                { provider: 'THE_TVDB', value: 'tvdb-special-1' },
+              ],
             }),
           ],
           true,
@@ -252,7 +356,105 @@ describe('StructureRemapService', () => {
     );
     const res = await service.remapShow('m1');
     expect(res.mapped).toBe(1);
+    expect(res.matchRules).toEqual({ externalId: 1 });
     expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'old' } });
+  });
+
+  it('maps a verified special by date plus coordinates but keeps a same-day ambiguous special', async () => {
+    const tvdb = {
+      getEpisodeRoutingIndex: jest.fn().mockResolvedValue(
+        new Map([
+          [
+            8999264,
+            {
+              airDate: '2017-06-09',
+              seasonNumber: 0,
+              episodeNumber: 1,
+              absoluteNumber: null,
+            },
+          ],
+          [
+            6135398,
+            {
+              airDate: '2017-03-10',
+              seasonNumber: 0,
+              episodeNumber: 2,
+              absoluteNumber: null,
+            },
+          ],
+        ]),
+      ),
+    };
+    service = new StructureRemapService(prisma, undefined, tvdb as any);
+    prisma.externalId.findFirst.mockResolvedValue({ value: '330134' });
+    prisma.$queryRaw.mockResolvedValue([{ id: 'tvdb-meet-dewey', has_data: true }]);
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season(
+          'legacy-specials',
+          0,
+          [
+            ep({
+              id: 'tvdb-meet-dewey',
+              number: 1,
+              title: 'Meet Dewey!',
+              airDate: new Date('2017-06-09T00:00:00.000Z'),
+              structureState: 'LEGACY_UNMAPPED',
+              externalIds: [{ provider: 'THE_TVDB', value: '8999264' }],
+            }),
+            ep({
+              id: 'tvdb-donald-tales',
+              number: 2,
+              title: "Donald Duck's Tales",
+              airDate: new Date('2017-03-10T00:00:00.000Z'),
+              structureState: 'LEGACY_UNMAPPED',
+              externalIds: [{ provider: 'THE_TVDB', value: '6135398' }],
+            }),
+          ],
+          true,
+        ),
+        season(
+          'canonical-specials',
+          0,
+          [
+            ep({
+              id: 'tmdb-first-look',
+              number: 1,
+              title: 'DuckTales: First Look',
+              airDate: new Date('2017-03-02T00:00:00.000Z'),
+              externalIds: [{ provider: 'TMDB', value: '2777289' }],
+            }),
+            ep({
+              id: 'tmdb-donald-tales',
+              number: 2,
+              title: "Donald Duck's Tales",
+              airDate: new Date('2017-03-10T00:00:00.000Z'),
+              externalIds: [{ provider: 'TMDB', value: '2777292' }],
+            }),
+            ep({
+              id: 'tmdb-donald-birthday',
+              number: 3,
+              title: "Donald's Birthday",
+              airDate: new Date('2017-06-09T00:00:00.000Z'),
+              externalIds: [{ provider: 'TMDB', value: '2777294' }],
+            }),
+            ep({
+              id: 'tmdb-meet-webby',
+              number: 4,
+              title: 'Meet Webby Vanderquack!',
+              airDate: new Date('2017-06-09T00:00:00.000Z'),
+              externalIds: [{ provider: 'TMDB', value: '2777295' }],
+            }),
+          ],
+          true,
+        ),
+      ]),
+    );
+
+    const result = await service.remapShow('m1', { dryRun: true, canonical: 'tmdb' });
+
+    expect(result).toMatchObject({ stale: 2, mapped: 1, unmapped: 1, legacyQuarantined: 1 });
+    expect(result.matchRules).toEqual({ 'verifiedSpecialDate+seasonEpisode': 1 });
   });
 
   it('refuses ambiguous airDate groups and keeps rows that carry user data', async () => {
@@ -282,12 +484,241 @@ describe('StructureRemapService', () => {
 
     const res = await service.remapShow('m1');
 
-    expect(res).toMatchObject({ stale: 1, mapped: 0, unmapped: 1, episodesRemoved: 0 });
+    expect(res).toMatchObject({
+      stale: 1,
+      mapped: 0,
+      unmapped: 1,
+      legacyQuarantined: 1,
+      episodesRemoved: 0,
+    });
+    expect(prisma.episode.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['old'] } },
+      data: { structureState: 'LEGACY_UNMAPPED' },
+    });
     expect(prisma.episode.delete).not.toHaveBeenCalled(); // kept — never lose watch data
     expect(prisma.episode.deleteMany).not.toHaveBeenCalled();
     // No transfer ran (only the absoluteNumber backfill touches the DB in this test).
     expect(prisma.userEpisodeStatus.update).not.toHaveBeenCalled();
     expect(prisma.watchHistory.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not use an exact title as episode identity proof', async () => {
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('s-old', 5, [
+          ep({
+            id: 'old',
+            number: 15,
+            absoluteNumber: 99,
+            title: 'The Same Localized Title',
+            externalIds: [{ provider: 'THE_TVDB', value: '8432761' }],
+          }),
+        ]),
+        season('s-new', 5, [
+          ep({
+            id: 'new',
+            number: 13,
+            absoluteNumber: 13,
+            title: 'The Same Localized Title',
+            externalIds: [{ provider: 'TMDB', value: '2699191' }],
+          }),
+        ]),
+      ]),
+    );
+
+    const result = await service.remapShow('m1', { canonical: 'tmdb' });
+
+    expect(result.mapped).toBe(0);
+    expect(result.matchRules).toEqual({});
+  });
+
+  it('reconsiders legacy rows using a TVDB-verified date and canonical show identity', async () => {
+    const tvdb = {
+      getEpisodeRoutingIndex: jest.fn().mockResolvedValue(
+        new Map([
+          [
+            8432761,
+            {
+              airDate: '2020-03-07',
+              seasonNumber: 5,
+              episodeNumber: 15,
+              absoluteNumber: 115,
+            },
+          ],
+          [
+            7602682,
+            {
+              airDate: '2020-03-07',
+              seasonNumber: 5,
+              episodeNumber: 14,
+              absoluteNumber: 114,
+            },
+          ],
+        ]),
+      ),
+    };
+    service = new StructureRemapService(prisma, undefined, tvdb as any);
+    prisma.externalId.findFirst.mockResolvedValue({ value: '258111' });
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('s-old', 5, [
+          ep({
+            id: 'legacy-part-2',
+            number: 15,
+            absoluteNumber: 99,
+            title: 'Un titre traduit sans correspondance',
+            airDate: new Date('2020-12-04T00:00:00.000Z'),
+            structureState: 'LEGACY_UNMAPPED',
+            externalIds: [{ provider: 'THE_TVDB', value: '8432761' }],
+          }),
+        ]),
+        season('s-new', 5, [
+          ep({
+            id: 'canonical-combined',
+            number: 13,
+            absoluteNumber: 13,
+            title: 'The Great McStuffins Meltdown',
+            airDate: new Date('2020-03-07T00:00:00.000Z'),
+            externalIds: [
+              { provider: 'TMDB', value: '2699191' },
+              { provider: 'THE_TVDB', value: '8080762' },
+            ],
+          }),
+        ]),
+      ]),
+    );
+
+    const result = await service.remapShow('m1', { canonical: 'tmdb' });
+
+    expect(tvdb.getEpisodeRoutingIndex).toHaveBeenCalledWith(258111);
+    expect(result).toMatchObject({ stale: 1, mapped: 1, unmapped: 0 });
+    expect(result.matchRules).toEqual({ verifiedProviderAirDate: 1 });
+    expect(prisma.episodeExternalId.create).toHaveBeenCalledWith({
+      data: {
+        episodeId: 'canonical-combined',
+        provider: 'THE_TVDB',
+        providerEntityKind: 'EPISODE',
+        value: '8432761',
+      },
+    });
+    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'legacy-part-2' } });
+  });
+
+  it('uses verified aired order for a same-day batch across different season layouts', async () => {
+    const tvdb = {
+      getEpisodeRoutingIndex: jest.fn().mockResolvedValue(
+        new Map([
+          [
+            900001,
+            {
+              airDate: '2024-06-01',
+              seasonNumber: 2,
+              episodeNumber: 1,
+              absoluteNumber: 13,
+            },
+          ],
+        ]),
+      ),
+    };
+    service = new StructureRemapService(prisma, undefined, tvdb as any);
+    prisma.externalId.findFirst.mockResolvedValue({ value: '12345' });
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('tvdb-s2', 2, [
+          ep({
+            id: 'tvdb-s2e1',
+            number: 1,
+            absoluteNumber: 99,
+            title: '完全に異なる翻訳タイトル',
+            airDate: new Date('2024-12-01T00:00:00.000Z'),
+            structureState: 'LEGACY_UNMAPPED',
+            externalIds: [{ provider: 'THE_TVDB', value: '900001' }],
+          }),
+        ]),
+        season('tmdb-s1', 1, [
+          ep({
+            id: 'tmdb-s1e13',
+            number: 13,
+            absoluteNumber: 13,
+            title: 'Thirteenth Episode',
+            airDate: new Date('2024-06-01T00:00:00.000Z'),
+            externalIds: [{ provider: 'TMDB', value: '1300' }],
+          }),
+          ep({
+            id: 'tmdb-s1e14',
+            number: 14,
+            absoluteNumber: 14,
+            title: 'Fourteenth Episode',
+            airDate: new Date('2024-06-01T00:00:00.000Z'),
+            externalIds: [{ provider: 'TMDB', value: '1400' }],
+          }),
+        ]),
+      ]),
+    );
+
+    const result = await service.remapShow('m1', { canonical: 'tmdb' });
+
+    expect(result.mapped).toBe(1);
+    expect(result.matchRules).toEqual({ 'verifiedDate+absolute': 1 });
+    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'tvdb-s2e1' } });
+  });
+
+  it('uses article-tolerant title similarity only inside a verified same-day group', async () => {
+    const tvdb = {
+      getEpisodeRoutingIndex: jest.fn().mockResolvedValue(
+        new Map([
+          [
+            900002,
+            {
+              airDate: '2024-06-02',
+              seasonNumber: 9,
+              episodeNumber: 9,
+              absoluteNumber: null,
+            },
+          ],
+        ]),
+      ),
+    };
+    service = new StructureRemapService(prisma, undefined, tvdb as any);
+    prisma.externalId.findFirst.mockResolvedValue({ value: '12345' });
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('legacy', 9, [
+          ep({
+            id: 'legacy-title',
+            number: 9,
+            absoluteNumber: 99,
+            title: 'Great McStuffins Meltdown (2)',
+            structureState: 'LEGACY_UNMAPPED',
+            externalIds: [{ provider: 'THE_TVDB', value: '900002' }],
+          }),
+        ]),
+        season('canonical', 1, [
+          ep({
+            id: 'right-title',
+            number: 3,
+            absoluteNumber: 3,
+            title: 'The Great McStuffins Meltdown',
+            airDate: new Date('2024-06-02T00:00:00.000Z'),
+            externalIds: [{ provider: 'TMDB', value: '300' }],
+          }),
+          ep({
+            id: 'wrong-title',
+            number: 4,
+            absoluteNumber: 4,
+            title: 'A Completely Different Episode',
+            airDate: new Date('2024-06-02T00:00:00.000Z'),
+            externalIds: [{ provider: 'TMDB', value: '400' }],
+          }),
+        ]),
+      ]),
+    );
+
+    const result = await service.remapShow('m1', { canonical: 'tmdb' });
+
+    expect(result.mapped).toBe(1);
+    expect(result.matchRules).toEqual({ 'verifiedDate+title': 1 });
+    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'legacy-title' } });
   });
 
   it('deletes unmapped stale rows that carry no user data and drops emptied seasons', async () => {
@@ -427,7 +858,9 @@ describe('StructureRemapService', () => {
     // same episode, provider dates months apart. Unique absolute correspondence wins.
     prisma.show.findUnique.mockResolvedValue(
       showWith([
-        season('s1', 1, [ep({ id: 'stale', number: 7, title: 'X', absoluteNumber: 7, airDate: D })]),
+        season('s1', 1, [
+          ep({ id: 'stale', number: 7, title: 'X', absoluteNumber: 7, airDate: D }),
+        ]),
         season('s2', 2, [
           ep({
             id: 'fresh-conflict',
@@ -453,11 +886,23 @@ describe('StructureRemapService', () => {
     prisma.show.findUnique.mockResolvedValue(
       showWith([
         season('s1', 1, [
-          ep({ id: 'fresh-e1', number: 1, title: 'Ep 1', absoluteNumber: 1, externalIds: [{ provider: 'THE_TVDB' }] }),
+          ep({
+            id: 'fresh-e1',
+            number: 1,
+            title: 'Ep 1',
+            absoluteNumber: 1,
+            externalIds: [{ provider: 'THE_TVDB' }],
+          }),
           ep({ id: 'stale-e2', number: 2, title: 'Ep 2', absoluteNumber: null, externalIds: [] }),
         ]),
         season('s2', 2, [
-          ep({ id: 'fresh-e2', number: 1, title: 'Ep 2', absoluteNumber: 2, externalIds: [{ provider: 'THE_TVDB' }] }),
+          ep({
+            id: 'fresh-e2',
+            number: 1,
+            title: 'Ep 2',
+            absoluteNumber: 2,
+            externalIds: [{ provider: 'THE_TVDB' }],
+          }),
         ]),
       ]),
     );
@@ -486,7 +931,9 @@ describe('StructureRemapService', () => {
   it('matches via absolute+date when both signals agree', async () => {
     prisma.show.findUnique.mockResolvedValue(
       showWith([
-        season('s1', 1, [ep({ id: 'stale', number: 7, title: 'Old', absoluteNumber: 7, airDate: D })]),
+        season('s1', 1, [
+          ep({ id: 'stale', number: 7, title: 'Old', absoluteNumber: 7, airDate: D }),
+        ]),
         season('s2', 2, [
           ep({
             id: 'fresh',
@@ -509,8 +956,20 @@ describe('StructureRemapService', () => {
       showWith([
         season('s1', 1, [ep({ id: 'stale', number: 7, title: 'Old', absoluteNumber: 7 })]),
         season('s2', 2, [
-          ep({ id: 'f1', number: 1, title: 'A', absoluteNumber: 7, externalIds: [{ provider: 'THE_TVDB' }] }),
-          ep({ id: 'f2', number: 2, title: 'B', absoluteNumber: 7, externalIds: [{ provider: 'THE_TVDB' }] }),
+          ep({
+            id: 'f1',
+            number: 1,
+            title: 'A',
+            absoluteNumber: 7,
+            externalIds: [{ provider: 'THE_TVDB' }],
+          }),
+          ep({
+            id: 'f2',
+            number: 2,
+            title: 'B',
+            absoluteNumber: 7,
+            externalIds: [{ provider: 'THE_TVDB' }],
+          }),
         ]),
       ]),
     );
@@ -528,7 +987,13 @@ describe('StructureRemapService', () => {
           ep({ id: 'stale-unmapped', number: 99, title: 'U', absoluteNumber: 99 }),
         ]),
         season('s2', 2, [
-          ep({ id: 'fresh', number: 1, title: 'M2', absoluteNumber: 4, externalIds: [{ provider: 'THE_TVDB' }] }),
+          ep({
+            id: 'fresh',
+            number: 1,
+            title: 'M2',
+            absoluteNumber: 4,
+            externalIds: [{ provider: 'THE_TVDB' }],
+          }),
         ]),
       ]),
     );
@@ -554,9 +1019,23 @@ describe('StructureRemapService', () => {
       showWith([
         season('s1', 1, [
           // Canonical TMDB rows (fresh in reverse direction).
-          ep({ id: 'tmdb-e1', number: 1, title: 'Pilot', absoluteNumber: 1, airDate: D, externalIds: [{ provider: 'TMDB' }] }),
+          ep({
+            id: 'tmdb-e1',
+            number: 1,
+            title: 'Pilot',
+            absoluteNumber: 1,
+            airDate: D,
+            externalIds: [{ provider: 'TMDB' }],
+          }),
           // Stray TVDB-only duplicate of the same episode (stale in reverse direction).
-          ep({ id: 'tvdb-e1', number: 1, title: 'Pilot', absoluteNumber: 1, airDate: D, externalIds: [{ provider: 'THE_TVDB' }] }),
+          ep({
+            id: 'tvdb-e1',
+            number: 1,
+            title: 'Pilot',
+            absoluteNumber: 1,
+            airDate: D,
+            externalIds: [{ provider: 'THE_TVDB' }],
+          }),
         ]),
       ]),
     );
@@ -575,8 +1054,20 @@ describe('StructureRemapService', () => {
     prisma.show.findUnique.mockResolvedValue(
       showWith([
         season('s1', 1, [
-          ep({ id: 'tmdb-e1', number: 1, title: 'Pilot', absoluteNumber: 1, externalIds: [{ provider: 'TMDB' }] }),
-          ep({ id: 'tvdb-e1', number: 1, title: 'Pilot', absoluteNumber: 1, externalIds: [{ provider: 'THE_TVDB' }] }),
+          ep({
+            id: 'tmdb-e1',
+            number: 1,
+            title: 'Pilot',
+            absoluteNumber: 1,
+            externalIds: [{ provider: 'TMDB' }],
+          }),
+          ep({
+            id: 'tvdb-e1',
+            number: 1,
+            title: 'Pilot',
+            absoluteNumber: 1,
+            externalIds: [{ provider: 'THE_TVDB' }],
+          }),
         ]),
       ]),
     );
@@ -589,8 +1080,20 @@ describe('StructureRemapService', () => {
     prisma.show.findUnique.mockResolvedValue(
       showWith([
         season('s1', 1, [
-          ep({ id: 'fresh', number: 1, title: 'Same', absoluteNumber: 5, externalIds: [{ provider: 'THE_TVDB', value: 'tvdb-555' }] }),
-          ep({ id: 'stale', number: 5, title: 'Same', absoluteNumber: 5, externalIds: [{ provider: 'TMDB', value: 'tmdb-777' }] }),
+          ep({
+            id: 'fresh',
+            number: 1,
+            title: 'Same',
+            absoluteNumber: 5,
+            externalIds: [{ provider: 'THE_TVDB', value: 'tvdb-555' }],
+          }),
+          ep({
+            id: 'stale',
+            number: 5,
+            title: 'Same',
+            absoluteNumber: 5,
+            externalIds: [{ provider: 'TMDB', value: 'tmdb-777' }],
+          }),
         ]),
       ]),
     );

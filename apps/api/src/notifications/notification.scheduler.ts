@@ -48,7 +48,7 @@ export class NotificationScheduler {
     windowEnd.setDate(windowEnd.getDate() + 3);
 
     const episodes = await this.prisma.episode.findMany({
-      where: { airDate: { gte: windowStart, lt: windowEnd } },
+      where: { structureState: 'ACTIVE', airDate: { gte: windowStart, lt: windowEnd } },
       include: { season: { include: { show: { include: { media: true } } } } },
       orderBy: [{ airDate: 'asc' }],
       take: 400,
@@ -242,6 +242,7 @@ export class NotificationScheduler {
     for (const s of stale) {
       const remaining = await this.prisma.episode.count({
         where: {
+          structureState: 'ACTIVE',
           season: { show: { mediaId: s.mediaId }, isSpecial: false },
           airDate: { not: null, lte: now },
           userStatuses: { none: { userId: s.userId, watched: true } },
@@ -304,7 +305,10 @@ export class NotificationScheduler {
       where: {
         type: 'SHOW',
         status: 'RETURNING',
-        OR: [{ showStatuses: { some: { dropped: false, pausedAt: null } } }, { watchlist: { some: {} } }],
+        OR: [
+          { showStatuses: { some: { dropped: false, pausedAt: null } } },
+          { watchlist: { some: {} } },
+        ],
         show: {
           seasons: {
             some: {
@@ -372,7 +376,9 @@ export class NotificationScheduler {
         JOIN episodes e ON ues.episode_id = e.id
         JOIN seasons s ON e.season_id = s.id
         JOIN shows sh ON s.show_id = sh.id
-        WHERE sh.media_id = ${mediaId} AND ues.watched = true AND s.is_special = false
+        WHERE sh.media_id = ${mediaId} AND ues.watched = true
+          AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
+          AND s.is_special = false
         GROUP BY ues.user_id
       `,
     ]);

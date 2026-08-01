@@ -159,7 +159,8 @@ export class ImportProcessor implements OnModuleInit {
   }
 
   /** Row-backed status counters for the review summary (extras included). */
-  private async statusCounts(importId: string) {    const groups = await this.prisma.importItem.groupBy({
+  private async statusCounts(importId: string) {
+    const groups = await this.prisma.importItem.groupBy({
       by: ['status'],
       where: { importId },
       _count: { _all: true },
@@ -684,11 +685,9 @@ export class ImportProcessor implements OnModuleInit {
   }
 
   /**
-   * Structural guard: when the import's footprint exceeds the matched show's hydrated
-   * structure (wrong-provider structure — anthologies/reboots/split hour-longs — or a
-   * poisoned partial hydration), re-hydrate from TVDB. The re-hydration is a union upsert
-   * (existing rows are never deleted), so the episode space becomes the union of both
-   * providers' structures. Runs once per show per import, before episode resolution.
+   * Structural diagnostic: a footprint mismatch is useful evidence, but never permission
+   * to hydrate the non-owner provider. Episode external-id translation handles resolvable
+   * rows; unresolved rows remain reviewable/skippable without contaminating structure.
    */
   private async guardShowStructure(
     mediaId: string,
@@ -702,11 +701,10 @@ export class ImportProcessor implements OnModuleInit {
     try {
       const hydrated = await this.matcher.hydratedFootprint(mediaId);
       if (needsTvdbRehydration({ maxSeason, seasonEpisodes }, hydrated)) {
-        this.logger.log(
+        this.logger.warn(
           `Structural guard: media ${mediaId} hydrated structure too small for the import footprint ` +
-            `(hydrated maxSeason=${hydrated.maxSeason}, need S${maxSeason ?? '?'}) — re-hydrating from TVDB`,
+            `(hydrated maxSeason=${hydrated.maxSeason}, need S${maxSeason ?? '?'}) — preserving canonical provider and resolving by episode ids`,
         );
-        await this.matcher.rehydrateWithTvdb(mediaId);
       }
     } catch (e) {
       this.logger.debug(`Structural guard skipped for ${mediaId}: ${(e as Error).message}`);

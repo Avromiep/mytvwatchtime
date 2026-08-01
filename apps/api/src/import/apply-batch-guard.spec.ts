@@ -5,10 +5,7 @@ import { ImportService } from './import.service';
  * entity type (a mis-tagged import item or a bad external-id cross-link).
  */
 describe('ImportService.applyBatch — cross-type guard', () => {
-  function makeService(
-    mediaTypes: Record<string, string>,
-    options: { episodes?: any[]; replacementEpisode?: any } = {},
-  ) {
+  function makeService(mediaTypes: Record<string, string>, options: { episodes?: any[] } = {}) {
     const prisma: any = {
       mediaItem: {
         findMany: jest.fn(async () =>
@@ -18,7 +15,6 @@ describe('ImportService.applyBatch — cross-type guard', () => {
       movie: { findMany: jest.fn().mockResolvedValue([]) },
       episode: {
         findMany: jest.fn().mockResolvedValue(options.episodes ?? []),
-        findFirst: jest.fn().mockResolvedValue(options.replacementEpisode ?? null),
       },
       userEpisodeStatus: { findMany: jest.fn().mockResolvedValue([]) },
       userMovieStatus: { findMany: jest.fn().mockResolvedValue([]) },
@@ -59,11 +55,18 @@ describe('ImportService.applyBatch — cross-type guard', () => {
   });
 
   it('drops a WATCHED_MOVIE item whose matched media is a SHOW (no movie status written)', async () => {
-    const { service, chunked } = makeService({ 'show-1': 'SHOW' });
+    const { service, prisma, chunked } = makeService({ 'show-1': 'SHOW' });
     const res = await service.applyBatch('u1', 'imp1', [movieItem('show-1')], 'TVTIME');
     expect(res.created).toBe(0);
     expect(res.skipped).toBe(1);
     expect(chunked.find((r) => r.mediaId === 'show-1')).toBeUndefined();
+    expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['it1'] } },
+      data: {
+        status: 'SKIPPED',
+        errorMessage: 'Matched media type is incompatible with this import item',
+      },
+    });
   });
 
   it('still applies a WATCHED_MOVIE item to a real MOVIE row', async () => {
@@ -88,11 +91,11 @@ describe('ImportService.applyBatch — cross-type guard', () => {
       runtimeMinutes: 45,
       season: { number: 1 },
     };
-    const { service, prisma, chunked } = makeService(
-      { 'show-1': 'SHOW' },
-      { replacementEpisode: { id: 'ep-new' } },
-    );
-    prisma.episode.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([replacement]);
+    const { service, prisma, chunked } = makeService({ 'show-1': 'SHOW' });
+    prisma.episode.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'ep-new' }])
+      .mockResolvedValueOnce([replacement]);
 
     const res = await service.applyBatch('u1', 'imp1', [episodeItem('ep-deleted')], 'TVTIME');
 
@@ -116,15 +119,37 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     );
 
     expect(res).toEqual({ created: 0, skipped: 1 });
-    expect(prisma.episode.findFirst).not.toHaveBeenCalled();
+    expect(prisma.episode.findMany.mock.calls.some(([args]: any[]) => args.where?.season)).toBe(
+      false,
+    );
     expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
       where: { id: { in: ['ep-item-1'] } },
       data: {
         status: 'SKIPPED',
         matchedEpisodeId: null,
-        errorMessage: null,
+        errorMessage: 'Episode is missing or its canonical replacement is ambiguous',
       },
     });
     expect(chunked.some((row) => row.episodeId)).toBe(false);
+  });
+
+  it('skips a stale regular episode when its canonical S/E replacement is ambiguous', async () => {
+    const { service, prisma, chunked } = makeService({ 'show-1': 'SHOW' });
+    prisma.episode.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'ep-a' }, { id: 'ep-b' }]);
+
+    const res = await service.applyBatch('u1', 'imp1', [episodeItem('ep-deleted')], 'TVTIME');
+
+    expect(res).toEqual({ created: 0, skipped: 1 });
+    expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['ep-item-1'] } },
+      data: {
+        status: 'SKIPPED',
+        matchedEpisodeId: null,
+        errorMessage: 'Episode is missing or its canonical replacement is ambiguous',
+      },
+    });
+    expect(chunked).toHaveLength(0);
   });
 });

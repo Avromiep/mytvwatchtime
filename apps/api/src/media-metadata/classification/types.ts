@@ -20,6 +20,8 @@ export interface CandidateInput {
   tvdbType?: string | null;
   /** TMDB keyword names persisted on the show/movie — an `anime` keyword is a strong signal. */
   keywords?: string[];
+  /** Exact genre ids from a TMDB routing profile; id 16 is the structural anime signal. */
+  tmdbGenreIds?: number[];
   /** Structural media type (only used to record evidence, never as proof). */
   structuralType?: 'SHOW' | 'MOVIE' | string;
 }

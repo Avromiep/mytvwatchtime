@@ -3,7 +3,6 @@ import { ExternalProvider } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { currentLanguage } from '../common/language.context';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
-import { MetadataBackfillService } from '../media-metadata/metadata-backfill.service';
 import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
 import { TvdbProvider } from '../media-metadata/providers/tvdb.provider';
 import { mapEpisode, watchProvidersOf } from '../common/utils/mapper.util';
@@ -17,19 +16,21 @@ export class ShowsService {
     private readonly meta: MediaMetadataService,
     private readonly tmdb: TmdbProvider,
     private readonly tvdb: TvdbProvider,
-    private readonly metadataBackfill: MetadataBackfillService,
     private readonly mediaVotes?: MediaVotesService,
   ) {}
 
   private async withShowInteractions(detail: any, userId?: string) {
     if (!detail || typeof detail !== 'object' || !this.mediaVotes) return detail;
-    return { ...detail, interactions: await this.mediaVotes.getShowInteractions(detail.id, userId) };
+    return {
+      ...detail,
+      interactions: await this.mediaVotes.getShowInteractions(detail.id, userId),
+    };
   }
 
   async getShow(id: string, userId?: string) {
     const media = await this.prisma.mediaItem.findUnique({
       where: { id },
-      include: { externalIds: true, genres: { include: { genre: true } } },
+      include: { externalIds: true, show: true },
     });
     if (!media) {
       // allow fetching by tmdb numeric id when live metadata available
@@ -48,7 +49,7 @@ export class ShowsService {
       // the same English fallback on EVERY open.
       const localeMissing =
         lang !== 'en' &&
-        !((media.titles as any)?.[lang]) &&
+        !(media.titles as any)?.[lang] &&
         !this.meta.isLocaleFetchParked(media.metadataProvenance, lang);
       const needsHydration =
         !media.metadataRefreshedAt ||
@@ -56,28 +57,21 @@ export class ShowsService {
         localeMissing;
       const tmdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
       const tvdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB);
-      // Animation-genre shows are TVDB-authoritative (TMDB anime structures are often
-      // wrong). Repair on the fly whenever stale TMDB-structured rows remain — resolves
-      // the TVDB id on demand (stored → TMDB external_ids → strict search), hydrates from
-      // TVDB, and remaps user watch data. Cheap no-op when already fully TVDB-structured.
-      // Animation shows NEVER refresh from TMDB: on failure keep last-known data; the
-      // anime_tvdb_rehydrate job / Metadata Health fix redoes the switch.
-      const isAnimation = media.genres.some(
-        (g) => g.genre.slug === 'animation' || g.genre.name?.toLowerCase() === 'animation',
-      );
+      // Refresh from the persisted structural owner. The legacy JSON value is read only
+      // during the additive rollout; discovery signals never switch providers here.
+      const legacyOwner = String(
+        (media.metadataProvenance as Record<string, unknown> | null)?.structureProvider ?? '',
+      ).toUpperCase();
+      const isTvdbOwned =
+        media.show?.structureProvider === 'TVDB' ||
+        (!media.show?.structureProvider && legacyOwner === 'TVDB') ||
+        (!tmdbExt && !!tvdbExt);
       const refresh = async () => {
-        let animeFixed = false;
-        if (isAnimation && this.tvdb?.enabled) {
-          animeFixed = await this.metadataBackfill
-            .fixAnimeShowFromTvdb(media.id)
-            .then((r) => r.fixed)
-            .catch(() => false);
-        }
-        if (!animeFixed && needsHydration) {
-          if (isAnimation && this.tvdb?.enabled && tvdbExt) {
+        if (needsHydration) {
+          if (isTvdbOwned && this.tvdb?.enabled && tvdbExt) {
             // Degrade gracefully on hydration failure (don't 500 the detail page).
             await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
-          } else if (!isAnimation && this.tmdb.enabled && tmdbExt) {
+          } else if (!isTvdbOwned && this.tmdb.enabled && tmdbExt) {
             // Degrade gracefully on hydration failure (don't 500 the detail page).
             await this.meta
               .ensureShowFull(Number(tmdbExt.value), undefined, { skipAiredSeasons: true })
@@ -97,9 +91,9 @@ export class ShowsService {
       } else {
         // Stale-while-revalidate: answer from last-known data immediately and
         // refresh in the background — awaiting rate-limited TMDb/TVDB hydration
-        // here added seconds to every show open. The episodes endpoint still
-        // awaits the (coalesced) anime repair, so season structure stays
-        // consistent; this payload converges on the next view.
+        // here added seconds to every show open. Structural reconciliation is
+        // deliberately excluded from read paths: it runs only through the explicit
+        // admin repair or the separately enabled scheduled job.
         void refresh().catch(() => undefined);
       }
       return this.withShowInteractions(await this.meta.getShowDetail(id, userId), userId);
@@ -118,20 +112,6 @@ export class ShowsService {
     if (!media && this.tmdb.enabled && /^\d+$/.test(id)) {
       id = await this.meta.ensureShowFull(Number(id));
     }
-    // Repair TMDB-structured anime BEFORE reading the structure. The show-detail request
-    // fires the same repair in parallel; per-show coalescing makes both requests share one
-    // fix, so this endpoint never answers with the pre-fix TMDB structure while the detail
-    // endpoint already returns TVDB data.
-    if (this.tvdb?.enabled) {
-      const animation = await this.prisma.mediaGenre.findFirst({
-        where: {
-          mediaId: id,
-          genre: { OR: [{ slug: 'animation' }, { name: { equals: 'Animation', mode: 'insensitive' } }] },
-        },
-        select: { mediaId: true },
-      });
-      if (animation) await this.metadataBackfill.fixAnimeShowFromTvdb(id).catch(() => undefined);
-    }
     const seasons = await this.meta.getShowSeasons(id, userId);
     const result = seasons.map((s) => ({
       id: s.id,
@@ -140,9 +120,7 @@ export class ShowsService {
       posterUrl: localized(s as any, 'posterUrls', 'posterUrl') ?? s.posterUrl ?? null,
       episodeCount: s.episodeCount,
       episodes: s.episodes.map((e) => {
-        const us = userId
-          ? (e as any).userStatuses?.[0]
-          : undefined;
+        const us = userId ? (e as any).userStatuses?.[0] : undefined;
         return mapEpisode(e, us);
       }),
     }));
@@ -161,7 +139,7 @@ export class ShowsService {
     });
     if (!episode) throw new NotFoundException('Episode not found');
     const siblings = await this.prisma.episode.findMany({
-      where: { seasonId: episode.seasonId },
+      where: { seasonId: episode.seasonId, structureState: 'ACTIVE' },
       select: { id: true },
       orderBy: { number: 'asc' },
     });
@@ -203,7 +181,9 @@ export class ShowsService {
           where: { userId_episodeId: { userId, episodeId } },
         })
       : Promise.resolve(null);
-    const commentsCountP = this.prisma.comment.count({ where: { threadType: 'EPISODE', threadId: episodeId } });
+    const commentsCountP = this.prisma.comment.count({
+      where: { threadType: 'EPISODE', threadId: episodeId },
+    });
     const voteGroupsP = this.prisma.characterVote.groupBy({
       by: ['castId'],
       where: { episodeId },
@@ -219,22 +199,28 @@ export class ShowsService {
       this.meta.ensureListLocaleOverrides([media.id]),
       this.meta.ensureEpisodeLocaleOverrides([episodeId]),
     ]);
-    const [freshEp, freshMedia, userStatus, commentsCount, voteGroups, charVote] = await Promise.all([
-      this.prisma.episode.findUnique({
-        where: { id: episodeId },
-        select: { titles: true, overviews: true, stillUrls: true },
-      }),
-      this.prisma.mediaItem.findUnique({
-        where: { id: media.id },
-        select: { titles: true, posterUrls: true, backdropUrls: true },
-      }),
-      userStatusP,
-      commentsCountP,
-      voteGroupsP,
-      charVoteP,
-    ]);
+    const [freshEp, freshMedia, userStatus, commentsCount, voteGroups, charVote] =
+      await Promise.all([
+        this.prisma.episode.findUnique({
+          where: { id: episodeId },
+          select: { titles: true, overviews: true, stillUrls: true },
+        }),
+        this.prisma.mediaItem.findUnique({
+          where: { id: media.id },
+          select: { titles: true, posterUrls: true, backdropUrls: true },
+        }),
+        userStatusP,
+        commentsCountP,
+        voteGroupsP,
+        charVoteP,
+      ]);
     const epLocalized = freshEp
-      ? ({ ...episode, titles: freshEp.titles, overviews: freshEp.overviews, stillUrls: freshEp.stillUrls } as any)
+      ? ({
+          ...episode,
+          titles: freshEp.titles,
+          overviews: freshEp.overviews,
+          stillUrls: freshEp.stillUrls,
+        } as any)
       : (episode as any);
     const mediaLoc = (freshMedia ?? {}) as any;
     const watchProviders = watchProvidersOf(media);
@@ -314,8 +300,18 @@ export class ShowsService {
   private readonly DEVICE_OPTIONS = ['PHONE', 'TABLET', 'COMPUTER', 'TV'] as const;
   private readonly RATING_OPTIONS = ['1', '2', '3', '4', '5'] as const;
   private readonly REACTION_OPTIONS = [
-    'SHOCKED', 'FRUSTRATED', 'SAD', 'REFLECTIVE', 'TOUCHED', 'AMUSED',
-    'SCARED', 'BORED', 'UNDERSTANDING', 'THRILLED', 'CONFUSED', 'TENSE',
+    'SHOCKED',
+    'FRUSTRATED',
+    'SAD',
+    'REFLECTIVE',
+    'TOUCHED',
+    'AMUSED',
+    'SCARED',
+    'BORED',
+    'UNDERSTANDING',
+    'THRILLED',
+    'CONFUSED',
+    'TENSE',
   ] as const;
 
   private buildSection(
@@ -326,7 +322,8 @@ export class ShowsService {
     const options = values.map((v) => ({ value: v, count: counts.get(v) ?? 0 }));
     const total = options.reduce((acc, o) => acc + o.count, 0);
     // Clamp userVote to the displayed set (e.g. legacy OTHER device is hidden).
-    const safeUserVote = userVote && (values as readonly string[]).includes(userVote) ? userVote : null;
+    const safeUserVote =
+      userVote && (values as readonly string[]).includes(userVote) ? userVote : null;
     return { userVote: safeUserVote, total, options };
   }
 
@@ -337,7 +334,9 @@ export class ShowsService {
     const status = userId
       ? preloadedStatus !== undefined
         ? preloadedStatus
-        : await this.prisma.userEpisodeStatus.findUnique({ where: { userId_episodeId: { userId, episodeId } } })
+        : await this.prisma.userEpisodeStatus.findUnique({
+            where: { userId_episodeId: { userId, episodeId } },
+          })
       : null;
     const groups = await this.prisma.userEpisodeStatus.groupBy({
       by: ['device'],
@@ -361,8 +360,16 @@ export class ShowsService {
     const userVotes = userRows.map((r) => r.reaction as string);
 
     const [distinctUsers, groups] = await Promise.all([
-      this.prisma.reaction.groupBy({ by: ['userId'], where: { episodeId }, _count: { _all: true } }),
-      this.prisma.reaction.groupBy({ by: ['reaction'], where: { episodeId }, _count: { _all: true } }),
+      this.prisma.reaction.groupBy({
+        by: ['userId'],
+        where: { episodeId },
+        _count: { _all: true },
+      }),
+      this.prisma.reaction.groupBy({
+        by: ['reaction'],
+        where: { episodeId },
+        _count: { _all: true },
+      }),
     ]);
     const total = distinctUsers.length;
     const counts = new Map<string, number>();
@@ -370,7 +377,10 @@ export class ShowsService {
     return {
       userVotes,
       total,
-      options: (this.REACTION_OPTIONS as readonly string[]).map((v) => ({ value: v, count: counts.get(v) ?? 0 })),
+      options: (this.REACTION_OPTIONS as readonly string[]).map((v) => ({
+        value: v,
+        count: counts.get(v) ?? 0,
+      })),
     };
   }
 
@@ -385,12 +395,18 @@ export class ShowsService {
     });
     const counts = new Map<string, number>();
     for (const g of groups) counts.set(String(g.rating), g._count._all);
-    return this.buildSection(this.RATING_OPTIONS, counts, userRating ? String(userRating.rating) : null);
+    return this.buildSection(
+      this.RATING_OPTIONS,
+      counts,
+      userRating ? String(userRating.rating) : null,
+    );
   }
 
   private async getCharacterSection(episodeId: string, userId?: string) {
     const charVote = userId
-      ? await this.prisma.characterVote.findUnique({ where: { userId_episodeId: { userId, episodeId } } })
+      ? await this.prisma.characterVote.findUnique({
+          where: { userId_episodeId: { userId, episodeId } },
+        })
       : null;
     const groups = await this.prisma.characterVote.groupBy({
       by: ['castId'],
@@ -470,7 +486,10 @@ export class ShowsService {
     const mediaId = episode?.season?.show?.mediaId;
     if (!mediaId) throw new NotFoundException('Could not resolve show for episode');
     if (castId !== null) {
-      const eligible = await this.prisma.mediaCast.findFirst({ where: { id: castId, mediaId }, select: { id: true } });
+      const eligible = await this.prisma.mediaCast.findFirst({
+        where: { id: castId, mediaId },
+        select: { id: true },
+      });
       if (!eligible) throw new BadRequestException('Character is not part of this show');
       await this.prisma.characterVote.upsert({
         where: { userId_episodeId: { userId, episodeId } },

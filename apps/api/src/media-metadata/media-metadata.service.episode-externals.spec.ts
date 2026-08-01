@@ -83,7 +83,8 @@ function fakePrisma() {
       upsert: async (a: any) => ({ id: `se-${a.where.showId_number.number}` }),
     },
     episode: {
-      upsert: async (a: any) => ({ id: `ep-${a.where.seasonId_number.number}` }),
+      create: async (a: any) => ({ id: `ep-${a.data.number}` }),
+      update: async (a: any) => ({ id: a.where.id }),
     },
     episodeExternalId: {
       upsert: async (a: any) => {
@@ -138,7 +139,7 @@ describe('MediaMetadataService — episode external id persistence', () => {
         providerEntityKind: 'EPISODE',
         value: '80001',
       },
-      update: { episodeId: 'ep-1' },
+      update: {},
     });
     expect(episodeExternalUpserts[1].create.value).toBe('80002');
   });

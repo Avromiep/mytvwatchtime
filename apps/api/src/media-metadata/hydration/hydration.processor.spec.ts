@@ -1,10 +1,8 @@
 import { ContentClassification } from '@prisma/client';
-import { HydrationProcessor } from './hydration.processor';
 import { CandidateDetectorService } from '../classification/candidate-detector.service';
 import { ClassifierService } from '../classification/classifier.service';
+import { HydrationProcessor } from './hydration.processor';
 
-/** animeHydrate: a FAILED anime match stays pending (no degraded persist, job throws);
- *  a successful negative match persists as the not-anime tag. */
 describe('HydrationProcessor.animeHydrate', () => {
   let prisma: any;
   let animeMatch: any;
@@ -13,13 +11,18 @@ describe('HydrationProcessor.animeHydrate', () => {
 
   const media = {
     id: 'm1',
-    title: 'Naruto',
+    title: 'Title',
     type: 'SHOW',
     manualClassification: false,
     manualCandidate: false,
     genres: [{ genre: { name: 'Animation' } }],
-    externalIds: [],
-    show: { yearStart: 2002, originalLanguage: 'ja', originCountries: ['JP'] },
+    externalIds: [{ provider: 'TMDB', providerEntityKind: 'SERIES', value: '20' }],
+    show: {
+      yearStart: 2020,
+      originalLanguage: 'ja',
+      originCountries: ['JP'],
+      keywords: [],
+    },
     movie: null,
   };
 
@@ -33,160 +36,98 @@ describe('HydrationProcessor.animeHydrate', () => {
       movie: { update: jest.fn().mockResolvedValue({}) },
     };
     animeMatch = { matchAnime: jest.fn() };
-    tmdb = { enabled: true, getShowKeywords: jest.fn(), getMovieKeywords: jest.fn() };
+    tmdb = {
+      enabled: true,
+      getShowRoutingProfile: jest.fn().mockResolvedValue({ genreIds: [16], keywords: [] }),
+      getMovieRoutingProfile: jest.fn(),
+    };
     processor = new HydrationProcessor(
-      {} as any, // redis
+      {} as any,
       prisma,
       new CandidateDetectorService(),
       new ClassifierService(),
       animeMatch,
-      {} as any, // tvdb
+      {} as any,
       tmdb,
-      { enqueueAnimeHydrate: jest.fn() } as any, // queue
-      { ensureShowFullTvdb: jest.fn().mockResolvedValue('m1') } as any, // meta
+      { enqueueAnimeHydrate: jest.fn() } as any,
+      { ensureShowFullTvdb: jest.fn().mockResolvedValue('m1') } as any,
     );
   });
 
-  it('rethrows a transient match failure WITHOUT persisting a degraded classification', async () => {
-    animeMatch.matchAnime.mockRejectedValue(new Error('kitsu 429'));
-    await expect(processor.animeHydrate('m1')).rejects.toThrow('kitsu 429');
+  it('classifies Animation plus the persisted TMDB anime keyword as ANIME', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue({
+      ...media,
+      show: { ...media.show, keywords: ['anime', 'isekai'] },
+    });
+    tmdb.getShowRoutingProfile.mockResolvedValue({ genreIds: [16], keywords: ['anime', 'isekai'] });
+    await processor.animeHydrate('m1');
+    expect(animeMatch.matchAnime).not.toHaveBeenCalled();
+    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'm1' },
+      data: expect.objectContaining({
+        contentClassification: 'ANIME' as ContentClassification,
+        classificationTier: 'confirmed',
+        classificationConfidence: 0.95,
+      }),
+    });
+  });
+
+  it('keeps Animation without the keyword as GENERAL and never calls Kitsu/Jikan', async () => {
+    await processor.animeHydrate('m1');
+    expect(animeMatch.matchAnime).not.toHaveBeenCalled();
+    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'm1' },
+      data: expect.objectContaining({
+        contentClassification: 'GENERAL' as ContentClassification,
+      }),
+    });
+  });
+
+  it('backfills old TMDB keywords before applying the strict rule', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue({
+      ...media,
+      show: { ...media.show, keywords: null },
+    });
+    tmdb.getShowRoutingProfile.mockResolvedValue({ genreIds: [16], keywords: ['anime'] });
+    await processor.animeHydrate('m1');
+    expect(tmdb.getShowRoutingProfile).toHaveBeenCalledWith(20);
+    expect(prisma.show.update).toHaveBeenCalledWith({
+      where: { mediaId: 'm1' },
+      data: { keywords: ['anime'] },
+    });
+    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'm1' },
+      data: expect.objectContaining({ contentClassification: 'ANIME' }),
+    });
+  });
+
+  it('does not persist a verdict when the TMDB routing profile cannot be fetched', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue({
+      ...media,
+      show: { ...media.show, keywords: null },
+    });
+    tmdb.getShowRoutingProfile.mockRejectedValue(new Error('provider unavailable'));
+    await processor.animeHydrate('m1');
     expect(prisma.mediaItem.update).not.toHaveBeenCalled();
-  });
-
-  it('persists the successful-match classification (anime confirmed)', async () => {
-    animeMatch.matchAnime.mockResolvedValue({
-      matched: true,
-      provider: 'KITSU',
-      externalId: 'k1',
-      confidence: 0.9,
-    });
-    await processor.animeHydrate('m1');
-    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
-      where: { id: 'm1' },
-      data: expect.objectContaining({ contentClassification: 'ANIME' as ContentClassification }),
-    });
-  });
-
-  it('persists GENERAL for a successful no-match (tagged — not re-checked until rehydration)', async () => {
-    // Animation genre but no Japanese evidence (Western animation): stays GENERAL.
-    prisma.mediaItem.findUnique.mockResolvedValue({
-      ...media,
-      title: 'The Simpsons',
-      show: { yearStart: 1989, originalLanguage: 'en', originCountries: ['US'] },
-    });
-    animeMatch.matchAnime.mockResolvedValue({ matched: false, reason: 'no_match' });
-    await processor.animeHydrate('m1');
-    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
-      where: { id: 'm1' },
-      data: expect.objectContaining({ contentClassification: 'GENERAL' as ContentClassification }),
-    });
-  });
-
-  it('short-circuits Kitsu/Jikan entirely when the TMDB `anime` keyword is present', async () => {
-    prisma.mediaItem.findUnique.mockResolvedValue({
-      ...media,
-      show: {
-        yearStart: 2016,
-        originalLanguage: 'ja',
-        originCountries: ['JP'],
-        keywords: ['anime', 'isekai'],
-      },
-    });
-    await processor.animeHydrate('m1');
-    expect(tmdb.getShowKeywords).not.toHaveBeenCalled(); // already persisted — no refetch
     expect(animeMatch.matchAnime).not.toHaveBeenCalled();
-    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
-      where: { id: 'm1' },
-      data: expect.objectContaining({
-        contentClassification: 'ANIME' as ContentClassification,
-        classificationTier: 'confirmed',
-        classificationConfidence: 0.9,
-      }),
-    });
   });
 
-  it('backfills keywords for old rows BEFORE matching — anime keyword skips Kitsu/Jikan', async () => {
-    prisma.mediaItem.findUnique.mockResolvedValue({
-      ...media,
-      externalIds: [{ provider: 'TMDB', providerEntityKind: 'SERIES', value: '65942' }],
-      show: { yearStart: 2016, originalLanguage: 'ja', originCountries: ['JP'], keywords: null },
-    });
-    tmdb.getShowKeywords.mockResolvedValue(['anime', 'isekai']);
-    await processor.animeHydrate('m1');
-    expect(tmdb.getShowKeywords).toHaveBeenCalledWith(65942);
-    expect(prisma.show.update).toHaveBeenCalledWith({
-      where: { mediaId: 'm1' },
-      data: { keywords: ['anime', 'isekai'] },
-    });
-    expect(animeMatch.matchAnime).not.toHaveBeenCalled();
-    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
-      where: { id: 'm1' },
-      data: expect.objectContaining({
-        contentClassification: 'ANIME' as ContentClassification,
-        classificationTier: 'confirmed',
-        classificationConfidence: 0.9,
-      }),
-    });
-  });
-
-  it('marks old rows as checked and proceeds to Kitsu/Jikan when no anime keyword exists', async () => {
-    prisma.mediaItem.findUnique.mockResolvedValue({
-      ...media,
-      externalIds: [{ provider: 'TMDB', providerEntityKind: 'SERIES', value: '1' }],
-      show: { yearStart: 2002, originalLanguage: 'ja', originCountries: ['JP'], keywords: null },
-    });
-    tmdb.getShowKeywords.mockResolvedValue(['magic']);
-    animeMatch.matchAnime.mockResolvedValue({
-      matched: true,
-      provider: 'KITSU',
-      externalId: 'k1',
-      confidence: 0.9,
-    });
-    await processor.animeHydrate('m1');
-    expect(prisma.show.update).toHaveBeenCalledWith({
-      where: { mediaId: 'm1' },
-      data: { keywords: ['magic'] },
-    });
-    expect(animeMatch.matchAnime).toHaveBeenCalled();
-  });
-
-  it('does not persist keywords on a provider error (row stays eligible for retry)', async () => {
-    prisma.mediaItem.findUnique.mockResolvedValue({
-      ...media,
-      externalIds: [{ provider: 'TMDB', providerEntityKind: 'SERIES', value: '1' }],
-      show: { yearStart: 2002, originalLanguage: 'ja', originCountries: ['JP'], keywords: null },
-    });
-    tmdb.getShowKeywords.mockResolvedValue(null);
-    animeMatch.matchAnime.mockResolvedValue({ matched: false, reason: 'no_match' });
-    await processor.animeHydrate('m1');
-    expect(prisma.show.update).not.toHaveBeenCalled();
-    expect(animeMatch.matchAnime).toHaveBeenCalled();
-  });
-
-  it('skips provider matching entirely when ANIME is already confirmed (terminal verdict)', async () => {
+  it('re-evaluates an old Kitsu-confirmed ANIME row against TMDB evidence', async () => {
     prisma.mediaItem.findUnique.mockResolvedValue({
       ...media,
       contentClassification: 'ANIME',
       classificationTier: 'confirmed',
     });
     await processor.animeHydrate('m1');
-    expect(animeMatch.matchAnime).not.toHaveBeenCalled();
-    expect(prisma.mediaItem.update).not.toHaveBeenCalled();
+    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'm1' },
+      data: expect.objectContaining({ contentClassification: 'GENERAL' }),
+    });
   });
 
-  it('still re-checks a GENERAL-confirmed row (new hydration data may flip it)', async () => {
-    prisma.mediaItem.findUnique.mockResolvedValue({
-      ...media,
-      contentClassification: 'GENERAL',
-      classificationTier: 'confirmed',
-    });
-    animeMatch.matchAnime.mockResolvedValue({
-      matched: true,
-      provider: 'KITSU',
-      externalId: 'k1',
-      confidence: 0.9,
-    });
+  it('never overwrites a manual classification', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue({ ...media, manualClassification: true });
     await processor.animeHydrate('m1');
-    expect(animeMatch.matchAnime).toHaveBeenCalled();
+    expect(prisma.mediaItem.update).not.toHaveBeenCalled();
   });
 });
