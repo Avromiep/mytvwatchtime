@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -11,13 +11,17 @@ import {
 } from '../common/utils/mapper.util';
 import { DeviceRegisterDto, UpdateProfileDto } from './dto/user.dto';
 import { anonymizeAndDeleteUser, RESERVED_USERNAMES } from './lib/deleted-user';
+import { ExportService } from './export.service';
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly apple: AppleAuthService,
+    private readonly exports: ExportService,
   ) {}
 
   async getMe(userId: string) {
@@ -109,14 +113,30 @@ export class UsersService {
   }
 
   async deleteMe(userId: string) {
+    await this.deleteUserAccount(userId);
+    return { ok: true };
+  }
+
+  /** Shared by self-service/email deletion and the audited admin deletion path. */
+  async deleteUserAccount(userId: string) {
     await this.revokeAppleProviders(userId);
     // Evict the JWT existence cache BEFORE the row delete so in-flight requests
     // re-check the DB instead of racing through on the stale positive entry.
     await this.redis.del(`auth:user:${userId}`);
-    // Anonymize-and-delete: comments move to the system "Deleted user" account (threads
-    // survive); everything personal cascades. Idempotent — already gone = success.
-    await anonymizeAndDeleteUser(this.prisma, userId);
-    return { ok: true };
+    // Public/community contributions move to a unique non-login ghost; private account,
+    // library, history, device, credential, and notification data cascades away.
+    const preserved = await anonymizeAndDeleteUser(this.prisma, userId);
+    let exportsDeleted = 0;
+    try {
+      exportsDeleted = await this.exports.deleteForUser(userId);
+    } catch (e) {
+      // The account deletion has already committed and must not be reported as failed.
+      // Export rows remain available to the normal expiry cleanup for a later retry.
+      this.logger.warn(
+        `Deferred export cleanup for deleted user ${userId}: ${(e as Error).message}`,
+      );
+    }
+    return preserved ? { ...preserved, exportsDeleted } : null;
   }
 
   private async revokeAppleProviders(userId: string) {

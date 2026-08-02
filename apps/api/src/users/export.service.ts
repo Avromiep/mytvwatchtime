@@ -74,6 +74,32 @@ export class ExportService {
     return expired.length;
   }
 
+  /** Remove every still-downloadable export when its owner deletes their account. */
+  async deleteForUser(userId: string): Promise<number> {
+    const records = await this.prisma.dataExport.findMany({
+      where: { userId },
+      select: { id: true, fileName: true },
+    });
+    const removedIds: string[] = [];
+    for (const record of records) {
+      try {
+        await fs.unlink(path.join(this.exportDir, record.fileName));
+        removedIds.push(record.id);
+      } catch (e: any) {
+        if (e?.code === 'ENOENT') {
+          removedIds.push(record.id);
+        } else {
+          // Keep the DB row so the normal expiry cleanup can retry the file deletion.
+          this.logger.warn(`Could not delete account export ${record.id}: ${e?.message ?? e}`);
+        }
+      }
+    }
+    if (removedIds.length) {
+      await this.prisma.dataExport.deleteMany({ where: { id: { in: removedIds } } });
+    }
+    return removedIds.length;
+  }
+
   private async gatherUserData(userId: string) {
     const [user, watchHistory, ratings, watchlist, favorites, comments, badges] = await Promise.all(
       [

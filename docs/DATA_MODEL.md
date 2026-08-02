@@ -5,6 +5,7 @@ Source of truth: `apps/api/prisma/schema.prisma`. 52 tables.
 See `docs/DOCUMENTATION.md` → Section 4 for the complete table reference.
 
 ## Key Relationships
+
 ```
 User ──1:1──> UserProfile
 User ──1:N──> UserAuthProvider (GOOGLE/APPLE/FACEBOOK/EMAIL)
@@ -29,7 +30,9 @@ MediaItem ──1:N──> ExternalId (TMDB/IMDB/TVDB/TRAKT)
 ```
 
 ## Episode Interaction Voting
+
 Four single-user, multi-aggregate voting categories per episode (device / rating / reaction / character):
+
 - **device** — single-select, lives on `user_episode_status.device` (WatchDevice enum).
 - **rating** — single-select, one `ratings` row per user+episode (1–5).
 - **reaction** — **multi-select**: one `reactions` row per user+episode+reaction (`@@unique([userId, episodeId, reaction])`); the live UI toggles rows on/off. Imported historical multi-emotions are all retained + counted.
@@ -38,10 +41,12 @@ Four single-user, multi-aggregate voting categories per episode (device / rating
 Aggregates (per-option counts + total voters) are computed on read via `groupBy`; **percentages are derived client-side** (largest-remainder → sums to 100 for single-select categories; independent rounding for multi-select reactions). No voter identities are exposed.
 
 ## Special Rules
+
 - Special seasons (`isSpecial = true`, S0) excluded from: progress, total counts, watch-next, stats
 - `watch_history.runtimeMinutes` drives all time calculations (charts, leaderboard, catch-up prediction)
 - `user_show_status` auto-rebuilt after import (not during)
 - `notifications` deduped by `@@unique([userId, dedupeKey])`
 - `user_stats_summary.stale` invalidated on watch/import/rate/follow events
 - Voting sections render only for watched episodes; writes are upsert-style (one active vote per user+episode+category, except multi-select reactions)
+- Account deletion preserves community aggregates under a unique non-login deleted-user ghost: only comments needed as ancestors of another account's replies remain, while comments without surviving replies are deleted. Ratings, reactions, character votes, and device votes remain. Retained episode/movie device rows are cleared to `watched=false`, `watchedAt=null`, and `watchCount=0`; all private tracking/list/account data is deleted with the original user.
 - `POST /movies/:id/reassign` (user-facing, movie→movie only): moves ONE user's engagement to a different movie row — `user_movie_status` (merge-on-conflict: watched OR, earliest watched_at, max watch_count), `watch_history`, media-scoped `ratings` (newest updated_at wins), `reactions` (dedupe per type), `watchlist_items`, `favorites`, `custom_list_items` (scoped via list ownership — no user_id column), and the user's OWN comments (thread + attachments). Conflict semantics mirror the admin `mergeDuplicateMovieRows` but per-user and without external_ids/media deletion. Ends with `StatsService.invalidate({userId})`. `added_count` is NOT adjusted (known gap, same as the admin merge). Show→show is intentionally unsupported (needs episode-level mapping).

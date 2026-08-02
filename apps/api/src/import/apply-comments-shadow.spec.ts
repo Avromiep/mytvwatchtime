@@ -20,13 +20,21 @@ describe('ImportService.applyComments — shadow users + parent reconciliation',
               .filter((c) => c.parentSourceKey === where.parentSourceKey && c.parentId == null)
               .map((c) => ({ id: c.id }));
           }
-          return comments.filter((c) => {
-            if (where.sourceKey?.in && !where.sourceKey.in.includes(c.sourceKey)) return false;
-            if (where.userId?.in && !where.userId.in.includes(c.userId)) return false;
-            if (typeof where.userId === 'string' && c.userId !== where.userId) return false;
-            if (where.source && c.source !== where.source) return false;
-            return true;
-          });
+          return comments
+            .filter((c) => {
+              if (where.sourceKey?.in && !where.sourceKey.in.includes(c.sourceKey)) return false;
+              if (where.userId?.in && !where.userId.in.includes(c.userId)) return false;
+              if (typeof where.userId === 'string' && c.userId !== where.userId) return false;
+              if (where.source && c.source !== where.source) return false;
+              return true;
+            })
+            .map((c) => ({
+              ...c,
+              user:
+                [...(opts.users?.values() ?? [])].find((u) => u.id === c.userId) ??
+                createdUsers.find((u) => u.id === c.userId) ??
+                null,
+            }));
         }),
         update: jest.fn(async (args: any) => {
           commentUpdates.push(args);

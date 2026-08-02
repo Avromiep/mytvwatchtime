@@ -15,9 +15,17 @@ export default function UserDetailPage() {
   const [selectedRole, setSelectedRole] = useState('');
   const [sendingPush, setSendingPush] = useState(false);
   const [pushResult, setPushResult] = useState<string | null>(null);
+  const [deletingUser, setDeletingUser] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [testPushMovieId, setTestPushMovieId] = useState('cmryhomulfp32zso7if72qw9y');
 
-  useEffect(() => { if (id) api.get(`/admin/users/${id}`).then((r) => { setUser(r.data); setSelectedRole(r.data.role); }); }, [id]);
+  useEffect(() => {
+    if (id)
+      api.get(`/admin/users/${id}`).then((r) => {
+        setUser(r.data);
+        setSelectedRole(r.data.role);
+      });
+  }, [id]);
 
   const saveRole = async () => {
     await api.patch(`/admin/users/${id}`, { role: selectedRole });
@@ -28,6 +36,25 @@ export default function UserDetailPage() {
   const toggleSuspend = async () => {
     await api.patch(`/admin/users/${id}`, { isSuspended: !user.isSuspended });
     setUser({ ...user, isSuspended: !user.isSuspended });
+  };
+
+  const deleteUser = async () => {
+    const confirmation = window.prompt(
+      `Permanently remove ${user.username}'s account and private data?\n\nComments without replies will be deleted. Comments needed to preserve another person's replies, plus ratings, reactions, character votes, and anonymous device votes, will remain under a non-login Deleted user identity.\n\nType ${user.username} to confirm.`,
+    );
+    if (confirmation !== user.username) return;
+    setDeletingUser(true);
+    setDeleteError(null);
+    try {
+      await api.delete(`/admin/users/${id}`, {
+        data: { confirmUsername: confirmation },
+      });
+      router.replace('/users');
+    } catch (e: any) {
+      setDeleteError(e?.response?.data?.message || 'User deletion failed');
+    } finally {
+      setDeletingUser(false);
+    }
   };
 
   const sendTestPush = async () => {
@@ -52,7 +79,12 @@ export default function UserDetailPage() {
 
   return (
     <div className="space-y-6">
-      <button onClick={() => router.push('/users')} className="text-sm text-white/40 hover:text-white">← Back to Users</button>
+      <button
+        onClick={() => router.push('/users')}
+        className="text-sm text-white/40 hover:text-white"
+      >
+        ← Back to Users
+      </button>
 
       {/* Profile header */}
       <div className="bg-surface rounded-xl p-6 border border-border flex items-start gap-5">
@@ -62,30 +94,112 @@ export default function UserDetailPage() {
         <div className="flex-1">
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-bold">{user.username}</h1>
-            <Badge color={user.role === 'SUPER_ADMIN' ? 'danger' : user.role === 'ADMIN' ? 'accent' : user.role === 'USER' ? 'default' : 'info'}>{user.role}</Badge>
-            {user.isSuspended ? <Badge color="danger">Suspended</Badge> : <Badge color="success">Active</Badge>}
+            <Badge
+              color={
+                user.role === 'SUPER_ADMIN'
+                  ? 'danger'
+                  : user.role === 'ADMIN'
+                    ? 'accent'
+                    : user.role === 'USER'
+                      ? 'default'
+                      : 'info'
+              }
+            >
+              {user.role}
+            </Badge>
+            {user.isSuspended ? (
+              <Badge color="danger">Suspended</Badge>
+            ) : (
+              <Badge color="success">Active</Badge>
+            )}
           </div>
           <div className="text-sm text-white/40 mt-1">{user.email}</div>
-          <div className="text-xs text-white/30 mt-1">Joined {new Date(user.createdAt).toLocaleDateString()} · Email verified: {user.emailVerified ? '✓' : '✗'}</div>
+          <div className="text-xs text-white/30 mt-1">
+            Joined {new Date(user.createdAt).toLocaleDateString()} · Email verified:{' '}
+            {user.emailVerified ? '✓' : '✗'}
+          </div>
         </div>
         {me?.role === 'ADMIN' || me?.role === 'SUPER_ADMIN' ? (
           <div className="flex gap-2">
-            <button onClick={() => setEditRole(!editRole)} className="px-3 py-1.5 bg-surface-alt rounded-lg text-sm text-accent border border-border hover:border-accent">Edit Role</button>
-            <button onClick={toggleSuspend} className={`px-3 py-1.5 rounded-lg text-sm border ${user.isSuspended ? 'text-success border-success/30 bg-success/10' : 'text-danger border-danger/30 bg-danger/10'}`}>
+            <button
+              onClick={() => setEditRole(!editRole)}
+              className="px-3 py-1.5 bg-surface-alt rounded-lg text-sm text-accent border border-border hover:border-accent"
+            >
+              Edit Role
+            </button>
+            <button
+              onClick={toggleSuspend}
+              className={`px-3 py-1.5 rounded-lg text-sm border ${user.isSuspended ? 'text-success border-success/30 bg-success/10' : 'text-danger border-danger/30 bg-danger/10'}`}
+            >
               {user.isSuspended ? 'Unsuspend' : 'Suspend'}
             </button>
+            {!user.isShadow ? (
+              <button
+                onClick={deleteUser}
+                disabled={
+                  deletingUser ||
+                  user.id === me?.id ||
+                  user.role === 'SUPER_ADMIN' ||
+                  (user.role !== 'USER' && me?.role !== 'SUPER_ADMIN')
+                }
+                title={
+                  user.id === me?.id
+                    ? 'You cannot delete your own account here'
+                    : user.role === 'SUPER_ADMIN'
+                      ? 'SUPER_ADMIN accounts cannot be deleted'
+                      : user.role !== 'USER' && me?.role !== 'SUPER_ADMIN'
+                        ? 'Only a SUPER_ADMIN can delete a staff account'
+                        : 'Delete account and private user data'
+                }
+                className="px-3 py-1.5 rounded-lg text-sm border text-danger border-danger/50 bg-danger/20 hover:bg-danger/30 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {deletingUser ? 'Deleting…' : 'Delete User'}
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>
 
+      {deleteError ? (
+        <div className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
+          {deleteError}
+        </div>
+      ) : null}
+
       {/* Role editor */}
       {editRole ? (
         <div className="bg-surface rounded-xl p-5 border border-border flex items-center gap-3">
-          <select value={selectedRole} onChange={(e) => setSelectedRole(e.target.value)} className="px-3 py-2 bg-surface-alt rounded-lg border border-border text-white text-sm">
-            {['USER','VIEWER','SUPPORT','CONTENT_MANAGER','MODERATOR','ADMIN','SUPER_ADMIN'].map((r) => <option key={r} value={r}>{r}</option>)}
+          <select
+            value={selectedRole}
+            onChange={(e) => setSelectedRole(e.target.value)}
+            className="px-3 py-2 bg-surface-alt rounded-lg border border-border text-white text-sm"
+          >
+            {[
+              'USER',
+              'VIEWER',
+              'SUPPORT',
+              'CONTENT_MANAGER',
+              'MODERATOR',
+              'ADMIN',
+              'SUPER_ADMIN',
+            ].map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
           </select>
-          <button onClick={saveRole} className="px-4 py-2 bg-accent text-bg font-bold rounded-lg text-sm">Save</button>
-          <button onClick={() => setEditRole(false)} className="px-4 py-2 bg-surface-alt text-white/60 rounded-lg text-sm">Cancel</button>
+          <button
+            onClick={saveRole}
+            className="px-4 py-2 bg-accent text-bg font-bold rounded-lg text-sm"
+          >
+            Save
+          </button>
+          <button
+            onClick={() => setEditRole(false)}
+            className="px-4 py-2 bg-surface-alt text-white/60 rounded-lg text-sm"
+          >
+            Cancel
+          </button>
         </div>
       ) : null}
 
@@ -110,12 +224,16 @@ export default function UserDetailPage() {
             {user.authProviders?.map((p: any) => (
               <div key={p.id} className="flex items-center justify-between text-sm">
                 <Badge color="info">{p.provider}</Badge>
-                <span className="text-white/30 text-xs font-mono">{p.providerUid.slice(0, 16)}…</span>
+                <span className="text-white/30 text-xs font-mono">
+                  {p.providerUid.slice(0, 16)}…
+                </span>
               </div>
             )) || <span className="text-white/30 text-sm">None</span>}
           </div>
           <div className="text-sm font-semibold text-white/70 mt-4 mb-2">Devices</div>
-          <div className="text-sm text-white/40 mb-3">{user.devices?.length || 0} device(s) registered</div>
+          <div className="text-sm text-white/40 mb-3">
+            {user.devices?.length || 0} device(s) registered
+          </div>
           {/* Test push */}
           {me?.role === 'ADMIN' || me?.role === 'SUPER_ADMIN' ? (
             <div className="border-t border-border pt-3 mt-3">
@@ -133,7 +251,9 @@ export default function UserDetailPage() {
                 {sendingPush ? 'Sending...' : '🔔 Send Test Push'}
               </button>
               {pushResult ? (
-                <div className={`text-xs mt-2 px-3 py-1.5 rounded-lg ${pushResult.includes('failed') || pushResult.includes('No') ? 'bg-danger/10 text-danger' : 'bg-success/10 text-success'}`}>
+                <div
+                  className={`text-xs mt-2 px-3 py-1.5 rounded-lg ${pushResult.includes('failed') || pushResult.includes('No') ? 'bg-danger/10 text-danger' : 'bg-success/10 text-success'}`}
+                >
                   {pushResult}
                 </div>
               ) : null}
@@ -146,13 +266,24 @@ export default function UserDetailPage() {
           <div className="text-sm font-semibold text-white/70 mb-3">Recent Activity</div>
           <div className="space-y-2">
             {user.recentActivity?.map((a: any) => (
-              <div key={a.id} className="flex items-center gap-3 py-1.5 border-b border-border/50 last:border-0">
-                {a.media?.posterUrl ? <img src={a.media.posterUrl} alt="" className="w-6 h-9 rounded object-cover" /> : <div className="w-6 h-9 rounded bg-surface-alt" />}
+              <div
+                key={a.id}
+                className="flex items-center gap-3 py-1.5 border-b border-border/50 last:border-0"
+              >
+                {a.media?.posterUrl ? (
+                  <img src={a.media.posterUrl} alt="" className="w-6 h-9 rounded object-cover" />
+                ) : (
+                  <div className="w-6 h-9 rounded bg-surface-alt" />
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="text-sm truncate">{a.media?.title || 'Unknown'}</div>
-                  <div className="text-xs text-white/30">{a.mediaType} {a.seasonNumber ? `S${a.seasonNumber}E${a.episodeNumber}` : ''}</div>
+                  <div className="text-xs text-white/30">
+                    {a.mediaType} {a.seasonNumber ? `S${a.seasonNumber}E${a.episodeNumber}` : ''}
+                  </div>
                 </div>
-                <div className="text-xs text-white/30 whitespace-nowrap">{new Date(a.watchedAt).toLocaleDateString()}</div>
+                <div className="text-xs text-white/30 whitespace-nowrap">
+                  {new Date(a.watchedAt).toLocaleDateString()}
+                </div>
               </div>
             )) || <span className="text-white/30 text-sm">No recent activity</span>}
           </div>

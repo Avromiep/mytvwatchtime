@@ -19,7 +19,7 @@ import type { JwtPayload } from './jwt.strategy';
 import { AppleLoginDto, EmailLoginDto, EmailRegisterDto, SocialLoginDto } from './dto/auth.dto';
 import {
   isDeletedUserAccount,
-  RESERVED_USER_EMAILS,
+  isReservedUserEmail,
   RESERVED_USERNAMES,
 } from '../users/lib/deleted-user';
 import { AuthErrorCode, type AppleAuthNonceDto, type AuthSessionDto } from '@tvwatch/shared';
@@ -54,10 +54,7 @@ export class AuthService {
     // again — profile links, @mentions, and findUnique all use the trimmed form.
     const username = dto.username.trim();
     const email = dto.email.trim();
-    if (
-      RESERVED_USERNAMES.has(username.toLowerCase()) ||
-      RESERVED_USER_EMAILS.has(email.toLowerCase())
-    ) {
+    if (RESERVED_USERNAMES.has(username.toLowerCase()) || isReservedUserEmail(email)) {
       throw new ConflictException('This account identity is reserved');
     }
     const exists = await this.prisma.user.findFirst({
@@ -257,7 +254,7 @@ export class AuthService {
 
     const trustedEmail = this.trustedProviderEmail(provider, profile);
     const email = trustedEmail || this.fallbackSocialEmail(provider, profile.providerUid);
-    if (RESERVED_USER_EMAILS.has(email.toLowerCase())) {
+    if (isReservedUserEmail(email)) {
       throw new UnauthorizedException('Invalid social profile');
     }
 

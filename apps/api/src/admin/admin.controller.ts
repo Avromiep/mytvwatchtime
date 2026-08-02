@@ -463,6 +463,16 @@ export class AdminController {
     return this.admin.updateUser(adminId, id, dto);
   }
 
+  @Delete('users/:id')
+  @RequireRoles('ADMIN')
+  deleteUser(
+    @CurrentUser('id') adminId: string,
+    @Param('id') id: string,
+    @Body() body: { confirmUsername?: string },
+  ) {
+    return this.admin.deleteUser(adminId, id, body?.confirmUsername ?? '');
+  }
+
   @Post('users/:id/test-push')
   @RequireRoles('ADMIN')
   testPush(

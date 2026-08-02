@@ -2,12 +2,32 @@ import {
   anonymizeAndDeleteUser,
   getOrCreateDeletedUser,
   isDeletedUserAccount,
+  isReservedUserEmail,
   DELETED_USER_EMAIL,
   DELETED_USER_USERNAME,
 } from './deleted-user';
 
-function makePrisma(opts: { existingDeletedUser?: boolean; userExists?: boolean } = {}) {
+function model(count = 1) {
+  return {
+    updateMany: jest.fn(async () => ({ count })),
+    deleteMany: jest.fn(async () => ({ count })),
+  };
+}
+
+type OwnedComment = { id: string; parentId: string | null };
+
+function makePrisma(
+  opts: {
+    existingDeletedUser?: boolean;
+    userExists?: boolean;
+    protectedCommentIds?: string[];
+    ownedComments?: OwnedComment[];
+  } = {},
+) {
   const users: any[] = [];
+  if (opts.userExists !== false) {
+    users.push({ id: 'u1', email: 'real@example.com', username: 'real-user' });
+  }
   if (opts.existingDeletedUser) {
     users.push({ id: 'deleted-sys', email: DELETED_USER_EMAIL, username: DELETED_USER_USERNAME });
   }
@@ -15,60 +35,95 @@ function makePrisma(opts: { existingDeletedUser?: boolean; userExists?: boolean 
     commentUpdateMany: [] as any[],
     userCreate: [] as any[],
   };
+  const protectedCommentIds = opts.protectedCommentIds ?? ['c-thread-root', 'c-thread-middle'];
+  const ownedComments =
+    opts.ownedComments ??
+    ([
+      { id: 'c-thread-root', parentId: null },
+      { id: 'c-thread-middle', parentId: 'c-thread-root' },
+      { id: 'c-self-leaf', parentId: 'c-thread-middle' },
+    ] satisfies OwnedComment[]);
+  let queryRawCall = 0;
   const prisma: any = {
     user: {
       findUnique: jest.fn(async (args: any) => {
-        if (args.where.email === DELETED_USER_EMAIL) {
-          return users.find((u) => u.email === DELETED_USER_EMAIL) ?? null;
-        }
-        if (args.where.id === 'u1') return opts.userExists === false ? null : { id: 'u1' };
-        if (args.where.id === 'deleted-sys') return users[0] ?? null;
+        if (args.where.email) return users.find((u) => u.email === args.where.email) ?? null;
+        if (args.where.id) return users.find((u) => u.id === args.where.id) ?? null;
         return null;
       }),
       create: jest.fn(async (args: any) => {
         calls.userCreate.push(args);
-        const u = { id: 'deleted-sys', ...args.data };
+        const isLegacy = args.data.email === DELETED_USER_EMAIL;
+        const u = { id: isLegacy ? 'deleted-sys' : 'deleted-ghost', ...args.data };
         users.push(u);
         return { id: u.id };
       }),
-      delete: jest.fn(async () => ({})),
-    },
-    comment: {
-      updateMany: jest.fn(async (args: any) => {
-        calls.commentUpdateMany.push(args);
-        return { count: 1 };
+      delete: jest.fn(async (args: any) => {
+        const index = users.findIndex((u) => u.id === args.where.id);
+        if (index >= 0) users.splice(index, 1);
+        return {};
       }),
     },
+    comment: {
+      findMany: jest.fn(async () => ownedComments),
+      updateMany: jest.fn(async (args: any) => {
+        calls.commentUpdateMany.push(args);
+        return { count: args.where?.id?.in?.length ?? 2 };
+      }),
+      deleteMany: jest.fn(async () => ({
+        count: ownedComments.filter((comment) => !protectedCommentIds.includes(comment.id)).length,
+      })),
+    },
+    commentImage: model(),
+    rating: model(3),
+    reaction: model(4),
+    characterVote: model(5),
+    userEpisodeStatus: model(6),
+    userMovieStatus: model(1),
+    passwordReset: model(),
+    deletionRequest: model(),
+    pushNotificationJob: model(),
+    externalReview: model(),
     commentLike: {
       findMany: jest.fn(async () => [{ commentId: 'c-liked-1' }, { commentId: 'c-liked-2' }]),
     },
     commentSpoilerReport: {
       findMany: jest.fn(async () => [{ commentId: 'c-flagged-1' }]),
     },
+    externalReviewLike: {
+      findMany: jest.fn(async () => [{ externalReviewId: 'review-1' }]),
+    },
+    $queryRaw: jest.fn(async () => {
+      queryRawCall += 1;
+      if (queryRawCall === 1) return [{ pg_advisory_xact_lock: null }];
+      return protectedCommentIds.map((id) => ({ id }));
+    }),
+    $executeRaw: jest.fn(async () => 1),
     $transaction: jest.fn(async (fn: any) => fn(prisma)),
   };
-  return { prisma, calls };
+  return { prisma, calls, users };
 }
 
-describe('deleted-user account', () => {
-  it('identifies the system account by email or username', () => {
+describe('deleted-user identities', () => {
+  it('identifies legacy and per-deletion ghosts without classifying ordinary users', () => {
     expect(isDeletedUserAccount({ email: DELETED_USER_EMAIL })).toBe(true);
     expect(isDeletedUserAccount({ username: DELETED_USER_USERNAME })).toBe(true);
-    expect(isDeletedUserAccount({ email: 'a@b.c', username: 'real' })).toBe(false);
+    expect(isDeletedUserAccount({ email: 'deleted+abc@shadow.local' })).toBe(true);
+    expect(isDeletedUserAccount({ email: 'a@b.c', username: 'deleted-looking' })).toBe(false);
+    expect(isReservedUserEmail('deleted+abc@shadow.local')).toBe(true);
   });
 
-  it('creates the system account once and reuses it', async () => {
-    const { prisma, calls } = makePrisma();
+  it('creates the legacy system account once and reuses it', async () => {
+    const { prisma, calls } = makePrisma({ userExists: false });
     const id1 = await getOrCreateDeletedUser(prisma);
     const id2 = await getOrCreateDeletedUser(prisma);
     expect(id1).toBe('deleted-sys');
     expect(id2).toBe('deleted-sys');
     expect(calls.userCreate).toHaveLength(1);
     expect(calls.userCreate[0].data.email).toBe(DELETED_USER_EMAIL);
-    expect(calls.userCreate[0].data.username).toBe(DELETED_USER_USERNAME);
   });
 
-  it('returns the existing system account without creating', async () => {
+  it('returns the existing legacy system account without creating', async () => {
     const { prisma, calls } = makePrisma({ existingDeletedUser: true });
     expect(await getOrCreateDeletedUser(prisma)).toBe('deleted-sys');
     expect(calls.userCreate).toHaveLength(0);
@@ -76,35 +131,125 @@ describe('deleted-user account', () => {
 });
 
 describe('anonymizeAndDeleteUser', () => {
-  it('reassigns comments to the system account, deletes the user, fixes counters', async () => {
-    const { prisma, calls } = makePrisma();
-    await anonymizeAndDeleteUser(prisma, 'u1');
+  it('moves community contributions to a unique ghost and cascades the original user', async () => {
+    const { prisma, calls, users } = makePrisma();
+    const result = await anonymizeAndDeleteUser(prisma, 'u1');
 
-    // Comments survive under the system account.
-    const reassign = calls.commentUpdateMany.find(
-      (c) => c.where.userId === 'u1' && c.data.userId === 'deleted-sys',
+    const ghostCreate = calls.userCreate.find((call) => call.data.isShadow === true);
+    expect(ghostCreate).toBeDefined();
+    expect(ghostCreate.data.email).toMatch(/^deleted\+[a-f0-9]{20}@shadow\.local$/);
+    expect(ghostCreate.data.passwordHash).toBeNull();
+    expect(ghostCreate.data.isSuspended).toBe(true);
+    expect(users.some((u) => u.id === 'u1')).toBe(false);
+    expect(users.some((u) => u.id === 'deleted-ghost')).toBe(true);
+
+    expect(prisma.rating.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'u1' },
+      data: { userId: 'deleted-ghost' },
+    });
+    expect(prisma.reaction.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'u1' },
+      data: { userId: 'deleted-ghost' },
+    });
+    expect(prisma.characterVote.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'u1' },
+      data: { userId: 'deleted-ghost' },
+    });
+    expect(prisma.userEpisodeStatus.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', device: { not: null } },
+      data: {
+        userId: 'deleted-ghost',
+        watched: false,
+        watchedAt: null,
+        watchCount: 0,
+      },
+    });
+    expect(prisma.userMovieStatus.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', device: { not: null } },
+      data: {
+        userId: 'deleted-ghost',
+        watched: false,
+        watchedAt: null,
+        watchCount: 0,
+      },
+    });
+    expect(prisma.passwordReset.deleteMany).toHaveBeenCalled();
+    expect(prisma.deletionRequest.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ userId: null }) }),
     );
-    expect(reassign).toBeDefined();
-    // User row deleted (personal data cascades).
+    expect(prisma.pushNotificationJob.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 'u1' },
+    });
     expect(prisma.user.delete).toHaveBeenCalledWith({ where: { id: 'u1' } });
-    // Denormalized counters decremented for the cascaded likes / spoiler reports.
-    const likesDec = calls.commentUpdateMany.find(
-      (c) => c.where.id?.in?.includes('c-liked-1') && c.data.likesCount?.decrement === 1,
+
+    expect(result).toEqual({
+      ghostUserId: 'deleted-ghost',
+      commentsPreserved: 2,
+      commentsDeleted: 1,
+      ratingsPreserved: 3,
+      reactionsPreserved: 4,
+      characterVotesPreserved: 5,
+      deviceVotesPreserved: 7,
+    });
+
+    expect(
+      calls.commentUpdateMany.some(
+        (call) => call.where.id?.in?.includes('c-liked-1') && call.data.likesCount?.decrement === 1,
+      ),
+    ).toBe(true);
+    expect(
+      calls.commentUpdateMany.some(
+        (call) =>
+          call.where.id?.in?.includes('c-flagged-1') && call.data.spoilerCount?.decrement === 1,
+      ),
+    ).toBe(true);
+    expect(prisma.externalReview.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: { in: ['review-1'] } },
+        data: { likesCount: { decrement: 1 } },
+      }),
     );
-    const spoilerDec = calls.commentUpdateMany.find(
-      (c) => c.where.id?.in?.includes('c-flagged-1') && c.data.spoilerCount?.decrement === 1,
-    );
-    expect(likesDec).toBeDefined();
-    expect(spoilerDec).toBeDefined();
-    // Negative counters clamped.
-    expect(calls.commentUpdateMany.some((c) => c.where.likesCount?.lt === 0)).toBe(true);
-    expect(calls.commentUpdateMany.some((c) => c.where.spoilerCount?.lt === 0)).toBe(true);
+    expect(prisma.comment.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        id: { in: ['c-thread-root', 'c-thread-middle'] },
+      },
+      data: { userId: 'deleted-ghost' },
+    });
+    expect(prisma.commentImage.updateMany).toHaveBeenCalledWith({
+      where: { commentId: { in: ['c-thread-root', 'c-thread-middle'] } },
+      data: { userId: 'deleted-ghost' },
+    });
+    expect(prisma.comment.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u1' } });
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
   });
 
-  it('is a no-op when the user is already gone', async () => {
+  it('deletes an all-self-authored branch instead of preserving unnecessary ghosts', async () => {
+    const { prisma } = makePrisma({
+      protectedCommentIds: [],
+      ownedComments: [
+        { id: 'root', parentId: 'surviving-parent' },
+        { id: 'self-reply', parentId: 'root' },
+      ],
+    });
+
+    const result = await anonymizeAndDeleteUser(prisma, 'u1');
+
+    expect(result).toEqual(expect.objectContaining({ commentsPreserved: 0, commentsDeleted: 2 }));
+    expect(
+      prisma.comment.updateMany.mock.calls.some(
+        ([args]: any[]) => args.data?.userId === 'deleted-ghost',
+      ),
+    ).toBe(false);
+    expect(prisma.commentImage.updateMany).not.toHaveBeenCalled();
+    expect(prisma.comment.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u1' } });
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('is a no-op when the original user is already gone', async () => {
     const { prisma, calls } = makePrisma({ userExists: false });
-    await anonymizeAndDeleteUser(prisma, 'u1');
+    expect(await anonymizeAndDeleteUser(prisma, 'u1')).toBeNull();
     expect(prisma.user.delete).not.toHaveBeenCalled();
-    expect(calls.commentUpdateMany).toHaveLength(0);
+    expect(calls.userCreate).toHaveLength(0);
   });
 });

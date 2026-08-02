@@ -2,10 +2,8 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { RedisService } from '../common/redis/redis.service';
 import { EmailService } from '../common/email.service';
-import { anonymizeAndDeleteUser } from '../users/lib/deleted-user';
-import { AppleAuthService } from '../auth/apple-auth.service';
+import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class DataDeletionService {
@@ -15,8 +13,7 @@ export class DataDeletionService {
     private readonly prisma: PrismaService,
     private readonly email: EmailService,
     private readonly config: ConfigService,
-    private readonly redis: RedisService,
-    private readonly apple: AppleAuthService,
+    private readonly users: UsersService,
   ) {}
 
   async requestDeletion(email: string): Promise<{ sent: boolean; link?: string }> {
@@ -40,7 +37,7 @@ export class DataDeletionService {
         const html = `
           <h2>Confirm Account Deletion</h2>
           <p>You requested to delete your TVWatchTime account (<strong>${user.username}</strong>).</p>
-          <p>This will permanently remove your personal data: watch history, ratings, watchlists, devices, and profile. Your comments remain visible under an anonymized "Deleted user" identity.</p>
+          <p>This permanently removes your account, profile, credentials, devices, watch history, lists, watchlist, favorites, tracking state, and comments without replies. Comments needed to preserve another person's replies, plus ratings, reactions, character votes, and anonymous device votes, remain under a non-login "Deleted user" identity.</p>
           <p><strong>This action cannot be undone.</strong></p>
           <p style="margin: 24px 0;">
             <a href="${link}" style="background:#FFD60A;color:#0F1115;padding:12px 32px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px;">Confirm Deletion</a>
@@ -85,32 +82,16 @@ export class DataDeletionService {
       return { deleted: true };
     }
 
-    // Anonymize-and-delete: comments move to the system "Deleted user" account (threads
-    // survive, incl. other users' replies); everything personal cascades away.
-    await this.revokeAppleProviders(req.userId);
-    // Evict the JWT existence cache BEFORE the row delete so in-flight requests
-    // re-check the DB instead of racing through on the stale positive entry.
-    await this.redis.del(`auth:user:${req.userId}`);
-    await anonymizeAndDeleteUser(this.prisma, req.userId);
+    // Public/community contributions move to a unique non-login ghost. Everything
+    // private and identifying cascades with the original account.
+    await this.users.deleteUserAccount(req.userId);
 
     await this.prisma.deletionRequest.update({
       where: { id: req.id },
       data: { usedAt: new Date() },
     });
 
-    this.logger.log(`User ${user.username} (${req.userId}) deleted all data via deletion request`);
+    this.logger.log(`User ${user.username} (${req.userId}) anonymized via deletion request`);
     return { deleted: true, username: user.username };
-  }
-
-  private async revokeAppleProviders(userId: string) {
-    const providers = await this.prisma.userAuthProvider.findMany({
-      where: { userId, provider: 'APPLE', refreshToken: { not: null } },
-      select: { id: true, refreshToken: true },
-    });
-    await Promise.all(
-      providers.map((provider) =>
-        this.apple.revokeEncryptedRefreshToken(provider.refreshToken, provider.id),
-      ),
-    );
   }
 }

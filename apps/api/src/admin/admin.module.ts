@@ -9,9 +9,18 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { ProviderAlertsModule } from '../provider-alerts/provider-alerts.module';
 import { SocialModule } from '../social/social.module';
 import { ContactModule } from '../contact/contact.module';
+import { UsersModule } from '../users/users.module';
 
 @Module({
-  imports: [MediaMetadataModule, NotificationsModule, ProviderAlertsModule, ScheduleModule, SocialModule, ContactModule],
+  imports: [
+    MediaMetadataModule,
+    NotificationsModule,
+    ProviderAlertsModule,
+    ScheduleModule,
+    SocialModule,
+    ContactModule,
+    UsersModule,
+  ],
   controllers: [AdminController],
   providers: [AdminService, RolesGuard, CronManagerService],
   exports: [RolesGuard],

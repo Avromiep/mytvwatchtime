@@ -1,4 +1,10 @@
-import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingService } from '../common/setting.service';
@@ -17,6 +23,8 @@ import {
   CreateBroadcastDto,
 } from '../notifications/dto/announcement.dto';
 import { MediaType } from '@tvwatch/shared';
+import { UsersService } from '../users/users.service';
+import { isDeletedUserAccount } from '../users/lib/deleted-user';
 
 @Injectable()
 export class AdminService {
@@ -34,6 +42,7 @@ export class AdminService {
     private readonly contact: ContactService,
     private readonly providerConfig: ProviderConfigService,
     private readonly redis: RedisService,
+    private readonly users: UsersService,
     private readonly metadataBackfill?: MetadataBackfillService,
   ) {}
 
@@ -81,14 +90,14 @@ export class AdminService {
   async getStats() {
     const [users, shows, movies, episodes, watchHistory, imports, notifications, suspendedUsers] =
       await Promise.all([
-        this.prisma.user.count(),
+        this.prisma.user.count({ where: { isShadow: false } }),
         this.prisma.mediaItem.count({ where: { type: 'SHOW' } }),
         this.prisma.mediaItem.count({ where: { type: 'MOVIE' } }),
         this.prisma.episode.count({ where: { structureState: 'ACTIVE' } }),
         this.prisma.watchHistory.count(),
         this.prisma.import.count(),
         this.prisma.notification.count(),
-        this.prisma.user.count({ where: { isSuspended: true } }),
+        this.prisma.user.count({ where: { isSuspended: true, isShadow: false } }),
       ]);
 
     const now = new Date();
@@ -99,9 +108,9 @@ export class AdminService {
 
     const [newToday, newWeek, newMonth, activeWeek, failedJobs, pendingJobs, tmdbLogs] =
       await Promise.all([
-        this.prisma.user.count({ where: { createdAt: { gte: todayStart } } }),
-        this.prisma.user.count({ where: { createdAt: { gte: weekStart } } }),
-        this.prisma.user.count({ where: { createdAt: { gte: monthStart } } }),
+        this.prisma.user.count({ where: { createdAt: { gte: todayStart }, isShadow: false } }),
+        this.prisma.user.count({ where: { createdAt: { gte: weekStart }, isShadow: false } }),
+        this.prisma.user.count({ where: { createdAt: { gte: monthStart }, isShadow: false } }),
         this.prisma.watchHistory
           .findMany({
             where: { watchedAt: { gte: weekStart } },
@@ -141,7 +150,7 @@ export class AdminService {
     const usersByDay = (
       await this.prisma.$queryRaw<{ date: string; count: bigint }[]>`
       SELECT DATE(created_at) as date, COUNT(*) as count
-      FROM users WHERE created_at >= ${start}
+      FROM users WHERE created_at >= ${start} AND is_shadow = false
       GROUP BY DATE(created_at) ORDER BY date`
     ).map((d) => ({ date: String(d.date), count: Number(d.count) }));
 
@@ -233,7 +242,7 @@ export class AdminService {
   async getUsers(opts: { search?: string; page?: number; pageSize?: number; suspended?: string }) {
     const page = opts.page || 1;
     const pageSize = Math.min(opts.pageSize || 50, 200);
-    const where: any = {};
+    const where: any = { isShadow: false };
     if (opts.search)
       where.OR = [
         { username: { contains: opts.search, mode: 'insensitive' } },
@@ -306,6 +315,79 @@ export class AdminService {
       isSuspended: dto.isSuspended,
     });
     return updated;
+  }
+
+  async deleteUser(adminId: string, userId: string, confirmUsername: string) {
+    if (adminId === userId) throw new BadRequestException('You cannot delete your own account');
+
+    const [actor, target] = await Promise.all([
+      this.prisma.user.findUnique({ where: { id: adminId }, select: { role: true } }),
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, username: true, email: true, role: true, isShadow: true },
+      }),
+    ]);
+    if (!actor) throw new ForbiddenException('Admin account not found');
+    if (!target) throw new NotFoundException('User not found');
+    if (target.isShadow || isDeletedUserAccount(target)) {
+      throw new BadRequestException('Deleted or shadow users cannot be deleted from this action');
+    }
+    if (target.role === 'SUPER_ADMIN') {
+      throw new ForbiddenException('SUPER_ADMIN accounts cannot be deleted');
+    }
+    if (target.role !== 'USER' && actor.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Only a SUPER_ADMIN can delete a staff account');
+    }
+    if (confirmUsername !== target.username) {
+      throw new BadRequestException('Username confirmation does not match');
+    }
+
+    const audit = await this.prisma.adminAuditLog.create({
+      data: {
+        adminId,
+        action: 'delete_user',
+        targetType: 'user',
+        targetId: userId,
+        metadata: { username: target.username, targetRole: target.role, status: 'started' },
+      },
+    });
+    let preserved: Awaited<ReturnType<UsersService['deleteUserAccount']>>;
+    try {
+      preserved = await this.users.deleteUserAccount(userId);
+    } catch (e) {
+      await this.prisma.adminAuditLog
+        .update({
+          where: { id: audit.id },
+          data: {
+            metadata: {
+              username: target.username,
+              targetRole: target.role,
+              status: 'failed',
+              error: (e as Error).message?.slice(0, 500),
+            },
+          },
+        })
+        .catch(() => undefined);
+      throw e;
+    }
+    await this.prisma.adminAuditLog
+      .update({
+        where: { id: audit.id },
+        data: {
+          metadata: {
+            username: target.username,
+            targetRole: target.role,
+            status: 'completed',
+            preserved,
+          },
+        },
+      })
+      .catch((e) =>
+        this.logger.error(
+          `Could not finalize delete_user audit ${audit.id}: ${(e as Error).message}`,
+        ),
+      );
+    return { ok: true, preserved };
   }
 
   async sendTestPush(adminId: string, userId: string, dto?: { movieId?: string }) {

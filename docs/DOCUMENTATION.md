@@ -1063,7 +1063,10 @@ DiscoveryService.search()
 ### Data Deletion
 
 - `POST /data-deletion/request` (public) — email input, creates token, sends email
-- `GET /data-deletion/confirm?token=xxx` (public) — validates, cascade-deletes user, redirects to success page
+- `GET /data-deletion/confirm?token=xxx` (public) — validates, moves retained community contributions to a unique non-login deleted-user ghost, deletes private account/library/history data, and redirects to the success page
+- `DELETE /admin/users/:id` (ADMIN+) — audited equivalent requiring exact username confirmation; self and SUPER_ADMIN deletion are blocked, and only SUPER_ADMIN may delete other staff accounts
+- Preserved under the ghost: comments that are required as ancestors of another account's replies, movie/show/episode ratings, reactions, character votes, and anonymous episode/movie device votes. The actual reply tree determines comment retention; an all-self-authored branch is deleted. Preserved comment-image ownership moves to the ghost, affected `repliesCount` values are rebuilt, and device status rows have watched state/timestamps/counts cleared before transfer.
+- Deleted with the original account: comments without surviving replies, credentials/auth providers, profile, devices, watched/progress/paused state, history, lists, watchlist, favorites, follows/blocks, notifications/alerts, imports, badges/stats, reports, contacts, and still-downloadable data-export files/records. Password-reset/deletion-token identifiers and queued push jobs are scrubbed explicitly.
 - Public site form at `tvwatchtime.org/delete-account`
 
 ### Password Reset
