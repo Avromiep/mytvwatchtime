@@ -1,9 +1,9 @@
 import { ImportService } from './import.service';
 
 /**
- * Character-vote apply vs concurrent cast rewrites: a castId resolved up front can vanish
- * before the insert (a queued tvdb-rehydrate rewrites media_cast). The apply must degrade
- * to PENDING_MATCH instead of failing with an FK violation.
+ * Character-vote apply vs concurrent structure/cast rewrites: staged episode or cast ids can
+ * vanish before insert. Replay must resolve the canonical replacement or degrade safely instead
+ * of failing the event with an FK violation.
  */
 describe('ImportService.applyCharacterVotes — stale castId race', () => {
   const voteItem = {
@@ -19,7 +19,13 @@ describe('ImportService.applyCharacterVotes — stale castId race', () => {
     },
   };
 
-  function makeService(opts: { validateReturns: string[]; firstInsertFails?: boolean }) {
+  function makeService(opts: {
+    validateReturns: string[];
+    firstInsertFails?: boolean;
+    activeEpisodeIds?: string[];
+    aliasEpisodeId?: string | null;
+    positionEpisodeIds?: string[];
+  }) {
     let castFindCalls = 0;
     const inserted: any[][] = [];
     const statusUpdates: any[] = [];
@@ -35,8 +41,28 @@ describe('ImportService.applyCharacterVotes — stale castId race', () => {
           return opts.validateReturns.map((id) => ({ id }));
         }),
       },
+      episode: {
+        findMany: jest.fn(async (args: any) => {
+          if (args?.where?.id) {
+            return (opts.activeEpisodeIds ?? ['e1']).map((id) => ({
+              id,
+              season: { show: { mediaId: 'm1' } },
+            }));
+          }
+          return (opts.positionEpisodeIds ?? []).map((id) => ({ id }));
+        }),
+      },
+      episodeExternalId: {
+        findFirst: jest.fn(async () =>
+          opts.aliasEpisodeId ? { episodeId: opts.aliasEpisodeId } : null,
+        ),
+      },
       characterVote: { findMany: jest.fn(async () => []) },
       importItem: {
+        update: jest.fn(async (args: any) => {
+          statusUpdates.push(args);
+          return {};
+        }),
         updateMany: jest.fn(async (args: any) => {
           statusUpdates.push(args);
           return {};
@@ -74,7 +100,12 @@ describe('ImportService.applyCharacterVotes — stale castId race', () => {
   it('drops votes whose castId vanished before the insert (→ PENDING_MATCH, no crash)', async () => {
     const { service, inserted, statusUpdates } = makeService({ validateReturns: [] });
 
-    const res = await (service as any).applyCharacterVotes('u1', 'imp1', [voteItem], 'TVTIME');
+    const res = await (service as any).applyCharacterVotes(
+      'u1',
+      'imp1',
+      [{ ...voteItem, normalizedData: { ...voteItem.normalizedData } }],
+      'TVTIME',
+    );
 
     expect(res.created).toBe(0);
     // The vote insert ran with an empty set (nothing crashed).
@@ -85,13 +116,64 @@ describe('ImportService.applyCharacterVotes — stale castId race', () => {
     ).toBe(true);
   });
 
+  it('uses an unambiguous active S/E fallback for a regular stale episode', async () => {
+    const regularItem = {
+      ...voteItem,
+      normalizedData: { ...voteItem.normalizedData, seasonNumber: 2, episodeNumber: 4 },
+    };
+    const { service, inserted } = makeService({
+      validateReturns: ['cast1'],
+      activeEpisodeIds: [],
+      aliasEpisodeId: null,
+      positionEpisodeIds: ['e-canonical'],
+    });
+
+    const res = await (service as any).applyCharacterVotes(
+      'u1',
+      'imp1',
+      [regularItem],
+      'TVTIME',
+    );
+
+    expect(res).toEqual({ created: 1, skipped: 0 });
+    expect(inserted[0][0]).toEqual(expect.objectContaining({ episodeId: 'e-canonical' }));
+  });
+
+  it('does not position-match a stale special when its exact alias is absent', async () => {
+    const specialItem = {
+      ...voteItem,
+      normalizedData: { ...voteItem.normalizedData, seasonNumber: 0, episodeNumber: 1 },
+    };
+    const { service, inserted } = makeService({
+      validateReturns: ['cast1'],
+      activeEpisodeIds: [],
+      aliasEpisodeId: null,
+      positionEpisodeIds: ['wrong-special'],
+    });
+
+    const res = await (service as any).applyCharacterVotes(
+      'u1',
+      'imp1',
+      [specialItem],
+      'TVTIME',
+    );
+
+    expect(res).toEqual({ created: 0, skipped: 1 });
+    expect(inserted).toHaveLength(0);
+  });
+
   it('retries the insert after an FK error with re-validated rows', async () => {
     const { service, inserted, prisma } = makeService({
       validateReturns: ['cast1'],
       firstInsertFails: true,
     });
 
-    const res = await (service as any).applyCharacterVotes('u1', 'imp1', [voteItem], 'TVTIME');
+    const res = await (service as any).applyCharacterVotes(
+      'u1',
+      'imp1',
+      [{ ...voteItem, normalizedData: { ...voteItem.normalizedData } }],
+      'TVTIME',
+    );
 
     expect(res.created).toBe(1);
     const voteInserts = inserted.filter((rows) => rows.length > 0);
@@ -101,5 +183,52 @@ describe('ImportService.applyCharacterVotes — stale castId race', () => {
     );
     // The FK failure aborts transaction one; retry must start a fresh transaction.
     expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('remaps a stale episode through its TVDB alias before inserting the vote', async () => {
+    const { service, inserted, statusUpdates } = makeService({
+      validateReturns: ['cast1'],
+      activeEpisodeIds: [],
+      aliasEpisodeId: 'e2',
+    });
+
+    const res = await (service as any).applyCharacterVotes(
+      'u1',
+      'imp1',
+      [{ ...voteItem, normalizedData: { ...voteItem.normalizedData } }],
+      'TVTIME',
+    );
+
+    expect(res).toEqual({ created: 1, skipped: 0 });
+    expect(inserted[0][0]).toEqual(expect.objectContaining({ episodeId: 'e2', castId: 'cast1' }));
+    expect(
+      statusUpdates.some((u) => u.where?.id === 'it1' && u.data?.matchedEpisodeId === 'e2'),
+    ).toBe(true);
+  });
+
+  it('terminally skips a stale episode with no canonical replacement', async () => {
+    const { service, inserted, statusUpdates } = makeService({
+      validateReturns: ['cast1'],
+      activeEpisodeIds: [],
+      aliasEpisodeId: null,
+    });
+
+    const res = await (service as any).applyCharacterVotes(
+      'u1',
+      'imp1',
+      [{ ...voteItem, normalizedData: { ...voteItem.normalizedData } }],
+      'TVTIME',
+    );
+
+    expect(res).toEqual({ created: 0, skipped: 1 });
+    expect(inserted).toHaveLength(0);
+    expect(
+      statusUpdates.some(
+        (u) =>
+          u.data?.status === 'SKIPPED' &&
+          u.data?.matchedEpisodeId === null &&
+          u.where?.id?.in?.includes('it1'),
+      ),
+    ).toBe(true);
   });
 });

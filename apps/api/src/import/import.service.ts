@@ -1705,11 +1705,11 @@ export class ImportService {
       enqueueMissing?: boolean;
       terminalUnresolved?: boolean;
       countUnresolved?: boolean;
-      /** Internal one-shot retry after a concurrent cast rewrite invalidates a cast FK. */
-      retryCastRace?: boolean;
+      /** Internal one-shot retry after a concurrent structure/cast rewrite invalidates an FK. */
+      retryForeignKeyRace?: boolean;
     } = {},
   ): Promise<{ created: number; skipped: number }> {
-    const voteItems = items.filter(
+    let voteItems = items.filter(
       (it) =>
         it.sourceEntityType === 'EPISODE_CHARACTER_VOTE' &&
         (it.status === 'MATCHED' || it.status === 'PENDING_MATCH') &&
@@ -1721,6 +1721,106 @@ export class ImportService {
     let created = 0;
     let skipped = 0;
     let unresolved = 0;
+
+    // Structure consolidation can replace an episode after an import item was staged while
+    // leaving that item pending for a later cast refresh. Never insert a character vote using
+    // the stale FK. Resolve the active canonical episode locally by the imported TVDB episode
+    // alias first; regular episodes may then use an unambiguous S/E fallback inside the already
+    // verified show. Specials remain exact-id only.
+    const stagedEpisodeIds = [
+      ...new Set(voteItems.map((it: any) => it.matchedEpisodeId as string)),
+    ];
+    const activeEpisodes = await this.prisma.episode.findMany({
+      where: { id: { in: stagedEpisodeIds }, structureState: 'ACTIVE' },
+      select: { id: true, season: { select: { show: { select: { mediaId: true } } } } },
+    });
+    const activeEpisodeMedia = new Map(
+      activeEpisodes.map((episode: any) => [episode.id, episode.season.show.mediaId]),
+    );
+    const repairedEpisodeItems: any[] = [];
+    const missingEpisodeItems: any[] = [];
+
+    for (const item of voteItems) {
+      if (activeEpisodeMedia.get(item.matchedEpisodeId) === item.matchedMediaId) continue;
+
+      const normalized: any = item.normalizedData ?? {};
+      const externalEpisodeId = normalized.externalEpisodeId;
+      const exactAlias =
+        externalEpisodeId != null
+          ? await this.prisma.episodeExternalId.findFirst({
+              where: {
+                provider: 'THE_TVDB',
+                providerEntityKind: 'EPISODE',
+                value: String(externalEpisodeId),
+                episode: {
+                  structureState: 'ACTIVE',
+                  season: { show: { mediaId: item.matchedMediaId } },
+                },
+              },
+              select: { episodeId: true },
+            })
+          : null;
+
+      let replacementId = exactAlias?.episodeId ?? null;
+      const seasonNumber = Number(normalized.seasonNumber);
+      const episodeNumber = Number(normalized.episodeNumber);
+      if (
+        !replacementId &&
+        Number.isInteger(seasonNumber) &&
+        seasonNumber > 0 &&
+        Number.isInteger(episodeNumber) &&
+        episodeNumber > 0
+      ) {
+        const replacements = await this.prisma.episode.findMany({
+          where: {
+            structureState: 'ACTIVE',
+            season: { show: { mediaId: item.matchedMediaId }, number: seasonNumber },
+            number: episodeNumber,
+          },
+          select: { id: true },
+          take: 2,
+        });
+        replacementId = replacements.length === 1 ? replacements[0].id : null;
+      }
+
+      if (replacementId) {
+        this.logger.warn(
+          `character-vote replay: remapped stale episode ${item.matchedEpisodeId} to ${replacementId} for import item ${item.id}`,
+        );
+        item.matchedEpisodeId = replacementId;
+        repairedEpisodeItems.push(item);
+      } else {
+        this.logger.warn(
+          `character-vote replay: skipping import item ${item.id} because episode ${item.matchedEpisodeId} has no unambiguous active canonical replacement`,
+        );
+        missingEpisodeItems.push(item);
+      }
+    }
+
+    if (repairedEpisodeItems.length) {
+      await Promise.all(
+        repairedEpisodeItems.map((item) =>
+          this.prisma.importItem.update({
+            where: { id: item.id },
+            data: { matchedEpisodeId: item.matchedEpisodeId, errorMessage: null },
+          }),
+        ),
+      );
+    }
+    if (missingEpisodeItems.length) {
+      await this.prisma.importItem.updateMany({
+        where: { id: { in: missingEpisodeItems.map((item) => item.id) } },
+        data: {
+          status: 'SKIPPED',
+          matchedEpisodeId: null,
+          errorMessage: 'Episode has no unambiguous active canonical replacement',
+        },
+      });
+      skipped += missingEpisodeItems.length;
+      const missingIds = new Set(missingEpisodeItems.map((item) => item.id));
+      voteItems = voteItems.filter((item) => !missingIds.has(item.id));
+      if (!voteItems.length) return { created, skipped };
+    }
 
     const mediaIds = [...new Set(voteItems.map((it: any) => it.matchedMediaId as string))];
     const charIds = [
@@ -1815,11 +1915,11 @@ export class ImportService {
     }
 
     if (toCreate.length) {
-      // Guard against concurrent cast rewrites: a queued tvdb-rehydrate (or the anime
-      // cron) REWRITES media_cast, deleting rows the castMap resolved moments ago —
-      // a stale castId then violates the FK and fails the whole apply. Re-validate
-      // inside the transaction; vanished castIds fall back to PENDING_MATCH. If the
-      // insert still races, the whole apply restarts once outside the aborted transaction.
+      // Guard against concurrent metadata rewrites: a queued tvdb-rehydrate (or the anime
+      // cron) can replace media_cast after castMap resolves it, while structure repair can
+      // replace an episode after the local canonical check above. Re-validate cast ids inside
+      // the transaction; vanished cast ids fall back to PENDING_MATCH. If either FK still
+      // races, the whole apply restarts once outside the aborted transaction.
       const validateCastIds = async (tx: any, rows: any[]) => {
         const ids = [...new Set(rows.map((r) => r.castId))];
         const found = await tx.mediaCast.findMany({
@@ -1863,14 +1963,14 @@ export class ImportService {
           { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
         );
       } catch (e: any) {
-        if (e?.code !== 'P2003' || opts.retryCastRace === false) throw e;
+        if (e?.code !== 'P2003' || opts.retryForeignKeyRace === false) throw e;
         // PostgreSQL marks an interactive transaction aborted as soon as the FK insert
         // fails. Never query/retry inside that transaction (it can only return 25P02).
-        // Start the apply once more from scratch so the newly rewritten media_cast id is
+        // Start the apply once more from scratch so newly rewritten episode/cast ids are
         // resolved and validated in a fresh transaction.
         return this.applyCharacterVotes(userId, importId, items, source, {
           ...opts,
-          retryCastRace: false,
+          retryForeignKeyRace: false,
         });
       }
     } else if (appliedIds.length) {

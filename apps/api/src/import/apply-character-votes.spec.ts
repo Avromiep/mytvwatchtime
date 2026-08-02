@@ -15,13 +15,19 @@ function model(fns: string[]): FnMap {
 function makeService(castRows: any[], existingVotes: any[]) {
   const prisma: any = {
     mediaCast: model(['findMany']),
+    episode: model(['findMany']),
+    episodeExternalId: model(['findFirst']),
     characterVote: model(['findMany']),
     externalId: model(['findFirst']),
     import: model(['update']),
-    importItem: model(['findMany', 'updateMany']),
+    importItem: model(['findMany', 'update', 'updateMany']),
     $transaction: jest.fn(async (fn: any) => fn(prisma)),
   };
   prisma.mediaCast.findMany.mockResolvedValue(castRows);
+  prisma.episode.findMany.mockResolvedValue([
+    { id: 'ep-1', season: { show: { mediaId: 'media-1' } } },
+  ]);
+  prisma.episodeExternalId.findFirst.mockResolvedValue(null);
   prisma.characterVote.findMany.mockResolvedValue(existingVotes);
   const hydration = { enqueueTvdbRehydrate: jest.fn().mockResolvedValue(undefined) };
   const chunked: any[] = [];
