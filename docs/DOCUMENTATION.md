@@ -413,12 +413,17 @@ the daily `recommendations_backfill` cron (500/run).
 
 ### Library
 
-| Method | Path                 | Purpose                                        |
-| ------ | -------------------- | ---------------------------------------------- |
-| GET    | `/me/watch-next`     | Watch next (grouped by recency)                |
-| GET    | `/me/upcoming`       | Upcoming calendar (past 7d + future)           |
-| GET    | `/me/history`        | Watch history (paginated)                      |
-| GET    | `/me/shows/progress` | Shows by status (watching/notStarted/finished) |
+| Method | Path                               | Purpose                                                     |
+| ------ | ---------------------------------- | ----------------------------------------------------------- |
+| GET    | `/me/watch-next`                   | Bounded first slice of each watch rail                      |
+| GET    | `/me/watch-next/bucket`            | Offset page of Watch Next/Not Recently/Start Watching       |
+| GET    | `/me/upcoming`                     | Upcoming calendar (bounded past + future)                   |
+| GET    | `/me/upcoming/past`                | Cursor page of older aired episodes                         |
+| GET    | `/me/history`                      | Watch history (paginated)                                   |
+| GET    | `/me/shows/progress`               | Legacy complete show-status response                        |
+| GET    | `/me/shows/progress/summary`       | Counts for watching/notStarted/finished/paused              |
+| GET    | `/me/shows/progress/page?section=` | Bounded page for one My Shows section                       |
+| GET    | `/me/movies/watched`               | Distinct watched movies from status rows (not watch events) |
 
 ### Collections
 
@@ -1081,19 +1086,22 @@ DiscoveryService.search()
 
 ### Redis Caching
 
-| Data              | TTL    | Invalidated by      |
-| ----------------- | ------ | ------------------- |
-| Search results    | 10 min | TTL expiry          |
-| Watch Next feed   | 30 sec | Episode mark/unmark |
-| Upcoming episodes | 60 sec | Episode mark/unmark |
-| Feature flags     | 30 sec | TTL expiry          |
-| Settings          | 10 sec | TTL expiry          |
+| Data              | TTL    | Invalidated by                                  |
+| ----------------- | ------ | ----------------------------------------------- |
+| Search results    | 10 min | TTL expiry                                      |
+| Watch Next feed   | 5 min  | Tracking, collection, import, onboarding writes |
+| Upcoming episodes | 60 sec | Episode mark/unmark                             |
+| My Shows pages    | 2 min  | Tracking, collection, import, onboarding writes |
+| Feature flags     | 30 sec | TTL expiry                                      |
+| Settings          | 10 sec | TTL expiry                                      |
 
 ### Database
 
 - `DATABASE_CONNECTION_LIMIT` — Prisma pool size (default 20)
 - Postgres tuning: `POSTGRES_SHARED_BUFFERS`, `POSTGRES_MAX_CONNECTIONS`, `POSTGRES_CACHE_SIZE`, `POSTGRES_WORK_MEM`
 - All configurable for any server size
+- Large libraries stay bounded at the API boundary: My Shows and movie collections page at 24/60 rows, Watch Next returns 20 initial cards and pages the remainder, and Upcoming uses `LIMIT + 1` rather than counting a user's complete historical episode footprint.
+- Concurrent cold-cache requests for the same user/key are coalesced in-process and across API replicas through a short Redis lock.
 
 ### External API Rate Limits
 

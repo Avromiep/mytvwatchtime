@@ -64,7 +64,12 @@ type WatchRow =
   | { type: 'spacer'; key: string; h: number }
   | { type: 'header'; key: string; bucket: string; h: number }
   | { type: 'card'; key: string; item: any; h: number }
-  | { type: 'more'; key: string; bucket: 'START_WATCHING' | 'NOT_RECENTLY'; h: number };
+  | {
+      type: 'more';
+      key: string;
+      bucket: 'WATCH_NEXT' | 'START_WATCHING' | 'NOT_RECENTLY';
+      h: number;
+    };
 
 type UpcomingRow =
   | { type: 'spacer'; key: string; h: number }
@@ -166,7 +171,8 @@ function WatchList() {
   const mark = useMarkEpisodeWatched();
   const rewatch = useRewatchEpisode();
   const unwatchOnce = useUnwatchEpisodeOnce();
-  // "See more" pagers for the two server-capped rails (first 10 ship in `data`).
+  // "See more" pagers for server-capped rails.
+  const watchNextQ = useWatchNextBucket('WATCH_NEXT');
   const notRecentlyQ = useWatchNextBucket('NOT_RECENTLY');
   const startWatchingQ = useWatchNextBucket('START_WATCHING');
 
@@ -216,10 +222,12 @@ function WatchList() {
     });
     // "See more" pages for the capped rails (deduped like the main slice).
     const extraByBucket: Record<string, any[]> = {
+      [WatchNextBucket.WATCH_NEXT]: [],
       [WatchNextBucket.NOT_RECENTLY]: [],
       [WatchNextBucket.START_WATCHING]: [],
     };
     for (const [bucket, q] of [
+      [WatchNextBucket.WATCH_NEXT, watchNextQ],
       [WatchNextBucket.NOT_RECENTLY, notRecentlyQ],
       [WatchNextBucket.START_WATCHING, startWatchingQ],
     ] as const) {
@@ -244,9 +252,8 @@ function WatchList() {
     const out: WatchRow[] = [{ type: 'spacer', key: 'top', h: spacing.lg }];
     let isFirstSection = true;
     for (const bucket of buckets) {
-      const group = bucket === WatchNextBucket.PAUSED
-        ? pausedItems
-        : items.filter((i) => i.bucket === bucket);
+      const group =
+        bucket === WatchNextBucket.PAUSED ? pausedItems : items.filter((i) => i.bucket === bucket);
       const extra = extraByBucket[bucket] ?? [];
       if (group.length === 0 && !(bucket === WatchNextBucket.HISTORY && older.length > 0)) continue;
       // History: oldest on top, latest at the bottom (right above Watch Next). Older
@@ -277,19 +284,40 @@ function WatchList() {
       }
       // "See more" footer: until a page is fetched, the server's uncapped rail total
       // decides; afterwards the pager's hasNextPage does.
-      if (bucket === WatchNextBucket.NOT_RECENTLY || bucket === WatchNextBucket.START_WATCHING) {
-        const q = bucket === WatchNextBucket.NOT_RECENTLY ? notRecentlyQ : startWatchingQ;
+      if (
+        bucket === WatchNextBucket.WATCH_NEXT ||
+        bucket === WatchNextBucket.NOT_RECENTLY ||
+        bucket === WatchNextBucket.START_WATCHING
+      ) {
+        const q =
+          bucket === WatchNextBucket.WATCH_NEXT
+            ? watchNextQ
+            : bucket === WatchNextBucket.NOT_RECENTLY
+              ? notRecentlyQ
+              : startWatchingQ;
         const total =
-          bucket === WatchNextBucket.NOT_RECENTLY
-            ? (data?.bucketTotals?.notRecently ?? 0)
-            : (data?.bucketTotals?.startWatching ?? 0);
-        const hasMore =
-          (q.data?.pages.length ?? 0) > 0 ? !!q.hasNextPage : total > group.length;
+          bucket === WatchNextBucket.WATCH_NEXT
+            ? (data?.bucketTotals?.watchNext ?? 0)
+            : bucket === WatchNextBucket.NOT_RECENTLY
+              ? (data?.bucketTotals?.notRecently ?? 0)
+              : (data?.bucketTotals?.startWatching ?? 0);
+        const hasMore = (q.data?.pages.length ?? 0) > 0 ? !!q.hasNextPage : total > group.length;
         if (hasMore) out.push({ type: 'more', key: `m_${bucket}`, bucket, h: MORE_H });
       }
     }
     return out;
-  }, [data?.items, data?.bucketTotals, pastQuery.data?.pages, pausedQuery.data?.items, notRecentlyQ.data?.pages, notRecentlyQ.hasNextPage, startWatchingQ.data?.pages, startWatchingQ.hasNextPage]);
+  }, [
+    data?.items,
+    data?.bucketTotals,
+    pastQuery.data?.pages,
+    pausedQuery.data?.items,
+    watchNextQ.data?.pages,
+    watchNextQ.hasNextPage,
+    notRecentlyQ.data?.pages,
+    notRecentlyQ.hasNextPage,
+    startWatchingQ.data?.pages,
+    startWatchingQ.hasNextPage,
+  ]);
 
   // Land on Watch Next; when it has no items, fall back to "Haven't watched for a
   // while", then "Start watching" (first rail that exists wins).
@@ -468,7 +496,13 @@ function WatchList() {
 
 /** Feed-style "See more" section footer: loads the next 10 items of the rail
  *  until the server's uncapped total is exhausted. */
-function SeeMoreRow({ bucket, h }: { bucket: 'START_WATCHING' | 'NOT_RECENTLY'; h: number }) {
+function SeeMoreRow({
+  bucket,
+  h,
+}: {
+  bucket: 'WATCH_NEXT' | 'START_WATCHING' | 'NOT_RECENTLY';
+  h: number;
+}) {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['shows']);
   const q = useWatchNextBucket(bucket);
@@ -492,7 +526,12 @@ function SeeMoreRow({ bucket, h }: { bucket: 'START_WATCHING' | 'NOT_RECENTLY'; 
             <T variant="caption" style={{ color: tokens.primary, fontWeight: '700' }}>
               {t('shows:seeMore')}
             </T>
-            <Ionicons name="chevron-down" size={14} color={tokens.primary} style={{ marginLeft: 4 }} />
+            <Ionicons
+              name="chevron-down"
+              size={14}
+              color={tokens.primary}
+              style={{ marginLeft: 4 }}
+            />
           </>
         )}
       </Pressable>

@@ -49,6 +49,50 @@ describe('DiscoveryService.posterLast', () => {
   });
 });
 
+describe('DiscoveryService.fetchCardDtos', () => {
+  it('returns persisted movie cards without blocking on provider locale hydration', async () => {
+    const meta = { ensureListLocaleOverrides: jest.fn() };
+    const prisma = {
+      mediaItem: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'movie1',
+            type: MediaType.MOVIE,
+            title: 'Movie',
+            titles: {},
+            posterUrl: null,
+            posterUrls: {},
+            backdropUrl: null,
+            backdropUrls: {},
+            rating: 7,
+            movie: { releaseYear: 2024 },
+            show: null,
+            watchlist: [],
+            favorites: [],
+            showStatuses: [],
+            movieStatuses: [{ id: 'status1', watched: true }],
+          },
+        ]),
+      },
+    };
+    const svc = new DiscoveryService(
+      {} as any,
+      {} as any,
+      meta as any,
+      prisma as any,
+      {} as any,
+      {} as any,
+    );
+
+    const cards = await svc.fetchCardDtos(['movie1'], 'u1', 60);
+
+    expect(cards).toEqual([
+      expect.objectContaining({ id: 'movie1', title: 'Movie', watched: true }),
+    ]);
+    expect(meta.ensureListLocaleOverrides).not.toHaveBeenCalled();
+  });
+});
+
 /** Forgiving search: originalTitle matching + normalized token-AND tier. */
 describe('DiscoveryService forgiving search', () => {
   const make = () => {
@@ -113,7 +157,11 @@ describe('DiscoveryService forgiving search', () => {
     const { svc, prisma } = make();
     await (svc as any).initialSearch('W-Two  Worlds', { q: 'W-Two  Worlds' });
     const tokenCall = prisma.mediaItem.findMany.mock.calls[2][0];
-    expect(tokenCall.where.AND.map((c: any) => c.OR[0].title.contains)).toEqual(['w', 'two', 'worlds']);
+    expect(tokenCall.where.AND.map((c: any) => c.OR[0].title.contains)).toEqual([
+      'w',
+      'two',
+      'worlds',
+    ]);
   });
 
   it('initialSearch skips the token tier for single-token terms', async () => {
@@ -147,7 +195,6 @@ describe('DiscoveryService forgiving search', () => {
   });
 });
 
-
 describe('DiscoveryService hideAnimeInExplore', () => {
   const make = (profile: { hideAnimeInExplore: boolean } | null) => {
     const prisma = {
@@ -155,7 +202,10 @@ describe('DiscoveryService hideAnimeInExplore', () => {
       mediaItem: { findMany: jest.fn().mockResolvedValue([]) },
       $queryRaw: jest.fn(),
     };
-    const redis = { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue(null) };
+    const redis = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(null),
+    };
     const svc = new DiscoveryService(
       {} as any,
       {} as any,
@@ -267,7 +317,10 @@ describe('DiscoveryService explore filters (DB paths)', () => {
       genre: { findMany: jest.fn().mockResolvedValue([]) },
       $queryRaw: jest.fn(),
     };
-    const redis = { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue(null) };
+    const redis = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(null),
+    };
     const svc = new DiscoveryService(
       {} as any,
       {} as any,
@@ -333,13 +386,21 @@ describe('DiscoveryService explore filters (DB paths)', () => {
 
   it('searchViaDb sorts shows by yearStart and movies by releaseDate (default popularity)', async () => {
     const s = make();
-    await (s.svc as any).searchViaDb('term', { q: 'term', type: MediaType.SHOW, sort: 'releaseDate' });
+    await (s.svc as any).searchViaDb('term', {
+      q: 'term',
+      type: MediaType.SHOW,
+      sort: 'releaseDate',
+    });
     expect(s.prisma.mediaItem.findMany.mock.calls[0][0].orderBy).toEqual({
       show: { yearStart: 'desc' },
     });
 
     const m = make();
-    await (m.svc as any).searchViaDb('term', { q: 'term', type: MediaType.MOVIE, sort: 'releaseDate' });
+    await (m.svc as any).searchViaDb('term', {
+      q: 'term',
+      type: MediaType.MOVIE,
+      sort: 'releaseDate',
+    });
     expect(m.prisma.mediaItem.findMany.mock.calls[0][0].orderBy).toEqual({
       movie: { releaseDate: 'desc' },
     });
@@ -499,9 +560,7 @@ describe('DiscoveryService trending release-date sort', () => {
       {} as any,
       {} as any,
     );
-    jest
-      .spyOn(svc as any, 'fetchListDtos')
-      .mockImplementation(async (ids: unknown) => ids as any);
+    jest.spyOn(svc as any, 'fetchListDtos').mockImplementation(async (ids: unknown) => ids as any);
     jest
       .spyOn(svc as any, 'cachedListEntries')
       .mockResolvedValue(Object.keys(years).map((id) => ({ id, g: [], oc: [] })));
@@ -555,19 +614,23 @@ describe('DiscoveryService curated lists', () => {
       {} as any,
       {} as any,
     );
-    jest
-      .spyOn(svc as any, 'cachedListEntries')
-      .mockResolvedValue([{ id: 'x', g: [], oc: [] }]);
-    jest
-      .spyOn(svc as any, 'fetchListDtos')
-      .mockImplementation(async (ids: unknown) => ids as any);
+    jest.spyOn(svc as any, 'cachedListEntries').mockResolvedValue([{ id: 'x', g: [], oc: [] }]);
+    jest.spyOn(svc as any, 'fetchListDtos').mockImplementation(async (ids: unknown) => ids as any);
     return { svc, tmdb };
   };
 
   it('topRatedShows/topRatedMovies route through their provider endpoints', async () => {
     const { svc, tmdb } = make();
-    expect(await svc.topRatedShows(undefined, 1, 20)).toEqual({ items: ['x'], page: 1, hasMore: false });
-    expect(await svc.topRatedMovies(undefined, 1, 20)).toEqual({ items: ['x'], page: 1, hasMore: false });
+    expect(await svc.topRatedShows(undefined, 1, 20)).toEqual({
+      items: ['x'],
+      page: 1,
+      hasMore: false,
+    });
+    expect(await svc.topRatedMovies(undefined, 1, 20)).toEqual({
+      items: ['x'],
+      page: 1,
+      hasMore: false,
+    });
     expect((svc as any).cachedListEntries).toHaveBeenCalledWith(
       'list:ids:v1:top-rated',
       'show',

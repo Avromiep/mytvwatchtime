@@ -6,7 +6,7 @@ import { MediaType } from '@tvwatch/shared';
 import { Header } from '../components/Header';
 import { PosterCard, cardProgress, cardYear } from '../components/cards';
 import { Chip, EmptyState, Screen, Spinner, AnimatedFlatList } from '../components/primitives';
-import { useAllFavorites, useAllWatchlist, useGenres } from '../api/hooks';
+import { useFavoritePages, useGenres, useWatchlistPages } from '../api/hooks';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAppearance } from '../context/PreferencesProvider';
@@ -28,7 +28,14 @@ function useColumns() {
 export default function MoreScreen() {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['social', 'common']);
-  const { t: tab, g: initialGenre, x, s, c, a } = useLocalSearchParams<{
+  const {
+    t: tab,
+    g: initialGenre,
+    x,
+    s,
+    c,
+    a,
+  } = useLocalSearchParams<{
     t: string;
     g?: string;
     /** Explore filters handed over as route params (x=excluded slugs csv, s=sort, c=country, a=hide anime). */
@@ -108,38 +115,37 @@ export default function MoreScreen() {
     pageQuery.fetchNextPage();
   }, [pageQuery]);
 
-  // --- Collection hooks (auto-paged to the end — see-alls show exactly what the user has) ---
-  const watchlistShows = useAllWatchlist(MediaType.SHOW, genre);
-  const watchlistMovies = useAllWatchlist(MediaType.MOVIE, genre);
-  const favShows = useAllFavorites(MediaType.SHOW, genre);
-  const favMovies = useAllFavorites(MediaType.MOVIE, genre);
+  // --- User collections: only the active collection fetches, 60 cards at a time. ---
+  const watchlistShows = useWatchlistPages(MediaType.SHOW, genre, tab === 'watchlist-shows');
+  const watchlistMovies = useWatchlistPages(MediaType.MOVIE, genre, tab === 'watchlist-movies');
+  const favShows = useFavoritePages(MediaType.SHOW, genre, tab === 'favorites-shows');
+  const favMovies = useFavoritePages(MediaType.MOVIE, genre, tab === 'favorites-movies');
+
+  const collectionQuery =
+    tab === 'watchlist-shows'
+      ? watchlistShows
+      : tab === 'watchlist-movies'
+        ? watchlistMovies
+        : tab === 'favorites-shows'
+          ? favShows
+          : tab === 'favorites-movies'
+            ? favMovies
+            : null;
 
   // --- Collect items ---
-  let items: any[] = [];
-  let loading = false;
-  if (pagedPath) {
-    items = pageQuery.data?.pages.flatMap((p) => p.items ?? []) ?? [];
-    loading = pageQuery.isLoading;
-  } else {
-    switch (tab) {
-      case 'watchlist-shows':
-        items = watchlistShows.items;
-        loading = watchlistShows.isLoading;
-        break;
-      case 'watchlist-movies':
-        items = watchlistMovies.items;
-        loading = watchlistMovies.isLoading;
-        break;
-      case 'favorites-shows':
-        items = favShows.items;
-        loading = favShows.isLoading;
-        break;
-      case 'favorites-movies':
-        items = favMovies.items;
-        loading = favMovies.isLoading;
-        break;
+  const items: any[] = pagedPath
+    ? (pageQuery.data?.pages.flatMap((p) => p.items ?? []) ?? [])
+    : (collectionQuery?.items ?? []);
+  const loading = pagedPath ? pageQuery.isLoading : !!collectionQuery?.isLoading;
+  const loadNext = useCallback(() => {
+    if (pagedPath) {
+      loadMore();
+      return;
     }
-  }
+    if (collectionQuery?.hasNextPage && !collectionQuery.isFetchingNextPage) {
+      collectionQuery.fetchNextPage();
+    }
+  }, [pagedPath, loadMore, collectionQuery]);
 
   // --- Chunk into rows ---
   // Row keys carry the first card's id (not just the index): when a refreshed
@@ -231,17 +237,23 @@ export default function MoreScreen() {
             alignSelf: 'center',
           }}
           ListEmptyComponent={<EmptyState title={t('common:nothingHereYet')} icon="film-outline" />}
-          onEndReached={pagedPath ? loadMore : undefined}
+          onEndReached={pagedPath || collectionQuery ? loadNext : undefined}
           onEndReachedThreshold={0.5}
           ListFooterComponent={
-            pagedPath && pageQuery.isFetchingNextPage ? (
+            (pagedPath ? pageQuery.isFetchingNextPage : collectionQuery?.isFetchingNextPage) ? (
               <ActivityIndicator color={tokens.primary} style={{ padding: spacing.lg }} />
             ) : null
           }
           renderItem={({ item: row }) => {
             const fillCount = cols - row.cards.length;
             return (
-              <View style={{ flexDirection: 'row', marginBottom: spacing.md }}>
+              <View
+                style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  marginBottom: spacing.md,
+                }}
+              >
                 {row.cards.map((item) => (
                   <PosterCard
                     key={item.id}
@@ -253,11 +265,11 @@ export default function MoreScreen() {
                     rating={item.rating}
                     year={cardYear(item)}
                     width={cardW}
-                    style={{ marginRight: spacing.md }}
+                    style={{ marginRight: 0 }}
                   />
                 ))}
                 {Array.from({ length: fillCount }).map((_, i) => (
-                  <View key={`pad_${i}`} style={{ width: cardW, marginRight: spacing.md }} />
+                  <View key={`pad_${i}`} style={{ width: cardW }} />
                 ))}
               </View>
             );

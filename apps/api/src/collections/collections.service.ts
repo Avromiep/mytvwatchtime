@@ -13,7 +13,7 @@ export class CollectionsService {
     private readonly events: EventEmitter2,
     private readonly redis: RedisService,
     private readonly discovery: DiscoveryService,
-  ) { }
+  ) {}
 
   /**
    * Watch-next / upcoming caches are language-suffixed per user
@@ -39,8 +39,11 @@ export class CollectionsService {
   async addWatchlist(userId: string, mediaId: string) {
     const media = await this.prisma.mediaItem.findUnique({ where: { id: mediaId } });
     if (!media) throw new NotFoundException('Media not found');
-    await this.prisma.watchlistItem
-      .upsert({ where: { userId_mediaId: { userId, mediaId } }, create: { userId, mediaId }, update: {} });
+    await this.prisma.watchlistItem.upsert({
+      where: { userId_mediaId: { userId, mediaId } },
+      create: { userId, mediaId },
+      update: {},
+    });
     await this.prisma.mediaItem.update({
       where: { id: mediaId },
       data: { addedCount: { increment: 1 } },
@@ -104,24 +107,47 @@ export class CollectionsService {
     return { trackingPaused: false };
   }
 
-  async watchlist(userId: string, type?: MediaType, page = 1, pageSize = 20, genre?: string) {
+  async watchlist(
+    userId: string,
+    type?: MediaType,
+    page = 1,
+    pageSize = 20,
+    genre?: string,
+    unwatchedOnly = false,
+  ) {
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.max(1, Math.min(pageSize, 100));
     const genreFilter = genre?.trim()
-      ? { genres: { some: { genre: { slug: { equals: genre.trim(), mode: 'insensitive' as const } } } } }
+      ? {
+          genres: {
+            some: { genre: { slug: { equals: genre.trim(), mode: 'insensitive' as const } } },
+          },
+        }
       : {};
-    const mediaWhere = { ...(type ? { type } : {}), ...genreFilter };
+    const mediaWhere = {
+      ...(type ? { type } : {}),
+      ...genreFilter,
+      ...(unwatchedOnly && type === MediaType.MOVIE
+        ? { movieStatuses: { none: { userId, watched: true } } }
+        : {}),
+    };
     const where = { userId, ...(Object.keys(mediaWhere).length ? { media: mediaWhere } : {}) };
     const [rows, total] = await Promise.all([
       this.prisma.watchlistItem.findMany({
         where,
-        skip: (page - 1) * pageSize,
-        take: pageSize,
+        skip: (safePage - 1) * safePageSize,
+        take: safePageSize,
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.watchlistItem.count({ where }),
     ]);
-    // Lite cards: clients only render poster/title/progress, even at pageSize=500.
-    const items = await this.discovery.fetchCardDtos(rows.map((r) => r.mediaId), userId, pageSize);
-    return paginate(items, page, pageSize, total);
+    // Lite cards: clients only render poster/title/progress.
+    const items = await this.discovery.fetchCardDtos(
+      rows.map((r) => r.mediaId),
+      userId,
+      safePageSize,
+    );
+    return paginate(items, safePage, safePageSize, total);
   }
 
   // ---------------- Favorites ----------------
@@ -145,21 +171,31 @@ export class CollectionsService {
   }
 
   async favorites(userId: string, type: MediaType, page = 1, pageSize = 20, genre?: string) {
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.max(1, Math.min(pageSize, 100));
     const genreFilter = genre?.trim()
-      ? { genres: { some: { genre: { slug: { equals: genre.trim(), mode: 'insensitive' as const } } } } }
+      ? {
+          genres: {
+            some: { genre: { slug: { equals: genre.trim(), mode: 'insensitive' as const } } },
+          },
+        }
       : {};
     const where = { userId, media: { type, ...genreFilter } };
     const [rows, total] = await Promise.all([
       this.prisma.favorite.findMany({
         where,
-        skip: (page - 1) * pageSize,
-        take: pageSize,
+        skip: (safePage - 1) * safePageSize,
+        take: safePageSize,
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.favorite.count({ where }),
     ]);
-    // Lite cards: clients only render poster/title/progress, even at pageSize=500.
-    const items = await this.discovery.fetchCardDtos(rows.map((r) => r.mediaId), userId, pageSize);
-    return paginate(items, page, pageSize, total);
+    // Lite cards: clients only render poster/title/progress.
+    const items = await this.discovery.fetchCardDtos(
+      rows.map((r) => r.mediaId),
+      userId,
+      safePageSize,
+    );
+    return paginate(items, safePage, safePageSize, total);
   }
 }

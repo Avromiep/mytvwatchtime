@@ -5,6 +5,9 @@ import {
   MediaType,
   UpcomingBucket,
   WatchNextBucket,
+  type ShowProgressItemDto,
+  type ShowProgressSection,
+  type ShowProgressSummaryDto,
   type UpcomingGroupDto,
 } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -18,6 +21,9 @@ import { pastBucket } from './lib/past-buckets';
 
 /** Max items returned in the "Haven't watched for a while" (NOT_RECENTLY) rail. */
 const NOT_RECENTLY_LIMIT = 10;
+
+/** Initial Watch Next slice. Remaining cards page through the shared bucket endpoint. */
+const WATCH_NEXT_LIMIT = 20;
 
 /** Initial "Start watching" (START_WATCHING) slice — the rest pages via /me/watch-next/bucket. */
 const START_WATCHING_LIMIT = 10;
@@ -40,11 +46,59 @@ const WATCH_NEXT_CACHE_TTL_S = 300;
 
 @Injectable()
 export class LibraryService {
+  /** Coalesce simultaneous cold-cache requests inside one API process. */
+  private readonly cacheInflight = new Map<string, Promise<unknown>>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly meta: MediaMetadataService,
   ) {}
+
+  private async cached<T>(key: string, ttlSeconds: number, load: () => Promise<T>): Promise<T> {
+    const cached = await this.redis.get<T>(key);
+    if (cached) return cached;
+
+    const running = this.cacheInflight.get(key) as Promise<T> | undefined;
+    if (running) return running;
+
+    const work = (async () => {
+      // A sibling request may have filled Redis between the first lookup and
+      // registration in the local in-flight map.
+      const second = await this.redis.get<T>(key);
+      if (second) return second;
+
+      // Also coalesce across API replicas. A waiter briefly polls for the winner's
+      // value, then falls back to its own computation if Redis is degraded or the
+      // lock holder dies; the short lock TTL prevents permanent stalls.
+      const client = (this.redis as any).client;
+      const lockKey = `LOCK:library-cache:${key}`;
+      const token = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
+      const ownsLock = client?.set
+        ? (await client.set(lockKey, token, 'PX', 30_000, 'NX').catch(() => null)) === 'OK'
+        : false;
+      if (client?.set && !ownsLock) {
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          const filled = await this.redis.get<T>(key);
+          if (filled) return filled;
+        }
+      }
+
+      try {
+        const value = await load();
+        await this.redis.set(key, value, ttlSeconds);
+        return value;
+      } finally {
+        if (ownsLock && client?.eval) {
+          const release = `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end`;
+          await client.eval(release, 1, lockKey, token).catch(() => undefined);
+        }
+      }
+    })().finally(() => this.cacheInflight.delete(key));
+    this.cacheInflight.set(key, work);
+    return work;
+  }
 
   /**
    * Localize media title/poster/backdrop fields on a list of result items in the
@@ -110,8 +164,8 @@ export class LibraryService {
    * Full watch-list computation (uncapped rails), cached per user+lang for 5 min.
    * Both watchNext (capped presentation payload) and watchNextBucket (per-rail
    * pagination for the "See more" buttons) derive from this one computation.
-   * Key carries a v2 infix AFTER the userId (the cached shape changed from
-   * {items} to per-bucket arrays) — it must stay inside the
+   * Key carries a v3 infix AFTER the userId (all three rails are now pageable and
+   * the old 500-show computation cap was removed). The key must stay inside the
    * `watchnext:{userId}:*` invalidation pattern shared by tracking/collections/
    * import/onboarding, or removed/paused shows linger until the TTL. Freshness
    * on user actions (mark watched, watchlist add/pause/remove, import) comes
@@ -119,59 +173,57 @@ export class LibraryService {
    * need no invalidation because the language is part of the key.
    */
   private async computeWatchNext(userId: string) {
-    const cacheKey = `watchnext:${userId}:v2:${currentLanguage()}`;
-    const cached = await this.redis.get<any>(cacheKey);
-    if (cached) return cached;
-
-    // Shows the user has started watching (has user_show_status). Dropped shows
-    // (removed from the watchlist) are hidden from watch-next even though their
-    // watch history is kept. Paused shows (tracking paused) are hidden the same way.
-    const statuses = await this.prisma.userShowStatus.findMany({
-      where: { userId, dropped: false, pausedAt: null },
-      include: { media: { include: { show: true } } },
-      orderBy: { lastWatchedAt: 'desc' },
-      take: 500,
-    });
-
-    // Watchlist shows that DON'T have a user_show_status yet (never watched).
-    // take 500 (not a presentation cap): this is the START_WATCHING pool — the
-    // rail is capped at 10 in the payload and pages via /me/watch-next/bucket.
-    const statusMediaIds = new Set(statuses.map((s) => s.mediaId));
-    const [watchlistShows, watchlistIdsRaw] = await Promise.all([
-      this.prisma.watchlistItem.findMany({
-        where: {
-          userId,
-          media: { type: 'SHOW', showStatuses: { none: { userId, pausedAt: { not: null } } } },
-          ...(statusMediaIds.size ? { mediaId: { notIn: [...statusMediaIds] } } : {}),
-        },
+    const cacheKey = `watchnext:${userId}:v3:${currentLanguage()}`;
+    return this.cached(cacheKey, WATCH_NEXT_CACHE_TTL_S, async () => {
+      // Shows the user has started watching (has user_show_status). Dropped shows
+      // (removed from the watchlist) are hidden from watch-next even though their
+      // watch history is kept. Paused shows (tracking paused) are hidden the same way.
+      const statuses = await this.prisma.userShowStatus.findMany({
+        where: { userId, dropped: false, pausedAt: null },
         include: { media: { include: { show: true } } },
-        orderBy: { createdAt: 'desc' },
-        take: 500,
-      }),
-      // Ids of ALL watchlisted shows: a show that has a status row with watchedCount 0
-      // (every episode unmarked after watching, or import artifact) AND is in the
-      // watchlist must still be treated as watchlist-only — otherwise it vanished
-      // from watch-next entirely (neither "started" nor "start watching").
-      this.prisma.watchlistItem.findMany({
-        where: { userId, media: { type: 'SHOW' } },
-        select: { mediaId: true },
-      }),
-    ]);
-    const watchlistIds = new Set(watchlistIdsRaw.map((w) => w.mediaId));
+        orderBy: { lastWatchedAt: 'desc' },
+      });
 
-    // Fallback: shows the user has watched episodes for but missing from user_show_status
-    // (e.g. import didn't rebuild statuses, or status was lost)
-    const existingMediaIds = new Set([...statusMediaIds, ...watchlistShows.map((w) => w.mediaId)]);
-    // Media ids of dropped or paused shows: the fallback watched-episodes query
-    // below must NOT resurrect them into watch-next.
-    const excludedRows = await this.prisma.userShowStatus.findMany({
-      where: { userId, OR: [{ dropped: true }, { pausedAt: { not: null } }] },
-      select: { mediaId: true },
-    });
-    const excludedMediaIds = new Set(excludedRows.map((r) => r.mediaId));
-    const watchedShowsRaw = await this.prisma.$queryRaw<
-      Array<{ mediaId: string; watchedCount: number; lastWatchedAt: Date | null }>
-    >`
+      // Watchlist shows that DON'T have a user_show_status yet (never watched).
+      // The full identity pool is retained server-side; only bounded pages are sent.
+      const statusMediaIds = new Set(statuses.map((s) => s.mediaId));
+      const [watchlistShows, watchlistIdsRaw] = await Promise.all([
+        this.prisma.watchlistItem.findMany({
+          where: {
+            userId,
+            media: { type: 'SHOW', showStatuses: { none: { userId, pausedAt: { not: null } } } },
+            ...(statusMediaIds.size ? { mediaId: { notIn: [...statusMediaIds] } } : {}),
+          },
+          include: { media: { include: { show: true } } },
+          orderBy: { createdAt: 'desc' },
+        }),
+        // Ids of ALL watchlisted shows: a show that has a status row with watchedCount 0
+        // (every episode unmarked after watching, or import artifact) AND is in the
+        // watchlist must still be treated as watchlist-only — otherwise it vanished
+        // from watch-next entirely (neither "started" nor "start watching").
+        this.prisma.watchlistItem.findMany({
+          where: { userId, media: { type: 'SHOW' } },
+          select: { mediaId: true },
+        }),
+      ]);
+      const watchlistIds = new Set(watchlistIdsRaw.map((w) => w.mediaId));
+
+      // Fallback: shows the user has watched episodes for but missing from user_show_status
+      // (e.g. import didn't rebuild statuses, or status was lost)
+      const existingMediaIds = new Set([
+        ...statusMediaIds,
+        ...watchlistShows.map((w) => w.mediaId),
+      ]);
+      // Media ids of dropped or paused shows: the fallback watched-episodes query
+      // below must NOT resurrect them into watch-next.
+      const excludedRows = await this.prisma.userShowStatus.findMany({
+        where: { userId, OR: [{ dropped: true }, { pausedAt: { not: null } }] },
+        select: { mediaId: true },
+      });
+      const excludedMediaIds = new Set(excludedRows.map((r) => r.mediaId));
+      const watchedShowsRaw = await this.prisma.$queryRaw<
+        Array<{ mediaId: string; watchedCount: number; lastWatchedAt: Date | null }>
+      >`
       SELECT sh.media_id AS "mediaId", COUNT(ues.id)::int AS "watchedCount", MAX(ues.watched_at) AS "lastWatchedAt"
       FROM user_episode_status ues
       JOIN episodes e ON ues.episode_id = e.id
@@ -182,71 +234,71 @@ export class LibraryService {
         AND s.is_special = false
       GROUP BY sh.media_id
     `;
-    const missingShowIds = watchedShowsRaw
-      .filter((r) => !existingMediaIds.has(r.mediaId) && !excludedMediaIds.has(r.mediaId))
-      .map((r) => r.mediaId);
-    const missingShows = missingShowIds.length
-      ? await this.prisma.mediaItem.findMany({
-          where: { id: { in: missingShowIds }, type: 'SHOW' },
-          include: { show: true },
-        })
-      : [];
-    const watchedMap = new Map(watchedShowsRaw.map((r) => [r.mediaId, r]));
+      const missingShowIds = watchedShowsRaw
+        .filter((r) => !existingMediaIds.has(r.mediaId) && !excludedMediaIds.has(r.mediaId))
+        .map((r) => r.mediaId);
+      const missingShows = missingShowIds.length
+        ? await this.prisma.mediaItem.findMany({
+            where: { id: { in: missingShowIds }, type: 'SHOW' },
+            include: { show: true },
+          })
+        : [];
+      const watchedMap = new Map(watchedShowsRaw.map((r) => [r.mediaId, r]));
 
-    // Merge all sources — correct stale userShowStatus counts using actual userEpisodeStatus data
-    const allStatuses: any[] = [
-      ...statuses.map((s) => ({
-        ...s,
-        watchedCount: Math.max(s.watchedCount ?? 0, watchedMap.get(s.mediaId)?.watchedCount ?? 0),
-        lastWatchedAt: s.lastWatchedAt ?? watchedMap.get(s.mediaId)?.lastWatchedAt ?? null,
-        // Status-row shows with zero watched episodes still belong in Start Watching
-        // when they're watchlisted (e.g. user unmarked every episode).
-        isWatchlistOnly:
-          watchlistIds.has(s.mediaId) &&
-          Math.max(s.watchedCount ?? 0, watchedMap.get(s.mediaId)?.watchedCount ?? 0) === 0,
-      })),
-      ...watchlistShows.map((w) => ({
-        userId,
-        mediaId: w.mediaId,
-        media: w.media,
-        watchedCount: 0,
-        totalCount: 0,
-        lastWatchedAt: null,
-        isWatchlistOnly: true,
-      })),
-      ...missingShows.map((m) => ({
-        userId,
-        mediaId: m.id,
-        media: m,
-        watchedCount: watchedMap.get(m.id)?.watchedCount ?? 0,
-        totalCount: 0,
-        lastWatchedAt: watchedMap.get(m.id)?.lastWatchedAt ?? null,
-        isWatchlistOnly: false,
-        fromEpisodeStatus: true,
-      })),
-    ];
+      // Merge all sources — correct stale userShowStatus counts using actual userEpisodeStatus data
+      const allStatuses: any[] = [
+        ...statuses.map((s) => ({
+          ...s,
+          watchedCount: Math.max(s.watchedCount ?? 0, watchedMap.get(s.mediaId)?.watchedCount ?? 0),
+          lastWatchedAt: s.lastWatchedAt ?? watchedMap.get(s.mediaId)?.lastWatchedAt ?? null,
+          // Status-row shows with zero watched episodes still belong in Start Watching
+          // when they're watchlisted (e.g. user unmarked every episode).
+          isWatchlistOnly:
+            watchlistIds.has(s.mediaId) &&
+            Math.max(s.watchedCount ?? 0, watchedMap.get(s.mediaId)?.watchedCount ?? 0) === 0,
+        })),
+        ...watchlistShows.map((w) => ({
+          userId,
+          mediaId: w.mediaId,
+          media: w.media,
+          watchedCount: 0,
+          totalCount: 0,
+          lastWatchedAt: null,
+          isWatchlistOnly: true,
+        })),
+        ...missingShows.map((m) => ({
+          userId,
+          mediaId: m.id,
+          media: m,
+          watchedCount: watchedMap.get(m.id)?.watchedCount ?? 0,
+          totalCount: 0,
+          lastWatchedAt: watchedMap.get(m.id)?.lastWatchedAt ?? null,
+          isWatchlistOnly: false,
+          fromEpisodeStatus: true,
+        })),
+      ];
 
-    const now = new Date();
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    // Shows that can produce a card: started (has watched episodes) or watchlist-only.
-    // (Shows the user viewed but never interacted with are skipped — previously via
-    // `continue` in the loop, now filtered up-front so they don't bloat the queries.)
-    const candidates = allStatuses.filter((s) => s.isWatchlistOnly || (s.watchedCount ?? 0) > 0);
-    const candidateIds = candidates.map((s) => s.mediaId);
+      // Shows that can produce a card: started (has watched episodes) or watchlist-only.
+      // (Shows the user viewed but never interacted with are skipped — previously via
+      // `continue` in the loop, now filtered up-front so they don't bloat the queries.)
+      const candidates = allStatuses.filter((s) => s.isWatchlistOnly || (s.watchedCount ?? 0) > 0);
+      const candidateIds = candidates.map((s) => s.mediaId);
 
-    // Batched episode lookups — one round trip each instead of two queries PER SHOW
-    // (previously ~1000 sequential queries for 500 tracked shows → multi-second loads).
-    const nextByMedia = new Map<string, any[]>();
-    const totalByMedia = new Map<string, number>();
-    if (candidateIds.length) {
-      // Next 2 unwatched AIRED episodes per show via a window function.
-      // Episodes with no air date are treated as UNAIRED (excluded).
-      // rn <= 2 so we also get the FOLLOWING episode → nextEpisode, used by the client
-      // to optimistically swap the Watch-Next card to the next episode on mark-watched.
-      const nextRows = await this.prisma.$queryRaw<
-        Array<{ mediaId: string; episodeId: string; rn: number }>
-      >`
+      // Batched episode lookups — one round trip each instead of two queries PER SHOW
+      // (previously ~1000 sequential queries for 500 tracked shows → multi-second loads).
+      const nextByMedia = new Map<string, any[]>();
+      const totalByMedia = new Map<string, number>();
+      if (candidateIds.length) {
+        // Next 2 unwatched AIRED episodes per show via a window function.
+        // Episodes with no air date are treated as UNAIRED (excluded).
+        // rn <= 2 so we also get the FOLLOWING episode → nextEpisode, used by the client
+        // to optimistically swap the Watch-Next card to the next episode on mark-watched.
+        const nextRows = await this.prisma.$queryRaw<
+          Array<{ mediaId: string; episodeId: string; rn: number }>
+        >`
         SELECT t."mediaId", t."episodeId", t.rn::int AS rn FROM (
           SELECT sh.media_id AS "mediaId", e.id AS "episodeId",
                  ROW_NUMBER() OVER (PARTITION BY sh.media_id ORDER BY s.number ASC, e.number ASC) AS rn
@@ -267,25 +319,25 @@ export class LibraryService {
         ORDER BY t."mediaId", t.rn
       `;
 
-      // Hydrate the picked episodes (one query) so mapEpisode/episodeLabel get full rows.
-      const episodeIds = nextRows.map((r) => r.episodeId);
-      const episodes = episodeIds.length
-        ? await this.prisma.episode.findMany({
-            where: { id: { in: episodeIds } },
-            include: { season: true },
-          })
-        : [];
-      const epById = new Map(episodes.map((e) => [e.id, e]));
-      for (const r of nextRows) {
-        const ep = epById.get(r.episodeId);
-        if (!ep) continue;
-        const arr = nextByMedia.get(r.mediaId) ?? [];
-        arr.push(ep);
-        nextByMedia.set(r.mediaId, arr);
-      }
+        // Hydrate the picked episodes (one query) so mapEpisode/episodeLabel get full rows.
+        const episodeIds = nextRows.map((r) => r.episodeId);
+        const episodes = episodeIds.length
+          ? await this.prisma.episode.findMany({
+              where: { id: { in: episodeIds } },
+              include: { season: true },
+            })
+          : [];
+        const epById = new Map(episodes.map((e) => [e.id, e]));
+        for (const r of nextRows) {
+          const ep = epById.get(r.episodeId);
+          if (!ep) continue;
+          const arr = nextByMedia.get(r.mediaId) ?? [];
+          arr.push(ep);
+          nextByMedia.set(r.mediaId, arr);
+        }
 
-      // AIRED episode totals per show (null air date = unaired) — one round trip.
-      const totals = await this.prisma.$queryRaw<Array<{ mediaId: string; total: number }>>`
+        // AIRED episode totals per show (null air date = unaired) — one round trip.
+        const totals = await this.prisma.$queryRaw<Array<{ mediaId: string; total: number }>>`
         SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS total
         FROM shows sh
         JOIN seasons s ON s.show_id = sh.id
@@ -297,104 +349,102 @@ export class LibraryService {
           AND e.air_date <= ${now}
         GROUP BY sh.media_id
       `;
-      for (const t of totals) totalByMedia.set(t.mediaId, t.total);
-    }
-
-    const watchNext: any[] = [];
-    const startWatching: any[] = [];
-    const notRecently: any[] = [];
-
-    for (const status of candidates) {
-      // Next unwatched AIRED episode — handles ongoing shows where new seasons were
-      // added after the user finished watching.
-      const nextEpisodes = nextByMedia.get(status.mediaId) ?? [];
-      const next = nextEpisodes[0];
-      if (!next) continue;
-
-      const totalCount = totalByMedia.get(status.mediaId) ?? 0;
-
-      const realRemaining = Math.max(1, totalCount - (status.watchedCount ?? 0));
-      const card = {
-        showId: status.mediaId,
-        showTitle: status.media.title,
-        posterUrl: status.media.posterUrl,
-        backdropUrl: status.media.backdropUrl,
-        network: status.media.show?.network ?? null,
-        episode: mapEpisode(next, { watched: false }),
-        // Following unwatched episode, used by the client for the optimistic mark-watched swap.
-        // null when `next` is the last unwatched episode (show will finish when it's watched).
-        nextEpisode: nextEpisodes[1] ? mapEpisode(nextEpisodes[1], { watched: false }) : null,
-        remainingUnwatched: realRemaining,
-        label: this.episodeLabel(next, status.watchedCount ?? 0),
-        lastWatchedAt: status.lastWatchedAt,
-        progress: totalCount ? (status.watchedCount ?? 0) / totalCount : 0,
-        watchedCount: status.watchedCount ?? 0,
-        bucket: '' as WatchNextBucket,
-      };
-
-      const stale = !status.lastWatchedAt || status.lastWatchedAt < thirtyDaysAgo;
-      // If the next episode aired recently (new season just started), prioritize as WATCH_NEXT
-      // even if the user hasn't watched in a while — fresh content is always relevant
-      const nextAirDate = next.airDate ? new Date(next.airDate) : null;
-      const hasFreshContent = nextAirDate && nextAirDate > thirtyDaysAgo;
-      if (status.isWatchlistOnly) {
-        card.bucket = WatchNextBucket.START_WATCHING;
-        startWatching.push(card);
-      } else if (stale && (status.watchedCount ?? 0) > 0 && !hasFreshContent) {
-        card.bucket = WatchNextBucket.NOT_RECENTLY;
-        notRecently.push(card);
-      } else {
-        card.bucket = WatchNextBucket.WATCH_NEXT;
-        watchNext.push(card);
+        for (const t of totals) totalByMedia.set(t.mediaId, t.total);
       }
-    }
 
-    const history = await this.recentlyWatchedEpisodes(userId, WATCH_NEXT_HISTORY_LIMIT + 1);
-    const historyHasMore = history.length > WATCH_NEXT_HISTORY_LIMIT;
-    if (historyHasMore) history.length = WATCH_NEXT_HISTORY_LIMIT;
+      const watchNext: any[] = [];
+      const startWatching: any[] = [];
+      const notRecently: any[] = [];
 
-    watchNext.sort((a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0));
-    // Sort NOT_RECENTLY by engagement: most watched first, then most recent
-    notRecently.sort((a, b) => {
-      if (b.watchedCount !== a.watchedCount) return b.watchedCount - a.watchedCount;
-      return (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0);
+      for (const status of candidates) {
+        // Next unwatched AIRED episode — handles ongoing shows where new seasons were
+        // added after the user finished watching.
+        const nextEpisodes = nextByMedia.get(status.mediaId) ?? [];
+        const next = nextEpisodes[0];
+        if (!next) continue;
+
+        const totalCount = totalByMedia.get(status.mediaId) ?? 0;
+
+        const realRemaining = Math.max(1, totalCount - (status.watchedCount ?? 0));
+        const card = {
+          showId: status.mediaId,
+          showTitle: status.media.title,
+          posterUrl: status.media.posterUrl,
+          backdropUrl: status.media.backdropUrl,
+          network: status.media.show?.network ?? null,
+          episode: mapEpisode(next, { watched: false }),
+          // Following unwatched episode, used by the client for the optimistic mark-watched swap.
+          // null when `next` is the last unwatched episode (show will finish when it's watched).
+          nextEpisode: nextEpisodes[1] ? mapEpisode(nextEpisodes[1], { watched: false }) : null,
+          remainingUnwatched: realRemaining,
+          label: this.episodeLabel(next, status.watchedCount ?? 0),
+          lastWatchedAt: status.lastWatchedAt,
+          progress: totalCount ? (status.watchedCount ?? 0) / totalCount : 0,
+          watchedCount: status.watchedCount ?? 0,
+          bucket: '' as WatchNextBucket,
+        };
+
+        const stale = !status.lastWatchedAt || status.lastWatchedAt < thirtyDaysAgo;
+        // If the next episode aired recently (new season just started), prioritize as WATCH_NEXT
+        // even if the user hasn't watched in a while — fresh content is always relevant
+        const nextAirDate = next.airDate ? new Date(next.airDate) : null;
+        const hasFreshContent = nextAirDate && nextAirDate > thirtyDaysAgo;
+        if (status.isWatchlistOnly) {
+          card.bucket = WatchNextBucket.START_WATCHING;
+          startWatching.push(card);
+        } else if (stale && (status.watchedCount ?? 0) > 0 && !hasFreshContent) {
+          card.bucket = WatchNextBucket.NOT_RECENTLY;
+          notRecently.push(card);
+        } else {
+          card.bucket = WatchNextBucket.WATCH_NEXT;
+          watchNext.push(card);
+        }
+      }
+
+      const history = await this.recentlyWatchedEpisodes(userId, WATCH_NEXT_HISTORY_LIMIT + 1);
+      const historyHasMore = history.length > WATCH_NEXT_HISTORY_LIMIT;
+      if (historyHasMore) history.length = WATCH_NEXT_HISTORY_LIMIT;
+
+      watchNext.sort(
+        (a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0),
+      );
+      // Sort NOT_RECENTLY by engagement: most watched first, then most recent
+      notRecently.sort((a, b) => {
+        if (b.watchedCount !== a.watchedCount) return b.watchedCount - a.watchedCount;
+        return (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0);
+      });
+
+      // Cache raw uncapped rails. Localization is deliberately deferred until the
+      // bounded response slice is known; otherwise a cold request hydrates locale
+      // overrides for hundreds of off-screen cards.
+      return {
+        history,
+        historyHasMore,
+        watchNext,
+        startWatching,
+        notRecently,
+      };
     });
-
-    // Full (uncapped) rails — the presentation payload caps and watchNextBucket pages.
-    // localizeItems returns NEW item objects (episode localization mutates in place).
-    const [historyL, watchNextL, startWatchingL, notRecentlyL] = await Promise.all([
-      this.localizeItems(history, (i) => i.showId),
-      this.localizeItems(watchNext, (i) => i.showId),
-      this.localizeItems(startWatching, (i) => i.showId),
-      this.localizeItems(notRecently, (i) => i.showId),
-    ]);
-    const result = {
-      history: historyL,
-      historyHasMore,
-      watchNext: watchNextL,
-      startWatching: startWatchingL,
-      notRecently: notRecentlyL,
-    };
-    const allItems = [...historyL, ...watchNextL, ...startWatchingL, ...notRecentlyL];
-    await this.localizeEpisodeTitles(allItems);
-    await this.redis.set(cacheKey, result, WATCH_NEXT_CACHE_TTL_S);
-    return result;
   }
 
   /** Capped presentation payload for the Watch list tab (first page per rail). */
   async watchNext(userId: string) {
     const c = await this.computeWatchNext(userId);
+    let items = [
+      ...c.history,
+      ...c.watchNext.slice(0, WATCH_NEXT_LIMIT),
+      // "Haven't watched for a while" renders before "Start watching".
+      ...c.notRecently.slice(0, NOT_RECENTLY_LIMIT),
+      ...c.startWatching.slice(0, START_WATCHING_LIMIT),
+    ];
+    items = await this.localizeItems(items, (item) => item.showId);
+    await this.localizeEpisodeTitles(items);
     return {
-      items: [
-        ...c.history,
-        ...c.watchNext,
-        // "Haven't watched for a while" renders before "Start watching".
-        ...c.notRecently.slice(0, NOT_RECENTLY_LIMIT),
-        ...c.startWatching.slice(0, START_WATCHING_LIMIT),
-      ],
+      items,
       historyHasMore: c.historyHasMore,
       // Totals drive the per-section "See more" buttons (10-at-a-time paging).
       bucketTotals: {
+        watchNext: c.watchNext.length,
         notRecently: c.notRecently.length,
         startWatching: c.startWatching.length,
       },
@@ -402,19 +452,27 @@ export class LibraryService {
   }
 
   /**
-   * Offset pagination over a capped watch-list rail (START_WATCHING / NOT_RECENTLY)
+   * Offset pagination over a capped watch-list rail (WATCH_NEXT / START_WATCHING /
+   * NOT_RECENTLY)
    * for the section "See more" buttons — reads the same cached computation as
    * watchNext, so page fetches are cheap within the cache TTL window.
    */
   async watchNextBucket(
     userId: string,
-    bucket: 'START_WATCHING' | 'NOT_RECENTLY',
+    bucket: 'WATCH_NEXT' | 'START_WATCHING' | 'NOT_RECENTLY',
     offset = 0,
     limit = 10,
   ) {
     const c = await this.computeWatchNext(userId);
-    const full = bucket === 'START_WATCHING' ? c.startWatching : c.notRecently;
-    const items = full.slice(offset, offset + limit);
+    const full =
+      bucket === 'WATCH_NEXT'
+        ? c.watchNext
+        : bucket === 'START_WATCHING'
+          ? c.startWatching
+          : c.notRecently;
+    let items = full.slice(offset, offset + limit);
+    items = await this.localizeItems(items, (item) => item.showId);
+    await this.localizeEpisodeTitles(items);
     return {
       items,
       total: full.length,
@@ -635,62 +693,63 @@ export class LibraryService {
 
   async upcoming(userId: string) {
     const cacheKey = `upcoming:${userId}:${currentLanguage()}`;
-    const cached = await this.redis.get<any>(cacheKey);
-    if (cached) return cached;
+    return this.cached(cacheKey, 60, async () => {
+      const tracked = await this.trackedMediaIds(userId);
 
-    const tracked = await this.trackedMediaIds(userId);
+      // TVmaze enrichment is handled by a nightly cron job (NotificationScheduler.refreshAirtimes).
+      // This endpoint is a pure DB read — no external API calls.
 
-    // TVmaze enrichment is handled by a nightly cron job (NotificationScheduler.refreshAirtimes).
-    // This endpoint is a pure DB read — no external API calls.
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+      // Past side: newest 10 aired episodes (scroll-up history, granular buckets),
+      // paginated further via /me/upcoming/past. Future side unchanged.
+      const pastWhere = {
+        structureState: 'ACTIVE' as const,
+        airDate: { lt: today },
+        season: { show: { mediaId: { in: tracked } } },
+      };
+      const include = {
+        season: { include: { show: { include: { media: { include: { show: true } } } } } },
+      };
+      const [pastEpisodesWithExtra, futureEpisodes] = await Promise.all([
+        this.prisma.episode.findMany({
+          where: pastWhere,
+          include,
+          orderBy: [{ airDate: 'desc' }, { id: 'desc' }],
+          // One extra row answers hasMore without COUNT(*) across the complete
+          // historical episode footprint of every tracked show.
+          take: UPCOMING_PAST_PAGE_SIZE + 1,
+        }),
+        this.prisma.episode.findMany({
+          where: {
+            structureState: 'ACTIVE',
+            airDate: { gte: today },
+            season: { show: { mediaId: { in: tracked } } },
+          },
+          include,
+          orderBy: [{ airDate: 'asc' }, { season: { number: 'asc' } }, { number: 'asc' }],
+          take: 200,
+        }),
+      ]);
+      const pastHasMore = pastEpisodesWithExtra.length > UPCOMING_PAST_PAGE_SIZE;
+      const pastEpisodesDesc = pastEpisodesWithExtra.slice(0, UPCOMING_PAST_PAGE_SIZE);
 
-    // Past side: newest 10 aired episodes (scroll-up history, granular buckets),
-    // paginated further via /me/upcoming/past. Future side unchanged.
-    const pastWhere = {
-      structureState: 'ACTIVE' as const,
-      airDate: { lt: today },
-      season: { show: { mediaId: { in: tracked } } },
-    };
-    const include = {
-      season: { include: { show: { include: { media: { include: { show: true } } } } } },
-    };
-    const [pastEpisodesDesc, pastTotal, futureEpisodes] = await Promise.all([
-      this.prisma.episode.findMany({
-        where: pastWhere,
-        include,
-        orderBy: [{ airDate: 'desc' }, { id: 'desc' }],
-        take: UPCOMING_PAST_PAGE_SIZE,
-      }),
-      this.prisma.episode.count({ where: pastWhere }),
-      this.prisma.episode.findMany({
-        where: {
-          structureState: 'ACTIVE',
-          airDate: { gte: today },
-          season: { show: { mediaId: { in: tracked } } },
+      // Display order is chronological (oldest on top → future at the bottom).
+      const pastItems = await this.mapUpcomingItems([...pastEpisodesDesc].reverse());
+      const futureItems = await this.mapUpcomingItems(futureEpisodes);
+      const items = [...pastItems, ...futureItems];
+
+      const oldest = pastEpisodesDesc[pastEpisodesDesc.length - 1];
+      const result = {
+        groups: this.groupUpcoming(items),
+        past: {
+          hasMore: pastHasMore,
+          cursor: oldest ? { before: oldest.airDate!.toISOString(), beforeId: oldest.id } : null,
         },
-        include,
-        orderBy: [{ airDate: 'asc' }, { season: { number: 'asc' } }, { number: 'asc' }],
-        take: 200,
-      }),
-    ]);
-
-    // Display order is chronological (oldest on top → future at the bottom).
-    const pastItems = await this.mapUpcomingItems([...pastEpisodesDesc].reverse());
-    const futureItems = await this.mapUpcomingItems(futureEpisodes);
-    const items = [...pastItems, ...futureItems];
-
-    const oldest = pastEpisodesDesc[pastEpisodesDesc.length - 1];
-    const result = {
-      groups: this.groupUpcoming(items),
-      past: {
-        hasMore: pastTotal > pastEpisodesDesc.length,
-        cursor: oldest ? { before: oldest.airDate!.toISOString(), beforeId: oldest.id } : null,
-      },
-    };
-    await this.redis.set(cacheKey, result, 60);
-    return result;
+      };
+      return result;
+    });
   }
 
   /**
@@ -832,8 +891,8 @@ export class LibraryService {
     userId: string,
     opts: { mediaType?: MediaType; from?: string; to?: string; page?: number; pageSize?: number },
   ) {
-    const page = opts.page || 1;
-    const pageSize = opts.pageSize || 20;
+    const page = Math.max(1, opts.page || 1);
+    const pageSize = Math.max(1, Math.min(opts.pageSize || 20, 100));
     const where = {
       userId,
       ...(opts.mediaType ? { mediaType: opts.mediaType } : {}),
@@ -886,6 +945,46 @@ export class LibraryService {
     return paginate(items, page, pageSize, total);
   }
 
+  /** Distinct watched movies, paged from user_movie_status rather than replaying
+   * every watch_history event. Rewatches therefore never multiply library cards. */
+  async watchedMovies(userId: string, page = 1, pageSize = 24) {
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.max(1, Math.min(pageSize, 60));
+    const where = { userId, watched: true };
+    const [rows, total] = await Promise.all([
+      this.prisma.userMovieStatus.findMany({
+        where,
+        orderBy: [{ watchedAt: 'desc' }, { id: 'desc' }],
+        skip: (safePage - 1) * safePageSize,
+        take: safePageSize,
+        include: {
+          media: {
+            select: {
+              id: true,
+              title: true,
+              titles: true,
+              posterUrl: true,
+              posterUrls: true,
+              rating: true,
+              movie: { select: { releaseYear: true } },
+            },
+          },
+        },
+      }),
+      this.prisma.userMovieStatus.count({ where }),
+    ]);
+    const items = rows.map((row) => ({
+      id: row.media.id,
+      title: localized(row.media, 'titles', 'title') ?? row.media.title,
+      posterUrl: localized(row.media, 'posterUrls', 'posterUrl') ?? row.media.posterUrl,
+      rating: row.media.rating ?? null,
+      year: row.media.movie?.releaseYear ?? null,
+      watched: true as const,
+      progress: 1 as const,
+    }));
+    return paginate(items, safePage, safePageSize, total);
+  }
+
   // ---------------- helpers ----------------
   private async trackedMediaIds(userId: string): Promise<string[]> {
     // Dropped shows (removed from the watchlist) are excluded from upcoming even
@@ -907,6 +1006,158 @@ export class LibraryService {
       }),
     ]);
     return [...new Set([...statuses.map((s) => s.mediaId), ...watchlist.map((w) => w.mediaId)])];
+  }
+
+  /** User-scoped aired totals used by the paged My Shows API. Starting from the
+   * user's status rows prevents a catalog-wide episode aggregation. */
+  private showProgressCte(userId: string) {
+    return Prisma.sql`
+      WITH progress AS (
+        SELECT uss.media_id,
+               uss.watched_count,
+               uss.last_watched_at,
+               uss.paused_at,
+               COUNT(e.id) FILTER (
+                 WHERE s.is_special = false
+                   AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
+                   AND e.air_date IS NOT NULL
+                   AND e.air_date <= NOW()
+               )::int AS aired_total
+        FROM user_show_status uss
+        JOIN shows sh ON sh.media_id = uss.media_id
+        LEFT JOIN seasons s ON s.show_id = sh.id
+        LEFT JOIN episodes e ON e.season_id = s.id
+        WHERE uss.user_id = ${userId}
+          AND uss.dropped = false
+        GROUP BY uss.media_id, uss.watched_count, uss.last_watched_at, uss.paused_at
+      )
+    `;
+  }
+
+  async showsProgressSummary(userId: string): Promise<ShowProgressSummaryDto> {
+    const cacheKey = `showsprogress:${userId}:v4:${currentLanguage()}:summary`;
+    return this.cached(cacheKey, 120, async () => {
+      const rows = await this.prisma.$queryRaw<
+        Array<{ watching: number; notStarted: number; finished: number; paused: number }>
+      >`
+        ${this.showProgressCte(userId)}
+        SELECT
+          COUNT(*) FILTER (
+            WHERE paused_at IS NULL AND watched_count > 0
+              AND aired_total > 0 AND watched_count < aired_total
+          )::int AS watching,
+          COUNT(*) FILTER (
+            WHERE paused_at IS NULL AND aired_total > 0 AND watched_count >= aired_total
+          )::int AS finished,
+          COUNT(*) FILTER (WHERE paused_at IS NOT NULL)::int AS paused,
+          (
+            SELECT COUNT(*)::int
+            FROM watchlist_items wi
+            JOIN media_items mi ON mi.id = wi.media_id
+            WHERE wi.user_id = ${userId}
+              AND mi.type = 'SHOW'::"MediaType"
+              AND NOT EXISTS (
+                SELECT 1 FROM progress p
+                WHERE p.media_id = wi.media_id
+                  AND (
+                    p.paused_at IS NOT NULL OR
+                    (p.watched_count > 0 AND p.aired_total > 0)
+                  )
+              )
+          ) AS "notStarted"
+        FROM progress
+      `;
+      const row = rows[0];
+      return {
+        watching: Number(row?.watching ?? 0),
+        notStarted: Number(row?.notStarted ?? 0),
+        finished: Number(row?.finished ?? 0),
+        paused: Number(row?.paused ?? 0),
+      };
+    });
+  }
+
+  async showsProgressPage(userId: string, section: ShowProgressSection, page = 1, pageSize = 24) {
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.max(1, Math.min(pageSize, 60));
+    const cacheKey = `showsprogress:${userId}:v4:${currentLanguage()}:${section}:${safePage}:${safePageSize}`;
+    return this.cached(cacheKey, 120, async () => {
+      type Row = { mediaId: string; watchedCount: number; airedTotal: number };
+      const skip = (safePage - 1) * safePageSize;
+      let rows: Row[];
+
+      if (section === 'notStarted') {
+        rows = await this.prisma.$queryRaw<Row[]>`
+          ${this.showProgressCte(userId)}
+          SELECT wi.media_id AS "mediaId", 0::int AS "watchedCount", 0::int AS "airedTotal"
+          FROM watchlist_items wi
+          JOIN media_items mi ON mi.id = wi.media_id
+          WHERE wi.user_id = ${userId}
+            AND mi.type = 'SHOW'::"MediaType"
+            AND NOT EXISTS (
+              SELECT 1 FROM progress p
+              WHERE p.media_id = wi.media_id
+                AND (
+                  p.paused_at IS NOT NULL OR
+                  (p.watched_count > 0 AND p.aired_total > 0)
+                )
+            )
+          ORDER BY wi.created_at DESC, wi.id DESC
+          OFFSET ${skip} LIMIT ${safePageSize}
+        `;
+      } else {
+        const filter =
+          section === 'watching'
+            ? Prisma.sql`paused_at IS NULL AND watched_count > 0 AND aired_total > 0 AND watched_count < aired_total`
+            : section === 'finished'
+              ? Prisma.sql`paused_at IS NULL AND aired_total > 0 AND watched_count >= aired_total`
+              : Prisma.sql`paused_at IS NOT NULL`;
+        const order =
+          section === 'paused'
+            ? Prisma.sql`paused_at DESC NULLS LAST, media_id`
+            : Prisma.sql`last_watched_at DESC NULLS LAST, media_id`;
+        rows = await this.prisma.$queryRaw<Row[]>`
+          ${this.showProgressCte(userId)}
+          SELECT media_id AS "mediaId", watched_count AS "watchedCount", aired_total AS "airedTotal"
+          FROM progress
+          WHERE ${filter}
+          ORDER BY ${order}
+          OFFSET ${skip} LIMIT ${safePageSize}
+        `;
+      }
+
+      const mediaIds = rows.map((r) => r.mediaId);
+      const media = mediaIds.length
+        ? await this.prisma.mediaItem.findMany({
+            where: { id: { in: mediaIds } },
+            select: {
+              id: true,
+              title: true,
+              posterUrl: true,
+              rating: true,
+              show: { select: { yearStart: true } },
+            },
+          })
+        : [];
+      const byId = new Map(media.map((m) => [m.id, m]));
+      const items = rows
+        .map((row): ShowProgressItemDto | null => {
+          const m = byId.get(row.mediaId);
+          if (!m) return null;
+          return {
+            id: m.id,
+            title: m.title,
+            posterUrl: m.posterUrl,
+            rating: m.rating ?? null,
+            year: m.show?.yearStart ?? null,
+            progress: row.airedTotal > 0 ? Math.min(1, row.watchedCount / row.airedTotal) : 0,
+          };
+        })
+        .filter((item): item is ShowProgressItemDto => item !== null);
+      const localizedItems = await this.localizeItems(items, (item) => item.id);
+      const summary = await this.showsProgressSummary(userId);
+      return paginate(localizedItems, safePage, safePageSize, summary[section]);
+    });
   }
 
   async showsByStatus(userId: string) {

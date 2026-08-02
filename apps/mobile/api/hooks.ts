@@ -19,6 +19,7 @@ import type {
   GenreFilterDto,
   MediaCardDto,
   MediaCardLiteDto,
+  MovieLibraryItemDto,
   HistoryItemDto,
   ImportExtraSummaryDto,
   LeaderboardPageDto,
@@ -34,6 +35,9 @@ import type {
   PersonCreditsPage,
   PersonDetailResponse,
   ShowDetailDto,
+  ShowProgressPageDto,
+  ShowProgressSection,
+  ShowProgressSummaryDto,
   ShowStatsDto,
   StatsSummaryDto,
   UpdateCommentDto,
@@ -120,14 +124,14 @@ export const usePausedWatchNext = () =>
     queryFn: () => api.get<{ items: WatchNextItemDto[] }>('/me/watch-next/paused'),
   });
 /**
- * "See more" paging for the capped watch-list rails (START_WATCHING / NOT_RECENTLY):
- * the first 10 ship inside the main watch-next payload, so pages start at offset 10.
+ * "See more" paging for the capped watch-list rails. Watch Next ships 20 initially;
+ * Start Watching and Not Recently ship 10.
  * Same contract as useWatchNextHistory: `enabled: false` — nothing loads on mount;
  * the "See more" button's fetchNextPage fetches pages even while disabled. The
- * WatchList screen previously mounted TWO of these eagerly, doubling the requests
- * (and server recomputes) on every Shows-tab open.
+ * Keeping these disabled prevents three eager requests (and server recomputes)
+ * whenever the Shows tab opens.
  */
-export const useWatchNextBucket = (bucket: 'START_WATCHING' | 'NOT_RECENTLY') =>
+export const useWatchNextBucket = (bucket: 'WATCH_NEXT' | 'START_WATCHING' | 'NOT_RECENTLY') =>
   useInfiniteQuery({
     queryKey: ['watchNext', 'bucket', bucket] as const,
     queryFn: ({ pageParam }) =>
@@ -136,7 +140,7 @@ export const useWatchNextBucket = (bucket: 'START_WATCHING' | 'NOT_RECENTLY') =>
         offset: pageParam,
         limit: 10,
       }),
-    initialPageParam: 10,
+    initialPageParam: bucket === 'WATCH_NEXT' ? 20 : 10,
     getNextPageParam: (last) => (last.hasMore ? last.nextOffset : undefined),
     enabled: false,
   });
@@ -180,7 +184,7 @@ export const useUpcomingPast = (initialCursor: UpcomingPastCursor | null) =>
 export const useHistory = (p: { mediaType?: MediaType; page?: number }) =>
   useQuery({
     queryKey: qk.history(p),
-    queryFn: () => api.get<Paginated<HistoryItemDto>>('/me/history', { ...p, pageSize: 500 }),
+    queryFn: () => api.get<Paginated<HistoryItemDto>>('/me/history', { ...p, pageSize: 50 }),
   });
 /**
  * Older watch-list history pages for the scroll-up rail. Same contract as
@@ -464,7 +468,7 @@ export const useTopRatedMoviesBrowse = (filters?: ExploreFilters) =>
 export const useWatchlist = (type?: MediaType) =>
   useQuery({
     queryKey: qk.watchlist(type),
-    queryFn: () => api.get<Paginated<MediaCardLiteDto>>('/me/watchlist', { type, pageSize: 500 }),
+    queryFn: () => api.get<Paginated<MediaCardLiteDto>>('/me/watchlist', { type, pageSize: 20 }),
   });
 export const useFavorites = (type: MediaType) =>
   useQuery({
@@ -472,46 +476,110 @@ export const useFavorites = (type: MediaType) =>
     queryFn: () =>
       api.get<Paginated<MediaCardLiteDto>>(
         type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies',
-        { pageSize: 500 },
+        { pageSize: 20 },
       ),
   });
 
 /**
- * Fetch EVERY page of a paginated endpoint (500/page chunks), auto-chaining until the
- * collection is complete — for screens that must show exactly what the user has
- * (Movies tab, see-all grids). Keys stay under the standard prefixes so the existing
- * mutation invalidations (['watchlist'] / ['favorites'] / ['history']) cover them.
+ * Bounded collection pages. Additional pages load only after a visible screen asks
+ * for them; large libraries no longer download hundreds of cards on mount.
  */
-function useAllPages<T>(key: readonly unknown[], path: string, params: Record<string, unknown>) {
+function useCollectionPages<T>(
+  key: readonly unknown[],
+  path: string,
+  params: Record<string, unknown>,
+  enabled = true,
+  pageSize = 60,
+) {
   const query = useInfiniteQuery({
-    queryKey: key,
+    // Page size is part of the identity. This prevents a hot reload or another
+    // screen from combining pages that were fetched with different boundaries.
+    queryKey: [...key, pageSize] as const,
     queryFn: ({ pageParam = 1 }) =>
-      api.get<Paginated<T>>(path, { ...params, page: pageParam, pageSize: 500 }),
+      api.get<Paginated<T>>(path, { ...params, page: pageParam, pageSize }),
     initialPageParam: 1,
     getNextPageParam: (last) => (last?.hasMore ? last.page + 1 : undefined),
     placeholderData: (prev) => prev,
+    enabled,
+    staleTime: 2 * 60 * 1000,
+    retry: (failureCount, error) =>
+      failureCount < 1 &&
+      !(error instanceof HttpError && error.status >= 400 && error.status < 500),
   });
-  const { hasNextPage, isFetchingNextPage, fetchNextPage, data } = query;
-  useEffect(() => {
-    if (hasNextPage && !isFetchingNextPage) fetchNextPage();
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage, data]);
-  const items = useMemo(() => (data?.pages ?? []).flatMap((p) => p.items ?? []), [data]);
-  return { ...query, items, fullyLoaded: !hasNextPage };
+  const items = useMemo(() => {
+    const seen = new Set<string>();
+    return (query.data?.pages ?? []).flatMap((page) =>
+      (page.items ?? []).filter((item) => {
+        const id = (item as { id?: unknown } | null)?.id;
+        if (typeof id !== 'string') return true;
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      }),
+    );
+  }, [query.data]);
+  return { ...query, items, total: query.data?.pages[0]?.total ?? 0 };
 }
 
-export const useAllWatchlist = (type?: MediaType, genre?: string | null) =>
-  useAllPages<MediaCardLiteDto>(['watchlist', 'all', type, genre ?? ''] as const, '/me/watchlist', {
-    ...(type ? { type } : {}),
-    ...(genre ? { genre } : {}),
-  });
-export const useAllFavorites = (type: MediaType, genre?: string | null) =>
-  useAllPages<MediaCardLiteDto>(
-    ['favorites', 'all', type, genre ?? ''] as const,
+export const useWatchlistPages = (
+  type?: MediaType,
+  genre?: string | null,
+  enabled = true,
+  unwatchedOnly = false,
+  pageSize = 60,
+) =>
+  useCollectionPages<MediaCardLiteDto>(
+    ['watchlist', 'paged', type, genre ?? '', unwatchedOnly] as const,
+    '/me/watchlist',
+    {
+      ...(type ? { type } : {}),
+      ...(genre ? { genre } : {}),
+      ...(unwatchedOnly ? { unwatchedOnly: true } : {}),
+    },
+    enabled,
+    pageSize,
+  );
+export const useFavoritePages = (
+  type: MediaType,
+  genre?: string | null,
+  enabled = true,
+  pageSize = 60,
+) =>
+  useCollectionPages<MediaCardLiteDto>(
+    ['favorites', 'paged', type, genre ?? ''] as const,
     type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies',
     genre ? { genre } : {},
+    enabled,
+    pageSize,
   );
-export const useAllHistory = (p: { mediaType?: MediaType }) =>
-  useAllPages<HistoryItemDto>(['history', 'all', p.mediaType] as const, '/me/history', p);
+export const useWatchedMoviePages = (enabled = true, pageSize = 60) =>
+  useCollectionPages<MovieLibraryItemDto>(
+    ['movies', 'watched', 'paged'] as const,
+    '/me/movies/watched',
+    {},
+    enabled,
+    pageSize,
+  );
+
+export const useShowProgressSummary = () =>
+  useQuery({
+    queryKey: ['showsByStatus', 'summary'] as const,
+    queryFn: () => api.get<ShowProgressSummaryDto>('/me/shows/progress/summary'),
+  });
+
+export const useShowProgressPages = (section: ShowProgressSection, enabled: boolean) =>
+  useInfiniteQuery({
+    queryKey: ['showsByStatus', 'paged', section] as const,
+    queryFn: ({ pageParam = 1 }) =>
+      api.get<ShowProgressPageDto>('/me/shows/progress/page', {
+        section,
+        page: pageParam,
+        pageSize: 24,
+      }),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
+    enabled,
+  });
 // Poll while the server reports stats are being recomputed (SWR stale flag); stop once fresh.
 const statsRefetchInterval = (query: any) => (query.state.data?.stale ? 2500 : false);
 
@@ -949,6 +1017,7 @@ export const useMarkEpisodeWatched = () => {
       qc.invalidateQueries({ queryKey: qk.episode(vars.id) });
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['show'] });
+      qc.invalidateQueries({ queryKey: ['showsByStatus'] });
       // First watches seed the for-you ranking — refresh the Explore carousel.
       qc.invalidateQueries({ queryKey: qk.discover() });
       invalidateLeaderboardSoon(qc);
@@ -994,6 +1063,7 @@ export const useMarkSeasonWatched = () => {
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['show'] });
+      qc.invalidateQueries({ queryKey: ['showsByStatus'] });
       // A season mark is a bulk watch action — the Shows tab and leaderboard change too.
       qc.invalidateQueries({ queryKey: ['watchNext'] });
       qc.invalidateQueries({ queryKey: ['upcoming'] });
@@ -1581,6 +1651,8 @@ export const useMarkMovieWatched = () => {
       qc.invalidateQueries({ queryKey: ['movie'] });
       qc.invalidateQueries({ queryKey: ['watchlist'] });
       qc.invalidateQueries({ queryKey: ['history'] });
+      qc.invalidateQueries({ queryKey: ['movies', 'watched'] });
+      qc.invalidateQueries({ queryKey: ['favorites'] });
       invalidateLeaderboardSoon(qc);
     },
   });
@@ -1623,6 +1695,7 @@ export const useReassignMedia = () => {
       qc.invalidateQueries({ queryKey: qk.movie(targetMediaId) });
       qc.invalidateQueries({ queryKey: ['watchlist'] });
       qc.invalidateQueries({ queryKey: ['history'] });
+      qc.invalidateQueries({ queryKey: ['movies', 'watched'] });
       qc.invalidateQueries({ queryKey: ['favorites'] });
       qc.invalidateQueries({ queryKey: ['myLists'] });
     },
@@ -1646,17 +1719,20 @@ export const useToggleWatchlist = () => {
       const evict = (arr: any[]) => (arr ?? []).filter((i: any) => i.id !== id);
       const prevByStatus = on
         ? undefined
-        : patchPrefix(qc, 'showsByStatus', (d: any) =>
-            d
-              ? {
-                  ...d,
-                  notStarted: evict(d.notStarted),
-                  watching: evict(d.watching),
-                  finished: evict(d.finished),
-                  paused: evict(d.paused),
-                }
-              : d,
-          );
+        : patchPrefix(qc, 'showsByStatus', (d: any) => {
+            // Legacy complete payload has four arrays; new bounded queries are
+            // InfiniteData pages (summary counts are left for the refetch).
+            if (Array.isArray(d?.notStarted)) {
+              return {
+                ...d,
+                notStarted: evict(d.notStarted),
+                watching: evict(d.watching),
+                finished: evict(d.finished),
+                paused: evict(d.paused),
+              };
+            }
+            return filterItemsDeep(d, (it: any) => it.id !== id);
+          });
       return { prevShow, prevWatchlist, prevByStatus };
     },
     onError: (_e, vars, ctx) => {
@@ -1872,6 +1948,8 @@ export const useApplyOnboarding = () => {
       qc.invalidateQueries({ queryKey: ['movie'] });
       qc.invalidateQueries({ queryKey: ['watchlist'] });
       qc.invalidateQueries({ queryKey: ['history'] });
+      qc.invalidateQueries({ queryKey: ['showsByStatus'] });
+      qc.invalidateQueries({ queryKey: ['movies', 'watched'] });
       qc.invalidateQueries({ queryKey: qk.me });
       qc.invalidateQueries({ queryKey: qk.feed });
       refreshWidgets();
@@ -1981,7 +2059,16 @@ export const useConfirmImport = () => {
         `/imports/${id}/confirm`,
         {},
       ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['import'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['import'] });
+      qc.invalidateQueries({ queryKey: ['watchNext'] });
+      qc.invalidateQueries({ queryKey: ['upcoming'] });
+      qc.invalidateQueries({ queryKey: ['showsByStatus'] });
+      qc.invalidateQueries({ queryKey: ['movies', 'watched'] });
+      qc.invalidateQueries({ queryKey: ['watchlist'] });
+      qc.invalidateQueries({ queryKey: ['favorites'] });
+      qc.invalidateQueries({ queryKey: ['history'] });
+    },
   });
 };
 

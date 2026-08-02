@@ -20,6 +20,7 @@ import { ToastHost } from '../components/ToastHost';
 import { useNotificationNavigation } from '../hooks/useNotificationNavigation';
 import { initAnalytics } from '../lib/analytics';
 import { isOnboardingDone } from '../lib/onboarding/draft';
+import { serializeQueryClient } from '../lib/query-persistence';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync();
@@ -81,7 +82,12 @@ function Gate() {
       router.replace('/(auth)/login');
     } else if (user && needsPasswordChange && segs[1] !== 'change-password') {
       router.replace('/(auth)/change-password');
-    } else if (user && !needsPasswordChange && !onboardingDone && (segs[0] as string) !== 'onboarding') {
+    } else if (
+      user &&
+      !needsPasswordChange &&
+      !onboardingDone &&
+      (segs[0] as string) !== 'onboarding'
+    ) {
       // Quick-setup onboarding: exactly once per user/version, right after auth.
       router.replace('/onboarding' as any);
     } else if (user && !needsPasswordChange && onboardingDone && inAuthGroup) {
@@ -96,20 +102,29 @@ function Gate() {
   }, [loading]);
   if (loading) {
     return (
-      <View style={{ flex: 1, backgroundColor: tokens.background, alignItems: 'center', justifyContent: 'center' }}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: tokens.background,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
         <ActivityIndicator color={tokens.primary} size="large" />
       </View>
     );
   }
   return (
-    <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: tokens.background } }}>
+    <Stack
+      screenOptions={{ headerShown: false, contentStyle: { backgroundColor: tokens.background } }}
+    >
       <Stack.Screen name="(auth)" />
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="onboarding" />
-      // Detail screens use the default card push (NOT presentation:'modal'): a native
-      // modal screen on iOS renders above the app-root dialog host, so root RN Modals
-      // opened from these screens appeared underneath (dead taps) and could orphan
-      // after pop (frozen backdrop). Card presentation keeps dialogs working.
+      // Detail screens use the default card push (NOT presentation:'modal'): a native // modal
+      screen on iOS renders above the app-root dialog host, so root RN Modals // opened from these
+      screens appeared underneath (dead taps) and could orphan // after pop (frozen backdrop). Card
+      presentation keeps dialogs working.
       <Stack.Screen name="show/[id]" />
       <Stack.Screen name="movie/[id]" />
       <Stack.Screen name="episode/[id]" />
@@ -144,7 +159,7 @@ function RootShell() {
  * app reopens INSTANTLY after a restart (stale-while-revalidate: cached render,
  * background refetch, smooth in-place update). The dangers of persisting tabs,
  * and how they're contained here:
- *  - Size: Android AsyncStorage caps at 6MB. Auto-paged collections (movies tab)
+ *  - Size: Android AsyncStorage caps at 6MB. User-paged collections (movies tab)
  *    are truncated to their first pages at serialize time; bucket/history/past
  *    pager pages and search/discover-result pages are never persisted.
  *  - Write amplification: every cache change re-serializes the dehydrated set,
@@ -155,31 +170,12 @@ function RootShell() {
  *  - Shape drift across app versions: bump `buster` to drop stale restores.
  * maxAge matches the 24h gcTime on detail queries.
  */
-const MAX_PERSISTED_COLLECTION_PAGES = 2;
 const queryPersister = createAsyncStoragePersister({
   storage: AsyncStorage,
   // Short throttle: narrows the window where a killed app's last persisted
   // snapshot still holds in-flight optimistic mutation state.
   throttleTime: 1000,
-  serialize: (client) => {
-    // Truncate auto-paged collections to their first pages before serializing —
-    // full histories/watchlists can be thousands of rows (megabytes). The
-    // restored first pages render instantly; useAllPages re-chains the rest.
-    for (const q of client.clientState.queries) {
-      const key = q.queryKey as readonly unknown[];
-      const data = q.state?.data as any;
-      if (
-        (key[0] === 'watchlist' || key[0] === 'favorites' || key[0] === 'history') &&
-        key[1] === 'all' &&
-        Array.isArray(data?.pages) &&
-        data.pages.length > MAX_PERSISTED_COLLECTION_PAGES
-      ) {
-        data.pages = data.pages.slice(0, MAX_PERSISTED_COLLECTION_PAGES);
-        data.pageParams = data.pageParams.slice(0, MAX_PERSISTED_COLLECTION_PAGES);
-      }
-    }
-    return JSON.stringify(client);
-  },
+  serialize: serializeQueryClient,
 });
 /** Detail payloads (24h gcTime) — instant detail screens. */
 const PERSISTED_DETAIL_ROOTS = new Set([
@@ -203,8 +199,9 @@ const isPersistedTabQuery = (key: readonly unknown[]): boolean => {
       return true;
     case 'watchlist':
     case 'favorites':
-    case 'history':
-      return key[1] === 'all'; // movies-tab collections (truncated at serialize)
+      return key[1] === 'paged'; // movies-tab collections (truncated at serialize)
+    case 'movies':
+      return key[1] === 'watched' && key[2] === 'paged';
     default:
       return false;
   }
@@ -221,7 +218,7 @@ export default function RootLayout() {
             maxAge: 24 * 60 * 60 * 1000,
             // Bump when a persisted payload's shape changes — stale restores
             // are dropped instead of crashing against a new client.
-            buster: 'v1',
+            buster: 'v2',
             dehydrateOptions: {
               shouldDehydrateQuery: (q) =>
                 q.state.status === 'success' &&

@@ -96,6 +96,10 @@ function LeaderboardPage({ type }: { type: LeaderboardType }) {
   const pan = useMemo(
     () =>
       Gesture.Pan()
+        // This callback updates React state and reads a JS ref. Gesture Handler
+        // otherwise auto-workletizes it and Reanimated 4 throws when the UI
+        // runtime tries to call those JS functions synchronously.
+        .runOnJS(true)
         .activeOffsetX([-15, 15])
         .failOffsetY([-10, 10])
         .onEnd((e) => {

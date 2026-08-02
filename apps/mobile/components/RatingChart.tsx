@@ -1,38 +1,77 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Dimensions, FlatList, Pressable, StyleSheet, View } from 'react-native';
 import Svg, { G, Line, Polyline, Circle, Text as SvgText } from 'react-native-svg';
 import { T } from './primitives';
 import { useAppearance } from '../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 
-interface Ep { number: number; rating: number; votes: number }
-interface Season { seasonNumber: number; episodes: Ep[] }
+interface Ep {
+  number: number;
+  rating: number;
+  votes: number;
+}
+interface Season {
+  seasonNumber: number;
+  episodes: Ep[];
+}
 
 export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undefined }) {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['showDetail', 'social']);
-  const seasons = (seasonRatings ?? [])
-    .filter((s) => s.episodes.length > 0)
-    .sort((a, b) => a.seasonNumber - b.seasonNumber);
+  const seasons = useMemo(
+    () =>
+      (Array.isArray(seasonRatings) ? seasonRatings : [])
+        .filter(
+          (season): season is Season =>
+            !!season && Number.isFinite(season.seasonNumber) && Array.isArray(season.episodes),
+        )
+        .map((season) => ({
+          ...season,
+          episodes: season.episodes.filter(
+            (episode) =>
+              !!episode && Number.isFinite(episode.number) && Number.isFinite(episode.rating),
+          ),
+        }))
+        .filter((season) => season.episodes.length > 0)
+        .sort((a, b) => a.seasonNumber - b.seasonNumber),
+    [seasonRatings],
+  );
 
   // Default to first non-special season (seasonNumber > 0); specials appear when swiping back
   const firstRegular = seasons.findIndex((s) => s.seasonNumber > 0);
   const [active, setActive] = useState(Math.max(0, firstRegular));
   const ref = useRef<FlatList>(null);
   const [containerW, setContainerW] = useState(Dimensions.get('window').width - 48);
+  const maxIndex = Math.max(0, seasons.length - 1);
+  const safeActive = Math.min(maxIndex, Math.max(0, active));
+  const seasonCountRef = useRef(seasons.length);
+  seasonCountRef.current = seasons.length;
+
+  // A metadata refresh can replace the ratings array with fewer seasons while
+  // this component remains mounted. Clamp the persisted page index immediately;
+  // rendering seasons[active] before this guard caused the production crash.
+  useEffect(() => {
+    setActive((index) => Math.min(Math.max(0, seasons.length - 1), Math.max(0, index)));
+  }, [seasons.length]);
 
   if (!seasons.length) {
     return (
       <View style={{ paddingVertical: 8 }}>
-        <T variant="caption" muted>{t('showDetail:noRatings')}</T>
+        <T variant="caption" muted>
+          {t('showDetail:noRatings')}
+        </T>
       </View>
     );
   }
 
-  const getItemLayout = (_: any, index: number) => ({ length: containerW, offset: containerW * index, index });
+  const getItemLayout = (_: any, index: number) => ({
+    length: containerW,
+    offset: containerW * index,
+    index,
+  });
 
   const go = (dir: number) => {
-    const next = Math.min(seasons.length - 1, Math.max(0, active + dir));
+    const next = Math.min(seasons.length - 1, Math.max(0, safeActive + dir));
     setActive(next);
     ref.current?.scrollToIndex({ index: next, animated: true });
   };
@@ -43,21 +82,42 @@ export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undef
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 }).current;
   const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
     const idx = viewableItems?.[0]?.index;
-    if (idx != null) setActive(idx);
+    if (idx != null) setActive(Math.min(Math.max(0, seasonCountRef.current - 1), Math.max(0, idx)));
   }).current;
 
   return (
-    <View onLayout={(e) => setContainerW(e.nativeEvent.layout.width)}>
+    <View
+      onLayout={(e) => {
+        const width = e.nativeEvent.layout.width;
+        if (width > 0) setContainerW(width);
+      }}
+    >
       <View style={styles.head}>
-        <Pressable onPress={() => go(-1)} hitSlop={8} disabled={active === 0}>
-          <T variant="caption" style={{ color: active === 0 ? tokens.textDim : tokens.primary }}>‹</T>
+        <Pressable onPress={() => go(-1)} hitSlop={8} disabled={safeActive === 0}>
+          <T
+            variant="caption"
+            style={{ color: safeActive === 0 ? tokens.textDim : tokens.primary }}
+          >
+            ‹
+          </T>
         </Pressable>
-        <T variant="h2">{seasons[active].seasonNumber === 0 ? t('showDetail:specials') : t('showDetail:seasonLabel', { number: seasons[active].seasonNumber })}</T>
-        <Pressable onPress={() => go(1)} hitSlop={8} disabled={active === seasons.length - 1}>
-          <T variant="caption" style={{ color: active === seasons.length - 1 ? tokens.textDim : tokens.primary }}>›</T>
+        <T variant="h2">
+          {seasons[safeActive].seasonNumber === 0
+            ? t('showDetail:specials')
+            : t('showDetail:seasonLabel', { number: seasons[safeActive].seasonNumber })}
+        </T>
+        <Pressable onPress={() => go(1)} hitSlop={8} disabled={safeActive === seasons.length - 1}>
+          <T
+            variant="caption"
+            style={{ color: safeActive === seasons.length - 1 ? tokens.textDim : tokens.primary }}
+          >
+            ›
+          </T>
         </Pressable>
       </View>
-      <T variant="micro" muted style={{ textAlign: 'center', marginBottom: 4 }}>{t('social:chartCaption')}</T>
+      <T variant="micro" muted style={{ textAlign: 'center', marginBottom: 4 }}>
+        {t('social:chartCaption')}
+      </T>
       <FlatList
         ref={ref}
         horizontal
@@ -67,16 +127,33 @@ export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undef
         keyExtractor={(s) => String(s.seasonNumber)}
         getItemLayout={getItemLayout}
         initialScrollIndex={Math.max(0, firstRegular)}
-        onMomentumScrollEnd={(e) => setActive(Math.round(e.nativeEvent.contentOffset.x / containerW))}
+        onMomentumScrollEnd={(e) =>
+          setActive(
+            Math.min(
+              Math.max(0, seasons.length - 1),
+              Math.max(0, Math.round(e.nativeEvent.contentOffset.x / Math.max(1, containerW))),
+            ),
+          )
+        }
         viewabilityConfig={viewabilityConfig}
         onViewableItemsChanged={onViewableItemsChanged}
-        renderItem={({ item }) => <SeasonLineChart season={item} width={containerW} tokens={tokens} />}
+        renderItem={({ item }) => (
+          <SeasonLineChart season={item} width={containerW} tokens={tokens} />
+        )}
       />
     </View>
   );
 }
 
-function SeasonLineChart({ season, width, tokens }: { season: Season; width: number; tokens: ReturnType<typeof useAppearance>['tokens'] }) {
+function SeasonLineChart({
+  season,
+  width,
+  tokens,
+}: {
+  season: Season;
+  width: number;
+  tokens: ReturnType<typeof useAppearance>['tokens'];
+}) {
   const height = 180;
   const padL = 26;
   const padB = 24;
@@ -95,18 +172,31 @@ function SeasonLineChart({ season, width, tokens }: { season: Season; width: num
         {/* y gridlines 0..5 */}
         {[0, 1, 2, 3, 4, 5].map((v) => (
           <G key={v}>
-            <Line x1={padL} x2={width - padR} y1={yFor(v)} y2={yFor(v)} stroke={tokens.border} strokeWidth={1} />
-            <SvgText x={4} y={yFor(v) + 4} fill={tokens.textMuted} fontSize={10}>{v}</SvgText>
+            <Line
+              x1={padL}
+              x2={width - padR}
+              y1={yFor(v)}
+              y2={yFor(v)}
+              stroke={tokens.border}
+              strokeWidth={1}
+            />
+            <SvgText x={4} y={yFor(v) + 4} fill={tokens.textMuted} fontSize={10}>
+              {v}
+            </SvgText>
           </G>
         ))}
         {/* x axis labels (episode numbers) */}
         {eps.map((e, i) =>
           eps.length <= 12 || i % Math.ceil(eps.length / 12) === 0 ? (
-            <SvgText key={i} x={xFor(i) - 4} y={height - 6} fill={tokens.textMuted} fontSize={9}>{e.number}</SvgText>
+            <SvgText key={i} x={xFor(i) - 4} y={height - 6} fill={tokens.textMuted} fontSize={9}>
+              {e.number}
+            </SvgText>
           ) : null,
         )}
         {/* line */}
-        {eps.length > 1 ? <Polyline points={points} fill="none" stroke={tokens.primary} strokeWidth={2} /> : null}
+        {eps.length > 1 ? (
+          <Polyline points={points} fill="none" stroke={tokens.primary} strokeWidth={2} />
+        ) : null}
         {/* dots */}
         {eps.map((e, i) => (
           <Circle key={i} cx={xFor(i)} cy={yFor(e.rating)} r={3.5} fill={tokens.primary} />
@@ -117,5 +207,11 @@ function SeasonLineChart({ season, width, tokens }: { season: Season; width: num
 }
 
 const styles = StyleSheet.create({
-  head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24, marginBottom: 2 },
+  head: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 24,
+    marginBottom: 2,
+  },
 });

@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
@@ -20,6 +21,20 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api', { exclude: ['health'] });
   app.enableShutdownHooks();
+
+  // Authenticated user payloads change independently of their URL (watch marks,
+  // imports, collection edits). Browser ETag revalidation can otherwise turn a
+  // paged fetch into a raw 304, which fetch clients cannot append as a new page.
+  // Keep these responses private and force a fresh request; Redis/React Query own
+  // the intentional caching layers.
+  app.use('/api/me', (req: Request, res: Response, next: NextFunction) => {
+    delete req.headers['if-none-match'];
+    delete req.headers['if-modified-since'];
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    next();
+  });
+
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(compression());
   app.use(cookieParser());

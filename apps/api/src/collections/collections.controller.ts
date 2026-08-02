@@ -28,6 +28,11 @@ class WatchlistQueryDto {
   @IsInt()
   @Min(1)
   pageSize?: number = 20;
+
+  /** Movie-library optimization: omit already-watched movies at the database boundary. */
+  @IsOptional()
+  @IsString()
+  unwatchedOnly?: string;
 }
 
 @ApiTags('collections')
@@ -39,7 +44,14 @@ export class CollectionsController {
 
   @Get('watchlist')
   watchlist(@CurrentUser('id') userId: string, @Query() q: WatchlistQueryDto) {
-    return this.collections.watchlist(userId, q.type, q.page, q.pageSize, q.genre);
+    return this.collections.watchlist(
+      userId,
+      q.type,
+      q.page,
+      q.pageSize,
+      q.genre,
+      q.unwatchedOnly === 'true' || q.unwatchedOnly === '1',
+    );
   }
 
   @Get('favorites/shows')
@@ -49,7 +61,13 @@ export class CollectionsController {
     @Query('pageSize') pageSize = '20',
     @Query('genre') genre?: string,
   ) {
-    return this.collections.favorites(userId, MediaType.SHOW, Number(page), Number(pageSize), genre);
+    return this.collections.favorites(
+      userId,
+      MediaType.SHOW,
+      Number(page),
+      Number(pageSize),
+      genre,
+    );
   }
 
   @Get('favorites/movies')
@@ -59,6 +77,12 @@ export class CollectionsController {
     @Query('pageSize') pageSize = '20',
     @Query('genre') genre?: string,
   ) {
-    return this.collections.favorites(userId, MediaType.MOVIE, Number(page), Number(pageSize), genre);
+    return this.collections.favorites(
+      userId,
+      MediaType.MOVIE,
+      Number(page),
+      Number(pageSize),
+      genre,
+    );
   }
 }

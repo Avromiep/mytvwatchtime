@@ -1,6 +1,12 @@
 import { Paginated, PaginationQuery } from './common';
 import { EpisodeDto } from './media';
-import { EpisodeLabel, MediaType, UpcomingBucket, UpcomingPastBucket, WatchNextBucket } from './enums';
+import {
+  EpisodeLabel,
+  MediaType,
+  UpcomingBucket,
+  UpcomingPastBucket,
+  WatchNextBucket,
+} from './enums';
 
 export interface WatchNextItemDto {
   showId: string;
@@ -28,9 +34,9 @@ export interface WatchNextResponseDto {
   /** True when the user's watch history holds more episodes than the initial slice —
    *  gates the first scroll-up fetch (older pages chain off the returned cursor). */
   historyHasMore?: boolean;
-  /** Uncapped rail sizes — totals drive the per-section "See more" buttons
+  /** Uncapped primary-rail sizes — totals drive the per-section "See more" buttons
    *  (extra items page via GET /me/watch-next/bucket). */
-  bucketTotals?: { notRecently: number; startWatching: number };
+  bucketTotals?: { watchNext: number; notRecently: number; startWatching: number };
 }
 
 /** One offset page of a capped watch-list rail (See more). */
@@ -89,6 +95,38 @@ export interface UpcomingPastPageDto {
   hasMore: boolean;
   cursor: UpcomingPastCursor | null;
 }
+
+export type ShowProgressSection = 'watching' | 'notStarted' | 'finished' | 'paused';
+
+export interface ShowProgressItemDto {
+  id: string;
+  title: string;
+  posterUrl?: string | null;
+  progress: number;
+  rating?: number | null;
+  year?: number | null;
+}
+
+export interface ShowProgressSummaryDto {
+  watching: number;
+  notStarted: number;
+  finished: number;
+  paused: number;
+}
+
+export interface ShowProgressPageDto extends Paginated<ShowProgressItemDto> {}
+
+export interface MovieLibraryItemDto {
+  id: string;
+  title: string;
+  posterUrl?: string | null;
+  rating?: number | null;
+  year?: number | null;
+  watched: true;
+  progress: 1;
+}
+
+export interface MovieLibraryPageDto extends Paginated<MovieLibraryItemDto> {}
 
 export interface HistoryItemDto {
   id: string;

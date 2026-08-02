@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tvwatchtime-v4';
+const CACHE_NAME = 'tvwatchtime-v5';
 const ASSETS = ['/', '/index.html', '/manifest.json'];
 
 // In dev the JS/CSS bundle is served from a stable URL (e.g. /index.bundle) whose
@@ -6,24 +6,22 @@ const ASSETS = ['/', '/index.html', '/manifest.json'];
 // Only cache static assets in production (non-localhost) origins.
 function isDevOrigin(url) {
   return (
-    url.hostname === 'localhost' ||
-    url.hostname === '127.0.0.1' ||
-    url.pathname.includes('.bundle')
+    url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.pathname.includes('.bundle')
   );
 }
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS).catch(() => {}))
-  );
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS).catch(() => {})));
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
+    caches
+      .keys()
+      .then((keys) =>
+        Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))),
+      ),
   );
   self.clients.claim();
 });
@@ -32,16 +30,21 @@ self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
   const url = new URL(event.request.url);
+  // React Query owns API caching. Let authenticated/cross-origin requests bypass
+  // the service worker so pagination can never fall back to an old response.
+  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
   const isHTML = event.request.mode === 'navigate' || url.pathname.endsWith('.html');
 
   if (isHTML) {
     // Network-first for HTML — always get the latest index.html so JS hash is correct
     event.respondWith(
-      fetch(event.request).then((response) => {
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        return response;
-      }).catch(() => caches.match(event.request).then((c) => c || caches.match('/')))
+      fetch(event.request)
+        .then((response) => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          return response;
+        })
+        .catch(() => caches.match(event.request).then((c) => c || caches.match('/'))),
     );
     return;
   }
@@ -54,20 +57,29 @@ self.addEventListener('fetch', (event) => {
   }
   event.respondWith(
     caches.match(event.request).then((cached) => {
-      return cached || fetch(event.request).then((response) => {
-        if (response.ok && url.origin === self.location.origin) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        }
-        return response;
-      }).catch(() => cached);
-    })
+      return (
+        cached ||
+        fetch(event.request)
+          .then((response) => {
+            if (response.ok && url.origin === self.location.origin) {
+              const clone = response.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+            }
+            return response;
+          })
+          .catch(() => cached)
+      );
+    }),
   );
 });
 
 self.addEventListener('push', (event) => {
   let data = {};
-  try { data = event.data ? event.data.json() : {}; } catch { data = { title: event.data?.text() || 'TVWatchTime' }; }
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { title: event.data?.text() || 'TVWatchTime' };
+  }
   event.waitUntil(
     self.registration.showNotification(data.title || 'TVWatchTime', {
       body: data.body || '',
@@ -75,7 +87,7 @@ self.addEventListener('push', (event) => {
       badge: '/icon-72.png',
       data: { url: data.url || data.link || '/' },
       tag: data.tag || 'tvwatchtime',
-    })
+    }),
   );
 });
 
@@ -95,6 +107,6 @@ self.addEventListener('notificationclick', (event) => {
       const existing = clients.find((c) => c.url.includes(url));
       if (existing) return existing.focus();
       return self.clients.openWindow(url);
-    })
+    }),
   );
 });

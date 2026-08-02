@@ -546,10 +546,9 @@ export class StructureRemapService {
       );
       if (this.redis) {
         await Promise.all([
-          this.redis.delByPattern(`watchnext:${userId}:v2:*`),
-          this.redis.delByPattern(`watchnext:${userId}:paused:*`),
+          this.redis.delByPattern(`watchnext:${userId}:*`),
           this.redis.delByPattern(`upcoming:${userId}:*`),
-          this.redis.delByPattern(`showsprogress:${userId}:v3:*`),
+          this.redis.delByPattern(`showsprogress:${userId}:*`),
         ]).catch((e) =>
           this.logger.debug(`cache invalidation failed for ${userId}: ${(e as Error).message}`),
         );

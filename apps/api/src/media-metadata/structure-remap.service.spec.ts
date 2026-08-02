@@ -264,10 +264,9 @@ describe('StructureRemapService', () => {
     expect(prisma.userShowStatus.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ where: { userId_mediaId: { userId: 'u1', mediaId: 'm1' } } }),
     );
-    expect(redis.delByPattern).toHaveBeenCalledWith('watchnext:u1:v2:*');
-    expect(redis.delByPattern).toHaveBeenCalledWith('watchnext:u1:paused:*');
+    expect(redis.delByPattern).toHaveBeenCalledWith('watchnext:u1:*');
     expect(redis.delByPattern).toHaveBeenCalledWith('upcoming:u1:*');
-    expect(redis.delByPattern).toHaveBeenCalledWith('showsprogress:u1:v3:*');
+    expect(redis.delByPattern).toHaveBeenCalledWith('showsprogress:u1:*');
   });
 
   it('merges into the target status row when the user already has one', async () => {

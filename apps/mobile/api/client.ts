@@ -3,8 +3,7 @@ import type { ApiError, SupportedLocale } from '@tvwatch/shared';
 import { tokenStorage } from './storage';
 
 const DEFAULT_BASE_URL =
-  (Constants.expoConfig?.extra as any)?.apiBaseUrl ||
-  'http://localhost:4000/api';
+  (Constants.expoConfig?.extra as any)?.apiBaseUrl || 'http://localhost:4000/api';
 
 /** Canonical fallback base URL — reused by the widget credential sync so the
  *  resolution chain lives in exactly one place. */
@@ -43,12 +42,9 @@ export async function resetBaseUrl() {
 }
 
 export const PUBLIC_API_URL =
-  (Constants.expoConfig?.extra as any)?.publicApiUrl ||
-  'https://api.tvwatchtime.org/api';
+  (Constants.expoConfig?.extra as any)?.publicApiUrl || 'https://api.tvwatchtime.org/api';
 
-export const SITE_URL =
-  (Constants.expoConfig?.extra as any)?.siteUrl ||
-  'https://tvwatchtime.org';
+export const SITE_URL = (Constants.expoConfig?.extra as any)?.siteUrl || 'https://tvwatchtime.org';
 
 type Json = Record<string, unknown> | unknown[];
 
@@ -110,7 +106,12 @@ function uploadViaXhr(url: string, headers: Record<string, string>, body: FormDa
 
 export async function request<T>(
   path: string,
-  opts: { method?: string; body?: Json | FormData; query?: Record<string, unknown>; auth?: boolean } = {},
+  opts: {
+    method?: string;
+    body?: Json | FormData;
+    query?: Record<string, unknown>;
+    auth?: boolean;
+  } = {},
 ): Promise<T> {
   const { method = 'GET', body, query, auth = true } = opts;
   const BASE_URL = await getBaseUrl();
@@ -133,14 +134,14 @@ export async function request<T>(
   // FormData: use XMLHttpRequest (native fetch polyfill breaks with { uri, name, type })
   if (body instanceof FormData) {
     try {
-      return await uploadViaXhr(url.toString(), headers, body) as T;
+      return (await uploadViaXhr(url.toString(), headers, body)) as T;
     } catch (e) {
       if (e instanceof HttpError && e.status === 401 && auth) {
         const ok = await refreshTokens();
         if (ok) {
           const access = await tokenStorage.getAccess();
           if (access) headers.Authorization = `Bearer ${access}`;
-          return await uploadViaXhr(url.toString(), headers, body) as T;
+          return (await uploadViaXhr(url.toString(), headers, body)) as T;
         }
       }
       throw e;
@@ -152,6 +153,9 @@ export async function request<T>(
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
+      // React Query is the cache for authenticated GETs. Browser caching can
+      // otherwise revive an old offset page after the library order changes.
+      cache: auth && method === 'GET' ? 'no-store' : 'default',
     });
 
   let res = await doFetch();

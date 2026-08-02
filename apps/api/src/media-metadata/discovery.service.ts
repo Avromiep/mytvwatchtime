@@ -1264,17 +1264,17 @@ export class DiscoveryService {
   }
 
   /**
-   * Lightweight cards for LARGE user lists (watchlist/favorites, up to 500 per page).
-   * Same localization + aired-progress semantics as fetchListDtos, but skips the
+   * Lightweight cards for LARGE user lists (watchlist/favorites, bounded pages).
+   * Uses already-persisted locale maps plus the base-language fallback and skips the
    * cast/genres/provider/externalId includes and full DTO mapping — those turned
-   * pageSize=500 watchlist responses into multi-second, multi-MB payloads for rows
-   * that only ever render poster + title + progress.
+   * large watchlist responses into multi-second, multi-MB payloads for rows
+   * that only ever render poster + title + progress. This read path must never
+   * synchronously hydrate missing locales from TMDB: one page could otherwise
+   * wait on dozens of provider requests before returning.
    */
   async fetchCardDtos(ids: string[], userId?: string, limit = 20): Promise<MediaCardLiteDto[]> {
     if (ids.length === 0) return [];
     const limitedIds = ids.slice(0, limit);
-    // Populate the request-locale override for items missing it (same as fetchListDtos).
-    await this.meta.ensureListLocaleOverrides(limitedIds);
     const media = await this.prisma.mediaItem.findMany({
       where: { id: { in: limitedIds } },
       include: {
