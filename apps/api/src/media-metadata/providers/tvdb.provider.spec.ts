@@ -195,6 +195,40 @@ describe('TvdbProvider — episode + translations', () => {
     expect(show.cast[1]).toMatchObject({ characterExternalId: 64771393 });
   });
 
+  it('CAST_ONLY keeps the top 40 plus every requested imported character without fetching episodes', async () => {
+    const characters = Array.from({ length: 42 }, (_, index) => ({
+      id: 1000 + index,
+      name: `Character ${index + 1}`,
+      personName: `Actor ${index + 1}`,
+      peopleId: index >= 40 ? 9999 : 2000 + index,
+      peopleType: index >= 40 ? 'Guest Star' : 'Actor',
+      sort: index,
+    }));
+    const client = fakeClientWithHandler((path) => {
+      if (path === '/series/5/extended') {
+        return { data: { id: 5, name: 'Show', status: { name: 'Ended' }, characters } };
+      }
+      throw new Error(`unexpected structure request: ${path}`);
+    });
+    const provider = new TvdbProvider(client as any);
+
+    const show = await provider.getShow(5, 'en', {
+      includeStructure: false,
+      requiredCharacterIds: [1040, 1041],
+    });
+
+    expect(show.cast).toHaveLength(42);
+    expect(show.cast.some((cast) => cast.characterExternalId === 1040)).toBe(true);
+    expect(show.cast.some((cast) => cast.characterExternalId === 1041)).toBe(true);
+    expect(
+      show.cast
+        .filter((cast) => cast.characterExternalId === 1040 || cast.characterExternalId === 1041)
+        .map((cast) => cast.personExternalId),
+    ).toEqual(['TVDB_5_CHAR_1040', 'TVDB_5_CHAR_1041']);
+    expect(show.seasons).toEqual([]);
+    expect(client.get).toHaveBeenCalledTimes(1);
+  });
+
   it('does not fold unsupported TVDB translations into English', async () => {
     const provider = new TvdbProvider(
       fakeClientWithHandler((path) => {

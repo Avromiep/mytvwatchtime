@@ -84,6 +84,7 @@ export class ImportController {
   ) {
     return this.imports.getItems(userId, id, {
       status: q.status,
+      hideUnmatched: q.hideUnmatched === 'true',
       entity: q.entity,
       page: q.page ? Number(q.page) : 1,
       pageSize: q.pageSize ? Number(q.pageSize) : 50,

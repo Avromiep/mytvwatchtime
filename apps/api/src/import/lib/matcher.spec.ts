@@ -462,22 +462,36 @@ describe('ImportMatcher — TMDB /find translation (matchByTvdbId)', () => {
     expect(res).toEqual({ mediaId: 'm-find', confidence: 0.95, matchedTitle: 'Game of Thrones' });
   });
 
-  it('movie: /find hit → light TMDB movie upsert (0.95)', async () => {
+  it('movie: TVDB remote ids bridge to the canonical movie without TMDB tvdb_id /find', async () => {
     const { prisma } = fakePrismaFind();
     const meta = {
       lightUpsertShow: jest.fn(),
-      lightUpsertMovie: jest.fn(async () => 'm-mov'),
+      lightUpsertMovie: jest.fn(),
       lightUpsertShowTvdb: jest.fn(),
+      lightUpsertMovieTvdb: jest.fn(async () => 'm-mov'),
     };
     const tmdb = {
       enabled: true,
-      findByExternalId: jest.fn(async () => ({
-        movie: { tmdbId: 680, genreIds: [12] },
-        show: null,
-        episode: null,
-      })),
+      findByExternalId: jest.fn(),
     };
-    const matcher = new ImportMatcher(prisma as any, meta as any, tmdb as any, fakeTvdb as any);
+    const tvdb = {
+      enabled: true,
+      getMovie: jest.fn(async () => ({
+        title: 'Pulp Fiction',
+        overview: null,
+        posterUrl: null,
+        backdropUrl: null,
+        popularity: 0,
+        releaseYear: 1994,
+        externals: [
+          { provider: ExternalProvider.THE_TVDB, value: '16858' },
+          { provider: ExternalProvider.IMDB, value: 'tt0110912' },
+          { provider: ExternalProvider.TMDB, value: '680' },
+        ],
+      })),
+      getShow: jest.fn(),
+    };
+    const matcher = new ImportMatcher(prisma as any, meta as any, tmdb as any, tvdb as any);
     const res = await matcher.matchMedia(
       'pulp fiction',
       'Pulp Fiction',
@@ -487,13 +501,20 @@ describe('ImportMatcher — TMDB /find translation (matchByTvdbId)', () => {
       null,
       '16858',
     );
-    expect(meta.lightUpsertMovie).toHaveBeenCalledWith({
+    expect(tmdb.findByExternalId).not.toHaveBeenCalled();
+    expect(meta.lightUpsertMovieTvdb).toHaveBeenCalledWith({
+      tvdbId: 16858,
       tmdbId: 680,
+      imdbId: 'tt0110912',
       title: 'Pulp Fiction',
+      overview: null,
+      posterUrl: null,
+      backdropUrl: null,
+      popularity: 0,
       year: 1994,
     });
     expect(res.mediaId).toBe('m-mov');
-    expect(res.confidence).toBe(0.95);
+    expect(res.confidence).toBe(0.85);
   });
 
   it('anime show (TMDB Animation + anime keyword): TVDB-authoritative record + TMDB id attached', async () => {
@@ -1110,6 +1131,37 @@ describe('ImportMatcher — incompatible external-id types', () => {
     );
 
     expect(res).toEqual({ mediaId: null, confidence: 0, matchedTitle: null });
+  });
+
+  it('re-verifies a local TVDB movie alias through the canonical movie bridge', async () => {
+    const prisma = fakePrisma({
+      extByTvdb: { media: { id: 'historical-row', title: 'Pulp Fiction', type: MediaType.MOVIE } },
+    });
+    const m = meta();
+    m.lightUpsertMovieTvdb.mockResolvedValue('canonical-row');
+    const tvdb = { enabled: true, getShow: jest.fn(), getMovie: jest.fn() };
+    const matcher = new ImportMatcher(prisma as any, m as any, fakeTmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'pulp fiction',
+      'Pulp Fiction',
+      'MOVIE',
+      1994,
+      null,
+      null,
+      '16858',
+    );
+
+    expect(m.lightUpsertMovieTvdb).toHaveBeenCalledWith({
+      tvdbId: 16858,
+      title: 'Pulp Fiction',
+      year: 1994,
+    });
+    expect(res).toEqual({
+      mediaId: 'canonical-row',
+      confidence: 0.95,
+      matchedTitle: 'Pulp Fiction',
+    });
   });
 
   it('MOVIE item whose id /finds only a SERIES does not create or attach a show', async () => {

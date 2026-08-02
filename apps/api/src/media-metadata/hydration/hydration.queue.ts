@@ -111,12 +111,23 @@ export class HydrationQueue implements OnModuleInit {
    * show; transient failures (incl. TVDB rate limits) retry with a long exponential
    * backoff instead of blocking the caller.
    */
-  enqueueTvdbRehydrate(mediaId: string, tvdbId: number): Promise<unknown> {
+  async enqueueTvdbRehydrate(mediaId: string, tvdbId: number): Promise<unknown> {
+    const jobId = HydrationQueue.jobId('tvdb-rehydrate', `media-${mediaId}`);
+    // BullMQ retains a bounded number of completed jobs. Active work should dedupe,
+    // but a completed/failed job must not suppress a deliberate later refresh (for
+    // example when its completion raced an import's transition to COMPLETED).
+    const existing = await this.queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (state === 'completed' || state === 'failed') {
+        await existing.remove().catch(() => undefined);
+      }
+    }
     return this.queue.add(
       'tvdb-rehydrate',
       { mediaId, tvdbId },
       {
-        jobId: HydrationQueue.jobId('tvdb-rehydrate', `media-${mediaId}`),
+        jobId,
         attempts: 5,
         backoff: { type: 'exponential', delay: 120000 },
         removeOnComplete: 1000,

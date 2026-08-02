@@ -1905,6 +1905,7 @@ export const useImportItems = (
         entityCounts?: Record<string, number>;
       }>(`/imports/${id}/items`, {
         status,
+        hideUnmatched: true,
         entity,
         page: 1,
         pageSize: 500,

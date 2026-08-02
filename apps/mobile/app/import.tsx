@@ -349,7 +349,6 @@ export default function ImportScreen() {
       <View style={styles.summary}>
         <Stat label={t('import:matched')} value={imp?.matchedCount} color={tokens.watched} />
         <Stat label={t('import:needsReview')} value={imp?.needsReviewCount} color={tokens.orange} />
-        <Stat label={t('import:unmatched')} value={imp?.unmatchedCount} color={tokens.danger} />
         <Stat label={t('import:duplicates')} value={imp?.duplicateCount} color={tokens.textMuted} />
       </View>
       <ReviewItems importId={importId} tokens={tokens} onResolve={setActiveItem} />
@@ -454,7 +453,6 @@ function ReviewItems({
     { key: 'matched', label: t('import:filters.matched') },
     { key: 'needs_review', label: t('import:filters.needsReview') },
     { key: 'pending_match', label: t('import:filters.pendingMatch') },
-    { key: 'unmatched', label: t('import:filters.unmatched') },
     { key: 'duplicate', label: t('import:filters.duplicates') },
   ];
 
@@ -540,9 +538,12 @@ function ReviewItems({
           )
         }
       />
-      {(statusFilter === 'needs_review' || statusFilter === 'unmatched') && (
+      {statusFilter === 'needs_review' && (
         <Pressable
-          style={[styles.fab, { backgroundColor: tokens.primary }]}
+          style={[
+            styles.fab,
+            { backgroundColor: tokens.primary, shadowColor: tokens.overlayStrong },
+          ]}
           disabled={resolveByName.isPending}
           onPress={() =>
             resolveByName.mutate(
@@ -571,11 +572,11 @@ function ReviewItems({
           }
         >
           {resolveByName.isPending ? (
-            <ActivityIndicator color="#fff" size="small" />
+            <ActivityIndicator color={tokens.primaryForeground} size="small" />
           ) : (
             <>
-              <Ionicons name="sparkles" size={16} color="#fff" />
-              <T variant="caption" style={{ color: '#fff', fontWeight: '700' }}>
+              <Ionicons name="sparkles" size={16} color={tokens.primaryForeground} />
+              <T variant="caption" style={{ color: tokens.primaryForeground, fontWeight: '700' }}>
                 {t('import:resolveByName')}
               </T>
             </>
@@ -594,8 +595,6 @@ function statusColor(s: string, tokens: ReturnType<typeof useAppearance>['tokens
       return tokens.primary;
     case 'NEEDS_REVIEW':
       return tokens.orange;
-    case 'UNMATCHED':
-      return tokens.danger;
     case 'DUPLICATE':
       return tokens.textMuted;
     default:
@@ -774,7 +773,6 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     borderRadius: radius.pill,
     elevation: 6,
-    shadowColor: '#000',
     shadowOpacity: 0.25,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },

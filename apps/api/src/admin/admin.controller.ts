@@ -203,10 +203,14 @@ export class AdminController {
 
   @Post('repair-tvdb-id-conflicts/run')
   @RequireRoles('ADMIN')
-  runRepairTvdbIdConflicts(@Query('count') count?: string) {
+  async runRepairTvdbIdConflicts(@Query('count') count?: string, @Query('mode') mode?: string) {
     const n = count ? Number(count) : undefined;
+    const m = mode === 'repair' ? 'repair' : 'dry-run';
+    if (m === 'dry-run') {
+      return this.metadataBackfill.repairTvdbIdConflicts(n, m);
+    }
     this.metadataBackfill
-      .repairTvdbIdConflicts(n)
+      .repairTvdbIdConflicts(n, m)
       .then((res) =>
         console.log(
           `[TVDB id conflicts] DONE: ${res.conflictsFixed} fixed (${res.idsDetached} ids detached), ${res.mergedKept} merge-leftover kept, ${res.ambiguous.length} ambiguous`,
@@ -221,12 +225,42 @@ export class AdminController {
     };
   }
 
+  @Post('repair-wrong-kind-external-ids/run')
+  @RequireRoles('ADMIN')
+  async runRepairWrongKindExternalIds(
+    @Query('count') count?: string,
+    @Query('mode') mode?: string,
+  ) {
+    const n = count ? Number(count) : undefined;
+    const m = mode === 'repair' ? 'repair' : 'dry-run';
+    if (m === 'dry-run') {
+      return this.metadataBackfill.repairWrongKindExternalIds(n, m);
+    }
+    this.metadataBackfill
+      .repairWrongKindExternalIds(n, m)
+      .then((res) =>
+        console.log(
+          `[Wrong-kind external ids] DONE: ${res.detached} aliases detached, ${res.ambiguous} ambiguous across ${res.processed} media`,
+        ),
+      )
+      .catch((e) => {
+        console.error('[Wrong-kind external ids] FAILED:', (e as Error)?.message ?? e);
+      });
+    return {
+      message: `Wrong-kind external-id repair started (${n ?? 500} media max). Check repair progress.`,
+    };
+  }
+
   @Post('repair-provider-duplicates/run')
   @RequireRoles('ADMIN')
-  runRepairProviderDuplicates(@Query('count') count?: string) {
+  async runRepairProviderDuplicates(@Query('count') count?: string, @Query('mode') mode?: string) {
     const n = count ? Number(count) : undefined;
+    const m = mode === 'repair' ? 'repair' : 'dry-run';
+    if (m === 'dry-run') {
+      return this.metadataBackfill.repairProviderDuplicateMovies(n, m);
+    }
     this.metadataBackfill
-      .repairProviderDuplicateMovies(n)
+      .repairProviderDuplicateMovies(n, m)
       .then((res) =>
         console.log(
           `[Provider duplicates] DONE: ${res.merged} merged, ${res.attached} attached, ${res.skipped} skipped, ${res.failed} failed, ${res.rateLimited} rate-limited`,

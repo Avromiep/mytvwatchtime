@@ -11,14 +11,28 @@ interface MetadataHealth {
   showsMissingEpisodes: number;
   moviesMissingOverview: number;
   tvdbOnly: number;
+  tvdbFallbackShows: number;
   stale: number;
   byClassification: Record<string, number>;
   animeOnTmdb: number;
   animeOnTmdbNoTvdbId: number;
   structuralTypeMismatch: number;
   castMissingCharacterIds: number;
+  pendingCharacterVoteItems: number;
+  pendingCharacterVoteShows: number;
+  pendingCharacterVoteShowsWithoutTvdb: number;
   movieDataOnShows: number;
   multiTvdbIds: number;
+  multiTvdbIdsActionable: number;
+  multiTvdbIdsAmbiguous: number;
+  wrongKindExternalIdAliases: number;
+  wrongKindExternalIdMedia: number;
+  authorityMissing: number;
+  authorityInvalid: number;
+  authorityOutdated: number;
+  legacyUnmappedEpisodes: number;
+  legacyUnmappedShows: number;
+  legacyUnmappedWithUserData: number;
   providerDuplicateMovies: number;
   nonEnglishBase: number;
   nonEnglishContent: number | null;
@@ -60,6 +74,7 @@ const REPAIR_LABELS: Record<string, string> = {
   'character-ids': 'Character IDs backfill',
   'anime-rehydrate': 'Anime → TVDB rehydration',
   'tvdb-id-conflicts': 'TVDB ID conflict repair',
+  'wrong-kind-external-ids': 'Wrong-kind external ID repair',
   'provider-duplicates': 'Provider duplicate movie repair',
   'english-base': 'English base restore',
   'english-content': 'English content verify',
@@ -74,24 +89,34 @@ const REPAIR_LABELS: Record<string, string> = {
 /** One-line guidance per stat: what it means and what to do about it. */
 const STAT_HINTS: Record<string, string> = {
   total: 'All media rows in the local catalog (shows + movies).',
-  neverHydrated: 'Rows with only a title (no metadata yet). Run Backfill to hydrate them.',
+  neverHydrated:
+    'Rows whose metadata refresh timestamp is null. They may contain partial provider data; Run Backfill completes them.',
   showsMissingEpisodes:
     'Shows with zero seasons/episodes stored. Run Backfill to rehydrate their structure.',
   moviesMissingOverview: 'Movies missing their description text. Run Backfill to fill it.',
-  tvdbOnly: 'Shows/movies that exist only on TVDB (no TMDB id) — informational, usually anime.',
+  tvdbOnly:
+    'Correct-kind TVDB identities with no verified TMDB identity. This combines legitimate TVDB-only fallback shows and movie identity backlog; the split is shown on the card.',
   stale: 'Metadata older than 30 days. These refresh lazily on view; Run Backfill for a bulk pass.',
   animeOnTmdb:
-    'Animation-genre shows whose structure came from TMDB (wrong season splits for anime). Fix moves them to TVDB and transfers watch data. Rows whose TVDB id cannot be resolved are parked for 30 days (see "Anime unresolvable" below) and no longer counted here — the nightly/hourly job no longer burns provider calls re-attempting them. Fully repaired shows whose few leftover TMDB rows were kept to preserve user data are not counted either; a show re-appears only when NEW TMDB contamination arrives.',
+    'Strict anime shows (TMDB Animation genre plus the anime keyword) whose active structure contradicts their TVDB owner. Fix remaps user data onto TVDB structure. Unresolvable identities are parked for 30 days; legacy quarantines are not active contamination.',
   structuralTypeMismatch:
     'Movie and show merged into ONE row by a bad id cross-link. Repair splits them and transfers watch data.',
   castMissingCharacterIds:
-    'Shows whose cast lacks TVDB character ids (needed to resolve imported character votes), plus shows hydrated with the old top-20 cast slice — backfill rehydrates them from TVDB, which fills ids and widens the cast to 40 so rank 21+ votes can resolve.',
+    'Actionable CAST_ONLY refreshes: completed imports waiting for character votes, TVDB-owned casts missing character ids, and the old top-20 cast slice. The selector requires a correct-kind TVDB series id. Refresh stores the normal top 40 plus every staged imported character found anywhere in TVDB’s complete cast response, without fetching episodes. Pending votes then replay automatically; only IDs absent from that response become audited SKIPPED items.',
+  pendingCharacterVotes:
+    'Character-vote import rows still waiting for a TVDB character id. CAST_ONLY hydration automatically replays completed imports. Shows without a TVDB series identity become audited SKIPPED rows when the repair runs.',
   movieDataOnShows:
     'Movie statuses/history wrongly written on shows (import bug). The Repair button above purges these too.',
   multiTvdbIds:
-    'Rows carrying more than one TVDB id — merge leftovers (harmless) or id poisoning from an old bug (one id belongs to a DIFFERENT show, mis-routing matches). Repair verifies each id via TMDB and detaches only the wrong ones. User history is never deleted.',
+    'Same-kind TVDB alias sets needing verification. Raw aliases remain visible, but unchanged benign sets are permanently parked, unresolved sets for 90 days, and ambiguous sets for 180 days. Shows verify through TMDB; movies use TVDB remote TMDB/IMDb ids. Repair detaches only proven conflicts and never deletes user data.',
+  wrongKindExternalIds:
+    'Provider aliases stored in the wrong namespace (MOVIE on a SHOW or SERIES on a MOVIE). Repair detaches them only when a correct-kind TMDB/IMDb/TVDB identity anchors the row. Unanchored rows remain for manual review; user data is untouched.',
+  authority:
+    'Typed structural authority health. Missing or invalid ownership is unsafe; outdated rule versions need an authority reconcile pass. Supplemental provider aliases do not count as mixed structure.',
+  legacyStructure:
+    'Episodes quarantined because canonical remapping was ambiguous. They retain user data and direct accessibility, but are excluded from active seasons, progress, counts, watch-next, aggregates, imports, and structure health.',
   providerDuplicateMovies:
-    'Movie rows that have TVDB/IMDB ids but no TMDB id. Repair verifies the IMDB id through TMDB /find (TMDB does not index TVDB movie ids, so TVDB-only rows resolve via title+year /search instead). A verified TMDB id with a local TMDB row MERGES (user data moves, source row deleted); with no local row it is ATTACHED to the existing row instead — it was never a duplicate, just missing its cross-link. Without an id, it falls back to a local TMDB movie with the same normalized title, release year, compatible runtime, and overview when one exists. Ambiguous matches are skipped; rows with provably no TMDB counterpart are parked for 180 days so the count keeps dropping.',
+    'Movie rows with TVDB/IMDb identity but no TMDB id. This is a candidate backlog, not a guaranteed duplicate count. Resolution is IMDb-first, then TVDB verified remote ids, then exact title+year and conservative metadata fallback. Dry-run reports merge/attach/skip evidence. Repair preserves statuses, history, ratings, reactions, lists, comments, reviews, and watch-provider alerts. Ambiguous matches are skipped.',
   nonEnglishBase:
     "Rows explicitly marked as having a non-English base title (title_locale ≠ en). Repair re-hydrates them with a proper English base and restores the 'en' override. Rows that just failed are parked for 24h so repeated runs keep advancing. Rows with an unset marker are NOT counted (most have a fine English base already). No user data touched.",
   nonEnglishContent:
@@ -107,7 +132,7 @@ const STAT_HINTS: Record<string, string> = {
   castDuplicates:
     'Duplicate cast credits created when TVDB people ids were stored under the TMDB_ id namespace, by unstable fallback ids, or by concurrent hydrations — the same person appears twice. Dedup auto-merges groups that are provably the same person+role on one title: same cast-member record, same TVDB character id, the same normalized actor+character name (including "/" and quote variants), or SIMILAR character names across DIFFERENT providers (one contains the other at a word boundary — "Juliette" vs "Juliette Nichols", "Daemon Targaryen" vs "Prince Daemon Targaryen"). Same-provider near-duplicates are kept (may be two genuine roles, e.g. "Goku" vs "Goku Jr."). Votes are re-pointed to the surviving row BEFORE anything is deleted, so character votes are never lost. Run Report first, then Dry-run for exact counts, then Repair. Anything left can be merged manually per title via the inspect box below.',
   dualStructureShows:
-    'Shows whose stored season/episode structure contradicts the canonical provider — mixed structures from union hydration (e.g. a flattened TMDB structure next to the TVDB split, or daily shows carrying a stray second provider structure). Canonical is deterministic: anime / TVDB-stamped ⇒ TVDB, everything else ⇒ TMDB. Report lists candidates with the direction each would take; Dry-run shows the episode mapping; Repair rehydrates from the canonical provider and remaps ALL stale episodes onto it — watch history, ratings, reactions, votes and comments are transferred first, ambiguous rows are kept (never deleted), and converged titles leave the count automatically. No manual per-title work needed; a weekly cron reports recurrence.',
+    'Shows whose active season/episode rows contradict the persisted structural owner. Strict anime is TVDB-owned; general shows are TMDB-owned; verified TVDB-only fallbacks stay TVDB-owned. Repair rehydrates from that owner, transfers all user data, deletes empty stale rows, and quarantines ambiguous user-data rows as legacy.',
 };
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -133,6 +158,8 @@ export default function MetadataHealthPage() {
   const [castResult, setCastResult] = useState<string | null>(null);
   const [repairingTvdbIds, setRepairingTvdbIds] = useState(false);
   const [tvdbIdResult, setTvdbIdResult] = useState<string | null>(null);
+  const [repairingWrongKindIds, setRepairingWrongKindIds] = useState(false);
+  const [wrongKindIdResult, setWrongKindIdResult] = useState<string | null>(null);
   const [repairingProviderDuplicates, setRepairingProviderDuplicates] = useState(false);
   const [providerDuplicateResult, setProviderDuplicateResult] = useState<string | null>(null);
   const [providerDuplicateCount, setProviderDuplicateCount] = useState('200');
@@ -413,30 +440,61 @@ export default function MetadataHealthPage() {
       .finally(() => setReconTargeted(false));
   };
 
-  const runTvdbIdRepair = () => {
+  const runTvdbIdRepair = (mode: 'dry-run' | 'repair') => {
     setRepairingTvdbIds(true);
     setTvdbIdResult(null);
     api
-      .post('/admin/repair-tvdb-id-conflicts/run')
-      .then(() => {
-        setTvdbIdResult('TVDB id-conflict repair started in background. Stats refresh in 60s.');
-        setTimeout(() => load(), 60000);
+      .post(`/admin/repair-tvdb-id-conflicts/run?mode=${mode}`)
+      .then((r) => {
+        if (mode === 'dry-run') {
+          setTvdbIdResult(
+            `Dry-run: ${r.data.conflictsFixed} conflicts, ${r.data.idsDetached} ids would detach, ${r.data.mergedKept} retained, ${r.data.ambiguous.length} ambiguous. ${JSON.stringify(r.data.outcomes.slice(0, 20))}`,
+          );
+        } else {
+          setTvdbIdResult('TVDB id-conflict repair started in background. Stats refresh in 60s.');
+          setTimeout(() => load(), 60000);
+        }
       })
       .catch(() => setTvdbIdResult('TVDB id-conflict repair failed to start.'))
       .finally(() => setRepairingTvdbIds(false));
   };
 
-  const runProviderDuplicateRepair = () => {
+  const runWrongKindIdRepair = (mode: 'dry-run' | 'repair') => {
+    setRepairingWrongKindIds(true);
+    setWrongKindIdResult(null);
+    api
+      .post(`/admin/repair-wrong-kind-external-ids/run?mode=${mode}`)
+      .then((r) => {
+        if (mode === 'dry-run') {
+          setWrongKindIdResult(
+            `Dry-run: ${r.data.detached} aliases would detach, ${r.data.ambiguous} media need review. ${JSON.stringify(r.data.outcomes.slice(0, 20))}`,
+          );
+        } else {
+          setWrongKindIdResult('Wrong-kind external ID repair started. Stats refresh in 30s.');
+          setTimeout(() => load(), 30000);
+        }
+      })
+      .catch(() => setWrongKindIdResult('Wrong-kind external ID repair failed to start.'))
+      .finally(() => setRepairingWrongKindIds(false));
+  };
+
+  const runProviderDuplicateRepair = (mode: 'dry-run' | 'repair') => {
     setRepairingProviderDuplicates(true);
     setProviderDuplicateResult(null);
     const n = Math.max(1, Number(providerDuplicateCount) || 200);
     api
-      .post(`/admin/repair-provider-duplicates/run?count=${n}`)
-      .then(() => {
-        setProviderDuplicateResult(
-          `Provider duplicate repair started (${n} rows). Stats refresh in 60s.`,
-        );
-        setTimeout(() => load(), 60000);
+      .post(`/admin/repair-provider-duplicates/run?count=${n}&mode=${mode}`)
+      .then((r) => {
+        if (mode === 'dry-run') {
+          setProviderDuplicateResult(
+            `Dry-run: ${r.data.merged} would merge, ${r.data.attached} would attach, ${r.data.skipped} skipped, ${r.data.failed} failed. ${JSON.stringify(r.data.outcomes.slice(0, 20))}`,
+          );
+        } else {
+          setProviderDuplicateResult(
+            `Movie identity repair started (${n} rows). Stats refresh in 60s.`,
+          );
+          setTimeout(() => load(), 60000);
+        }
       })
       .catch(() => setProviderDuplicateResult('Provider duplicate repair failed to start.'))
       .finally(() => setRepairingProviderDuplicates(false));
@@ -623,6 +681,11 @@ export default function MetadataHealthPage() {
           {tvdbIdResult}
         </div>
       )}
+      {wrongKindIdResult && (
+        <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200">
+          {wrongKindIdResult}
+        </div>
+      )}
       {providerDuplicateResult && (
         <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200">
           {providerDuplicateResult}
@@ -787,7 +850,7 @@ export default function MetadataHealthPage() {
             <MetricCard
               label="TVDB-Only (no TMDB)"
               value={stats.tvdbOnly}
-              sub={`${pct(stats.tvdbOnly)}% of total`}
+              sub={`${stats.tvdbFallbackShows.toLocaleString()} fallback shows · ${stats.providerDuplicateMovies.toLocaleString()} actionable movie identity candidates`}
               hint={STAT_HINTS.tvdbOnly}
             />
             <MetricCard
@@ -839,7 +902,7 @@ export default function MetadataHealthPage() {
             <MetricCard
               label="Cast Missing Character IDs"
               value={stats.castMissingCharacterIds}
-              sub="shows with cast but no TVDB character ids"
+              sub={`${stats.pendingCharacterVoteShows.toLocaleString()} shows have pending imported votes`}
               hint={STAT_HINTS.castMissingCharacterIds}
               highlight={stats.castMissingCharacterIds > 0}
               action={
@@ -861,6 +924,26 @@ export default function MetadataHealthPage() {
                   </button>
                 </div>
               }
+            />
+            <MetricCard
+              label="Pending Character Votes"
+              value={stats.pendingCharacterVoteItems}
+              sub={`${stats.pendingCharacterVoteShows.toLocaleString()} shows · ${stats.pendingCharacterVoteShowsWithoutTvdb.toLocaleString()} without TVDB identity`}
+              hint={STAT_HINTS.pendingCharacterVotes}
+              highlight={stats.pendingCharacterVoteItems > 0}
+            />
+            <MetricCard
+              label="Structure Authority"
+              value={stats.authorityMissing + stats.authorityInvalid + stats.authorityOutdated}
+              sub={`${stats.authorityMissing.toLocaleString()} missing · ${stats.authorityInvalid.toLocaleString()} invalid · ${stats.authorityOutdated.toLocaleString()} outdated`}
+              hint={STAT_HINTS.authority}
+              highlight={stats.authorityMissing + stats.authorityInvalid > 0}
+            />
+            <MetricCard
+              label="Legacy Unmapped Episodes"
+              value={stats.legacyUnmappedEpisodes}
+              sub={`${stats.legacyUnmappedShows.toLocaleString()} shows · ${stats.legacyUnmappedWithUserData.toLocaleString()} retain user data`}
+              hint={STAT_HINTS.legacyStructure}
             />
             <MetricCard
               label="Duplicate Cast"
@@ -983,24 +1066,58 @@ export default function MetadataHealthPage() {
             </div>
             <MetricCard
               label="Multiple TVDB IDs"
-              value={stats.multiTvdbIds}
-              sub="rows with conflicting TVDB ids"
+              value={stats.multiTvdbIdsActionable}
+              sub={`${stats.multiTvdbIds.toLocaleString()} raw alias sets · ${stats.multiTvdbIdsAmbiguous.toLocaleString()} parked ambiguous`}
               hint={STAT_HINTS.multiTvdbIds}
-              highlight={stats.multiTvdbIds > 0}
+              highlight={stats.multiTvdbIdsActionable > 0}
               action={
-                <button
-                  onClick={runTvdbIdRepair}
-                  disabled={repairingTvdbIds}
-                  className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
-                >
-                  {repairingTvdbIds ? 'Starting…' : 'Repair TVDB IDs'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => runTvdbIdRepair('dry-run')}
+                    disabled={repairingTvdbIds}
+                    className="rounded border border-zinc-400 px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:text-zinc-300"
+                  >
+                    Dry-run
+                  </button>
+                  <button
+                    onClick={() => runTvdbIdRepair('repair')}
+                    disabled={repairingTvdbIds}
+                    className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    {repairingTvdbIds ? 'Starting…' : 'Repair TVDB IDs'}
+                  </button>
+                </div>
               }
             />
             <MetricCard
-              label="Provider Duplicate Movies"
+              label="Wrong-Kind External IDs"
+              value={stats.wrongKindExternalIdMedia}
+              sub={`${stats.wrongKindExternalIdAliases.toLocaleString()} aliases in the wrong movie/show namespace`}
+              hint={STAT_HINTS.wrongKindExternalIds}
+              highlight={stats.wrongKindExternalIdMedia > 0}
+              action={
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => runWrongKindIdRepair('dry-run')}
+                    disabled={repairingWrongKindIds}
+                    className="rounded border border-zinc-400 px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:text-zinc-300"
+                  >
+                    Dry-run
+                  </button>
+                  <button
+                    onClick={() => runWrongKindIdRepair('repair')}
+                    disabled={repairingWrongKindIds}
+                    className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    {repairingWrongKindIds ? 'Starting…' : 'Repair Wrong-Kind IDs'}
+                  </button>
+                </div>
+              }
+            />
+            <MetricCard
+              label="Movies Missing TMDB Identity"
               value={stats.providerDuplicateMovies}
-              sub="TVDB/IMDB-only movie rows that may merge into TMDB rows"
+              sub="TVDB/IMDb movie rows needing verified TMDB attachment or merge"
               hint={STAT_HINTS.providerDuplicateMovies}
               highlight={stats.providerDuplicateMovies > 0}
               action={
@@ -1014,7 +1131,14 @@ export default function MetadataHealthPage() {
                     title="Rows per run"
                   />
                   <button
-                    onClick={runProviderDuplicateRepair}
+                    onClick={() => runProviderDuplicateRepair('dry-run')}
+                    disabled={repairingProviderDuplicates}
+                    className="rounded border border-zinc-400 px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:text-zinc-300"
+                  >
+                    Dry-run
+                  </button>
+                  <button
+                    onClick={() => runProviderDuplicateRepair('repair')}
                     disabled={repairingProviderDuplicates}
                     className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
                   >
@@ -1233,12 +1357,11 @@ export default function MetadataHealthPage() {
           </div>
 
           <p className="text-xs text-zinc-400">
-            Backfill processes 20 items per run (oldest/never-hydrated first). It hydrates from TMDB
-            (or TVDB for TVDB-only media), respects global rate limits, and enqueues anime
-            classification (Kitsu &gt; Jikan &gt; TVDB &gt; TMDB). Watch history is never affected.
-            Animation-genre shows are TVDB-authoritative: the daily Anime TVDB Rehydration job
-            (Scheduled Jobs) and the Fix Anime button re-hydrate any TMDB-structured ones from TVDB,
-            and TMDB Changes Sync skips them.
+            Backfill uses the selected batch size and the persisted structural owner. General shows
+            and all movies are TMDB-owned; strict anime shows are TVDB-owned only when TMDB has both
+            Animation genre and the anime keyword; unresolved TVDB-only shows remain TVDB fallbacks.
+            IMDb bridges identity only. Kitsu and Jikan enrich metadata but never classify or route
+            structure. Provider refreshes cannot write non-owner seasons or episodes.
           </p>
         </>
       )}

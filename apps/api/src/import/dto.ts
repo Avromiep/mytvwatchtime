@@ -19,6 +19,14 @@ export class ListImportItemsDto {
   @IsIn(IMPORT_ITEM_STATUSES)
   status?: ImportItemStatusFilter;
 
+  @ApiPropertyOptional({
+    enum: ['true', 'false'],
+    description: 'exclude terminal unmatched audit rows from the visible review list',
+  })
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  hideUnmatched?: string;
+
   @ApiPropertyOptional({ description: 'source_entity_type filter, e.g. WATCHLIST_SHOW' })
   @IsOptional()
   @IsString()

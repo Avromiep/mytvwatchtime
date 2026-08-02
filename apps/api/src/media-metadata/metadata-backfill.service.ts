@@ -243,7 +243,7 @@ export class MetadataBackfillService {
     // The page polls this on every open/refresh and repairs trigger re-loads; the
     // aggregates scan the whole catalog. Cache briefly — 60s staleness is fine for
     // health metrics and keeps prod-sized scans off the request path.
-    const cacheKey = `admin:metadata-health:v1:${includeContentStats ? 1 : 0}:${includeDeepContentStats ? 1 : 0}`;
+    const cacheKey = `admin:metadata-health:v2:${includeContentStats ? 1 : 0}:${includeDeepContentStats ? 1 : 0}`;
     const cached =
       typeof this.redis.get === 'function'
         ? await this.redis.get<string>(cacheKey).catch(() => null)
@@ -287,11 +287,15 @@ export class MetadataBackfillService {
       this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
           JOIN shows sh ON sh.media_id = m.id
-          WHERE m.type='SHOW' AND NOT EXISTS (SELECT 1 FROM seasons s WHERE s.show_id = sh.id)`,
+          WHERE m.type='SHOW' AND NOT EXISTS (
+            SELECT 1 FROM seasons s JOIN episodes e ON e.season_id=s.id
+            WHERE s.show_id=sh.id AND e.structure_state='ACTIVE'::"EpisodeStructureState")`,
       this.prisma.mediaItem.count({ where: { type: 'MOVIE', overview: null } }),
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
-          WHERE EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=m.id AND e.provider='THE_TVDB')
-            AND NOT EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=m.id AND e.provider='TMDB')`,
+          WHERE EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=m.id AND e.provider='THE_TVDB'
+              AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
+            AND NOT EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=m.id AND e.provider='TMDB'
+              AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")`,
       this.prisma.mediaItem.count({
         where: { metadataRefreshedAt: { lt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 30) } },
       }),
@@ -343,12 +347,27 @@ export class MetadataBackfillService {
       // Shows with a cast but NO TVDB character ids yet (cast predates the
       // characterExternalId field — a TVDB rehydration fills the whole cast at once),
       // PLUS shows hydrated with the OLD top-20 cast slice (exactly 20 cast rows with
-      // ids, not yet re-widened): rehydration widens them to TVDB_CAST_LIMIT.
+      // ids, not yet re-widened): rehydration widens them to TVDB_CAST_LIMIT and
+      // supplements that slice with every staged import character id.
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
+          JOIN shows sh ON sh.media_id = m.id
           WHERE m.type='SHOW'
-            AND EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id)
+            AND EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id
+                        AND x.provider = 'THE_TVDB' AND x.provider_entity_kind = 'SERIES')
             AND (
-              NOT EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id AND mc.character_external_id IS NOT NULL)
+              EXISTS (
+                SELECT 1 FROM import_items ii
+                JOIN imports i ON i.id = ii.import_id
+                WHERE ii.matched_media_id = m.id
+                  AND ii.source_entity_type = 'EPISODE_CHARACTER_VOTE'
+                  AND ii.status = 'PENDING_MATCH'
+                  AND i.status = 'COMPLETED'
+              )
+              OR (
+                sh.structure_provider = 'TVDB'::"StructureProvider"
+                AND EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id)
+                AND NOT EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id AND mc.character_external_id IS NOT NULL)
+              )
               OR (
                 (SELECT count(*) FROM media_cast mc WHERE mc.media_id = m.id) = 20
                 AND m.metadata_provenance->>'castWidenedAt' IS NULL
@@ -410,7 +429,9 @@ export class MetadataBackfillService {
                  OR p.value LIKE 'http://artworks.thetvdb.com/banners/http://artworks.thetvdb.com/banners/%'
             )
           )
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB')
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id
+              AND e.provider IN ('TMDB','THE_TVDB')
+              AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
           AND COALESCE(m.metadata_provenance->>'bannerCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'`,
       // Actionable rating backlog: no rating stored, has a provider id to resolve
       // one from, and not already checked (and found unrated at the source) in the
@@ -419,7 +440,9 @@ export class MetadataBackfillService {
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
         WHERE m.rating IS NULL
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider IN ('TMDB','THE_TVDB'))
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id
+              AND e.provider IN ('TMDB','THE_TVDB')
+              AND e.provider_entity_kind = (CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
           AND (m.metadata_provenance->>'ratingCheckedAt' IS NULL
                OR (m.metadata_provenance->>'ratingCheckedAt')::timestamptz < NOW() - INTERVAL '90 days')`,
       // Animation rows PARKED as unresolvable (no trustworthy TVDB id) in the last
@@ -433,7 +456,8 @@ export class MetadataBackfillService {
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
         WHERE m.recommendations_synced_at IS NULL
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB')
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB'
+              AND e.provider_entity_kind = (CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
           AND COALESCE(m.metadata_provenance->>'recsCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'`,
       // TMDB-linked MOVIE rows with no production country (powers the explore country
       // filter). Filled by the movie-countries backfill; 90-day recheck like ratings.
@@ -455,6 +479,84 @@ export class MetadataBackfillService {
         .then((rows) => [{ c: BigInt(rows.length) }])
         .catch(() => [{ c: BigInt(0) }]),
     ]);
+    // One compact integrity query covers typed authority, import replay, alias-kind,
+    // legacy quarantine, and audited TVDB-alias state without adding more concurrent
+    // catalog scans to the Promise.all above.
+    const [integrity] = await this.prisma.$queryRaw<
+      {
+        tvdbFallbackShows: bigint;
+        pendingCharacterVoteItems: bigint;
+        pendingCharacterVoteShows: bigint;
+        pendingCharacterVoteShowsWithoutTvdb: bigint;
+        wrongKindExternalIdAliases: bigint;
+        wrongKindExternalIdMedia: bigint;
+        authorityMissing: bigint;
+        authorityInvalid: bigint;
+        authorityOutdated: bigint;
+        legacyUnmappedEpisodes: bigint;
+        legacyUnmappedShows: bigint;
+        legacyUnmappedWithUserData: bigint;
+        multiTvdbIdsActionable: bigint;
+        multiTvdbIdsAmbiguous: bigint;
+      }[]
+    >`
+      WITH multi_tvdb AS (
+        SELECT e.media_id, e.provider_entity_kind,
+               md5(string_agg(e.value, '|' ORDER BY e.value)) AS fingerprint
+        FROM external_ids e
+        WHERE e.provider = 'THE_TVDB'
+        GROUP BY e.media_id, e.provider_entity_kind
+        HAVING count(*) > 1
+      )
+      SELECT
+        (SELECT count(*) FROM shows sh
+          JOIN media_items m ON m.id = sh.media_id
+          WHERE sh.structure_provider = 'TVDB'::"StructureProvider"
+            AND sh.structure_reason = 'TVDB_ONLY_FALLBACK'::"StructureReason"
+            AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=m.id
+                        AND e.provider='THE_TVDB' AND e.provider_entity_kind='SERIES'))::bigint AS "tvdbFallbackShows",
+        (SELECT count(*) FROM import_items ii JOIN imports i ON i.id=ii.import_id
+          WHERE ii.source_entity_type='EPISODE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
+            AND i.status='COMPLETED')::bigint AS "pendingCharacterVoteItems",
+        (SELECT count(DISTINCT ii.matched_media_id) FROM import_items ii JOIN imports i ON i.id=ii.import_id
+          WHERE ii.source_entity_type='EPISODE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
+            AND i.status='COMPLETED')::bigint AS "pendingCharacterVoteShows",
+        (SELECT count(DISTINCT ii.matched_media_id) FROM import_items ii JOIN imports i ON i.id=ii.import_id
+          WHERE ii.source_entity_type='EPISODE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
+            AND i.status='COMPLETED'
+            AND NOT EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=ii.matched_media_id
+                            AND e.provider='THE_TVDB' AND e.provider_entity_kind='SERIES'))::bigint AS "pendingCharacterVoteShowsWithoutTvdb",
+        (SELECT count(*) FROM external_ids e JOIN media_items m ON m.id=e.media_id
+          WHERE e.provider_entity_kind != (CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")::bigint AS "wrongKindExternalIdAliases",
+        (SELECT count(DISTINCT e.media_id) FROM external_ids e JOIN media_items m ON m.id=e.media_id
+          WHERE e.provider_entity_kind != (CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")::bigint AS "wrongKindExternalIdMedia",
+        (SELECT count(*) FROM shows sh WHERE sh.structure_provider IS NULL OR sh.structure_reason IS NULL)::bigint AS "authorityMissing",
+        (SELECT count(*) FROM shows sh WHERE
+          (sh.structure_provider='TMDB'::"StructureProvider" AND sh.structure_reason NOT IN ('GENERAL_TMDB','MANUAL_OVERRIDE'))
+          OR (sh.structure_provider='TVDB'::"StructureProvider" AND sh.structure_reason NOT IN ('ANIME_TVDB','TVDB_ONLY_FALLBACK','MANUAL_OVERRIDE')))::bigint AS "authorityInvalid",
+        (SELECT count(*) FROM shows sh WHERE COALESCE(sh.structure_rule_version, 0) < ${STRUCTURE_RULE_VERSION})::bigint AS "authorityOutdated",
+        (SELECT count(*) FROM episodes e WHERE e.structure_state='LEGACY_UNMAPPED'::"EpisodeStructureState")::bigint AS "legacyUnmappedEpisodes",
+        (SELECT count(DISTINCT s.show_id) FROM episodes e JOIN seasons s ON s.id=e.season_id
+          WHERE e.structure_state='LEGACY_UNMAPPED'::"EpisodeStructureState")::bigint AS "legacyUnmappedShows",
+        (SELECT count(*) FROM episodes e WHERE e.structure_state='LEGACY_UNMAPPED'::"EpisodeStructureState"
+          AND (EXISTS (SELECT 1 FROM user_episode_status u WHERE u.episode_id=e.id)
+            OR EXISTS (SELECT 1 FROM watch_history h WHERE h.episode_id=e.id)
+            OR EXISTS (SELECT 1 FROM ratings r WHERE r.episode_id=e.id)
+            OR EXISTS (SELECT 1 FROM reactions r WHERE r.episode_id=e.id)
+            OR EXISTS (SELECT 1 FROM character_votes v WHERE v.episode_id=e.id)
+            OR EXISTS (SELECT 1 FROM comments c WHERE c.thread_type='EPISODE' AND c.thread_id=e.id)))::bigint AS "legacyUnmappedWithUserData",
+        (SELECT count(*) FROM multi_tvdb mt JOIN media_items m ON m.id=mt.media_id
+          WHERE COALESCE(m.metadata_provenance #>> '{tvdbIdAudit,fingerprint}', '') != mt.fingerprint
+             OR COALESCE(m.metadata_provenance #>> '{tvdbIdAudit,checkedAt}', '1970-01-01')::timestamptz < NOW() -
+                CASE COALESCE(m.metadata_provenance #>> '{tvdbIdAudit,status}', '')
+                  WHEN 'benign' THEN INTERVAL '100 years'
+                  WHEN 'unresolved' THEN INTERVAL '90 days'
+                  WHEN 'ambiguous' THEN INTERVAL '180 days'
+                  ELSE INTERVAL '0 days' END)::bigint AS "multiTvdbIdsActionable",
+        (SELECT count(*) FROM multi_tvdb mt JOIN media_items m ON m.id=mt.media_id
+          WHERE m.metadata_provenance #>> '{tvdbIdAudit,fingerprint}' = mt.fingerprint
+            AND m.metadata_provenance #>> '{tvdbIdAudit,status}' = 'ambiguous')::bigint AS "multiTvdbIdsAmbiguous"`;
+
     const toNum = (r: { c: bigint }[] | undefined) => Number(r?.[0]?.c ?? 0);
     const enContent = englishContentHealth?.[0];
     const enNum = (value: bigint | undefined) => Number(value ?? 0);
@@ -464,6 +566,7 @@ export class MetadataBackfillService {
       showsMissingEpisodes: toNum(showsNoSeasons as any),
       moviesMissingOverview,
       tvdbOnly: toNum(tvdbOnly as any),
+      tvdbFallbackShows: Number(integrity?.tvdbFallbackShows ?? 0),
       stale,
       byClassification: Object.fromEntries(
         classification.map((c: { contentClassification: string; _count: { _all: number } }) => [
@@ -475,8 +578,23 @@ export class MetadataBackfillService {
       animeOnTmdbNoTvdbId: toNum(animeOnTmdbNoTvdbId as any),
       structuralTypeMismatch: toNum(structuralTypeMismatch as any),
       castMissingCharacterIds: toNum(castMissingCharacterIds as any),
+      pendingCharacterVoteItems: Number(integrity?.pendingCharacterVoteItems ?? 0),
+      pendingCharacterVoteShows: Number(integrity?.pendingCharacterVoteShows ?? 0),
+      pendingCharacterVoteShowsWithoutTvdb: Number(
+        integrity?.pendingCharacterVoteShowsWithoutTvdb ?? 0,
+      ),
       movieDataOnShows: toNum(movieDataOnShows as any),
       multiTvdbIds: toNum(multiTvdbIds as any),
+      multiTvdbIdsActionable: Number(integrity?.multiTvdbIdsActionable ?? 0),
+      multiTvdbIdsAmbiguous: Number(integrity?.multiTvdbIdsAmbiguous ?? 0),
+      wrongKindExternalIdAliases: Number(integrity?.wrongKindExternalIdAliases ?? 0),
+      wrongKindExternalIdMedia: Number(integrity?.wrongKindExternalIdMedia ?? 0),
+      authorityMissing: Number(integrity?.authorityMissing ?? 0),
+      authorityInvalid: Number(integrity?.authorityInvalid ?? 0),
+      authorityOutdated: Number(integrity?.authorityOutdated ?? 0),
+      legacyUnmappedEpisodes: Number(integrity?.legacyUnmappedEpisodes ?? 0),
+      legacyUnmappedShows: Number(integrity?.legacyUnmappedShows ?? 0),
+      legacyUnmappedWithUserData: Number(integrity?.legacyUnmappedWithUserData ?? 0),
       providerDuplicateMovies: toNum(providerDuplicateMovies as any),
       nonEnglishBase: toNum(nonEnglishBase as any),
       nonEnglishContent: includeContentStats ? enNum(enContent?.nonEnglishContent) : null,
@@ -565,7 +683,11 @@ export class MetadataBackfillService {
         try {
           await this.hydrateOne(
             m.id,
-            m.externalIds as unknown as { provider: ExternalProvider; value: string }[],
+            m.externalIds as unknown as {
+              provider: ExternalProvider;
+              value: string;
+              providerEntityKind: ProviderEntityKind;
+            }[],
             m.type,
             // Anime routing uses the strict TMDB genre + keyword rule.
             this.isAnimeMedia(m),
@@ -634,14 +756,23 @@ export class MetadataBackfillService {
    */
   private async hydrateOne(
     mediaId: string,
-    externals: { provider: ExternalProvider; value: string }[],
+    externals: {
+      provider: ExternalProvider;
+      value: string;
+      providerEntityKind: ProviderEntityKind;
+    }[],
     type: string,
     isAnime: boolean = false,
     structureProvider?: StructureProvider | null,
   ) {
-    const tmdb = externals.find((e) => e.provider === ExternalProvider.TMDB);
-    const tvdb = externals.find((e) => e.provider === ExternalProvider.THE_TVDB);
     const isShow = type === 'SHOW';
+    const expectedKind = isShow ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
+    const tmdb = externals.find(
+      (e) => e.provider === ExternalProvider.TMDB && e.providerEntityKind === expectedKind,
+    );
+    const tvdb = externals.find(
+      (e) => e.provider === ExternalProvider.THE_TVDB && e.providerEntityKind === expectedKind,
+    );
 
     // Detect existing active structure before choosing whether anime needs a remap or
     // is merely a never-hydrated stub.
@@ -1130,7 +1261,11 @@ export class MetadataBackfillService {
    */
   private async claimTvdbId(mediaId: string, tvdbId: number): Promise<boolean> {
     const linked = await this.prisma.externalId.findFirst({
-      where: { provider: ExternalProvider.THE_TVDB, value: String(tvdbId) },
+      where: {
+        provider: ExternalProvider.THE_TVDB,
+        providerEntityKind: ProviderEntityKind.SERIES,
+        value: String(tvdbId),
+      },
       select: { mediaId: true },
     });
     if (linked) return linked.mediaId === mediaId;
@@ -1156,7 +1291,11 @@ export class MetadataBackfillService {
   }
 
   // ---- Same-type provider duplicate repair (TVDB/IMDB-only movie row + TMDB movie row) ----
-  async repairProviderDuplicateMovies(limit?: number): Promise<{
+  async repairProviderDuplicateMovies(
+    limit?: number,
+    mode: 'dry-run' | 'repair' = 'repair',
+  ): Promise<{
+    mode: 'dry-run' | 'repair';
     processed: number;
     merged: number;
     attached: number;
@@ -1165,8 +1304,18 @@ export class MetadataBackfillService {
     rateLimited: number;
     skipReasons: Record<string, number>;
     sample: string[];
+    outcomes: {
+      sourceId: string;
+      title: string;
+      action: 'merge' | 'attach' | 'skip' | 'failed';
+      targetId: string | null;
+      tmdbId: number | null;
+      reason: string;
+      userDataRows: number;
+    }[];
   }> {
     const empty = {
+      mode,
       processed: 0,
       merged: 0,
       attached: 0,
@@ -1175,6 +1324,15 @@ export class MetadataBackfillService {
       rateLimited: 0,
       skipReasons: {} as Record<string, number>,
       sample: [] as string[],
+      outcomes: [] as {
+        sourceId: string;
+        title: string;
+        action: 'merge' | 'attach' | 'skip' | 'failed';
+        targetId: string | null;
+        tmdbId: number | null;
+        reason: string;
+        userDataRows: number;
+      }[],
     };
     if (this.providerDuplicateRepairRunning) {
       this.logger.log('Provider duplicate movie repair already running — skipping');
@@ -1192,7 +1350,13 @@ export class MetadataBackfillService {
     try {
       const take = Math.max(1, Math.min(limit ?? 200, 100000));
       const candidates = await this.prisma.$queryRaw<
-        { id: string; title: string; tvdbId: string | null; imdbId: string | null }[]
+        {
+          id: string;
+          title: string;
+          tvdbId: string | null;
+          imdbId: string | null;
+          userDataRows: bigint;
+        }[]
       >`
         SELECT m.id,
                m.title,
@@ -1201,7 +1365,19 @@ export class MetadataBackfillService {
                 LIMIT 1) AS "tvdbId",
                (SELECT e.value FROM external_ids e
                 WHERE e.media_id = m.id AND e.provider = 'IMDB' AND e.provider_entity_kind = 'MOVIE'
-                LIMIT 1) AS "imdbId"
+                LIMIT 1) AS "imdbId",
+               (
+                 (SELECT count(*) FROM user_movie_status x WHERE x.media_id = m.id) +
+                 (SELECT count(*) FROM watch_history x WHERE x.media_id = m.id AND x.media_type = 'MOVIE') +
+                 (SELECT count(*) FROM watchlist_items x WHERE x.media_id = m.id) +
+                 (SELECT count(*) FROM favorites x WHERE x.media_id = m.id) +
+                 (SELECT count(*) FROM ratings x WHERE x.media_id = m.id) +
+                 (SELECT count(*) FROM reactions x WHERE x.media_id = m.id) +
+                 (SELECT count(*) FROM custom_list_items x WHERE x.media_id = m.id) +
+                 (SELECT count(DISTINCT x.id) FROM comments x
+                    WHERE (x.thread_type = 'MOVIE' AND x.thread_id = m.id) OR x.media_id = m.id) +
+                 (SELECT count(*) FROM watch_provider_alerts x WHERE x.media_id = m.id)
+               )::bigint AS "userDataRows"
         FROM media_items m
         WHERE m.type = 'MOVIE'
           AND NOT EXISTS (SELECT 1 FROM external_ids tm WHERE tm.media_id = m.id AND tm.provider = 'TMDB' AND tm.provider_entity_kind = 'MOVIE')
@@ -1221,8 +1397,11 @@ export class MetadataBackfillService {
         skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
       };
       const sample: string[] = [];
+      const outcomes: typeof empty.outcomes = [];
+      let processed = 0;
       for (let i = 0; i < candidates.length; i++) {
         const c = candidates[i];
+        processed = i + 1;
         this.trackRepair('provider-duplicates', {
           processed: i + 1,
           succeeded: merged + attached,
@@ -1234,8 +1413,21 @@ export class MetadataBackfillService {
           // Verified TMDB id with NO local counterpart: not a duplicate at all — attach
           // the cross-id to this row (leaves the stat for good) and enrich from TMDB.
           if (resolution.attachTmdbId) {
-            await this.attachTmdbMovieId(c.id, resolution.attachTmdbId);
+            if (mode === 'repair') {
+              await this.attachTmdbMovieId(c.id, resolution.attachTmdbId);
+            }
             attached++;
+            if (outcomes.length < 100) {
+              outcomes.push({
+                sourceId: c.id,
+                title: c.title,
+                action: 'attach',
+                targetId: null,
+                tmdbId: resolution.attachTmdbId,
+                reason: resolution.reason,
+                userDataRows: Number(c.userDataRows ?? 0),
+              });
+            }
             if (sample.length < 5) sample.push(`${c.title} (+tmdb ${resolution.attachTmdbId})`);
             continue;
           }
@@ -1247,13 +1439,37 @@ export class MetadataBackfillService {
             // Definitive "nothing to merge into" outcomes are parked for 180 days —
             // re-attempting them every run only burns provider calls. Ambiguous
             // matches are NOT parked: new data can disambiguate them.
-            if (resolution.definitive) {
+            if (mode === 'repair' && resolution.definitive) {
               await this.stampProviderDupNoMatch(c.id, resolution.reason).catch(() => undefined);
+            }
+            if (outcomes.length < 100) {
+              outcomes.push({
+                sourceId: c.id,
+                title: c.title,
+                action: 'skip',
+                targetId: resolution.targetId,
+                tmdbId: resolution.tmdbId,
+                reason: resolution.reason,
+                userDataRows: Number(c.userDataRows ?? 0),
+              });
             }
             continue;
           }
-          await this.mergeDuplicateMovieRows(c.id, resolution.targetId);
+          if (mode === 'repair') {
+            await this.mergeDuplicateMovieRows(c.id, resolution.targetId);
+          }
           merged++;
+          if (outcomes.length < 100) {
+            outcomes.push({
+              sourceId: c.id,
+              title: c.title,
+              action: 'merge',
+              targetId: resolution.targetId,
+              tmdbId: resolution.tmdbId,
+              reason: resolution.reason,
+              userDataRows: Number(c.userDataRows ?? 0),
+            });
+          }
           if (sample.length < 5) sample.push(c.title);
         } catch (e) {
           if (this.isRateLimitError(e)) {
@@ -1262,6 +1478,17 @@ export class MetadataBackfillService {
             break;
           }
           failed++;
+          if (outcomes.length < 100) {
+            outcomes.push({
+              sourceId: c.id,
+              title: c.title,
+              action: 'failed',
+              targetId: null,
+              tmdbId: null,
+              reason: (e as Error).message,
+              userDataRows: Number(c.userDataRows ?? 0),
+            });
+          }
           if (failed <= 10) {
             this.logger.warn(
               `provider duplicate repair failed for ${c.title} (${c.id}): ${(e as Error).message}`,
@@ -1271,13 +1498,13 @@ export class MetadataBackfillService {
       }
       this.trackRepair('provider-duplicates', {
         running: false,
-        processed: candidates.length,
+        processed,
         succeeded: merged + attached,
         failed,
         finishedAt: new Date(),
       });
       this.logger.log(
-        `Provider duplicate movie repair: ${merged} merged, ${attached} attached, ${skipped} skipped, ${failed} failed, ${rateLimited} rate-limited`,
+        `Provider duplicate movie ${mode}: ${merged} ${mode === 'repair' ? 'merged' : 'would merge'}, ${attached} ${mode === 'repair' ? 'attached' : 'would attach'}, ${skipped} skipped, ${failed} failed, ${rateLimited} rate-limited`,
       );
       if (skipReasons.size > 0) {
         this.logger.log(
@@ -1285,7 +1512,8 @@ export class MetadataBackfillService {
         );
       }
       return {
-        processed: candidates.length,
+        mode,
+        processed,
         merged,
         attached,
         skipped,
@@ -1293,6 +1521,7 @@ export class MetadataBackfillService {
         rateLimited,
         skipReasons: Object.fromEntries(skipReasons),
         sample,
+        outcomes,
       };
     } finally {
       this.providerDuplicateRepairRunning = false;
@@ -1335,34 +1564,58 @@ export class MetadataBackfillService {
   }): Promise<{
     targetId: string | null;
     attachTmdbId: number | null;
+    tmdbId: number | null;
     definitive: boolean;
     reason: string;
   }> {
     const none = (reason: string, definitive = false) => ({
       targetId: null,
       attachTmdbId: null,
+      tmdbId: null,
       definitive,
       reason,
     });
     if (!this.tmdbProvider.enabled) return none('TMDB provider disabled');
     let tmdbId: number | null = null;
-    if (candidate.tvdbId) {
-      const found = await this.tmdbProvider.findByExternalIdStrict(candidate.tvdbId, 'tvdb_id');
-      tmdbId = found?.movie?.tmdbId ?? null;
+    let evidence = '';
+    // IMDb is the strongest movie bridge and must win over a stale/unrelated TVDB id.
+    if (candidate.imdbId) {
+      try {
+        const found = await this.tmdbProvider.findByExternalIdStrict(candidate.imdbId, 'imdb_id');
+        tmdbId = found?.movie?.tmdbId ?? null;
+        if (tmdbId) evidence = `IMDb ${candidate.imdbId}`;
+      } catch (e) {
+        if (!this.isNotFoundError(e)) throw e;
+      }
     }
-    if (!tmdbId && candidate.imdbId) {
-      const found = await this.tmdbProvider.findByExternalIdStrict(candidate.imdbId, 'imdb_id');
-      tmdbId = found?.movie?.tmdbId ?? null;
+    // TMDB does not support TVDB movie ids in /find. Ask TVDB for its verified remote ids.
+    if (!tmdbId && candidate.tvdbId && this.tvdb.enabled) {
+      try {
+        const identity = await this.tvdb.getMovieIdentity(Number(candidate.tvdbId));
+        tmdbId = identity.tmdbId;
+        if (tmdbId) evidence = `TVDB ${candidate.tvdbId} remote TMDB`;
+        if (!tmdbId && identity.imdbId) {
+          const found = await this.tmdbProvider.findByExternalIdStrict(identity.imdbId, 'imdb_id');
+          tmdbId = found?.movie?.tmdbId ?? null;
+          if (tmdbId) evidence = `TVDB ${candidate.tvdbId} remote IMDb ${identity.imdbId}`;
+        }
+      } catch (e) {
+        // A deleted TVDB id has no remaining identity signal; title/year may still
+        // identify the row. Throttle/upstream failures must stop the batch, not be
+        // misreported as a definitive no-match.
+        if (!this.isNotFoundError(e)) throw e;
+      }
     }
     // TMDB /find does NOT index TVDB movie ids (tvdb_id maps only TV there), so TVDB-only
     // rows — the bulk of this stat — can never resolve by id. Title+year search is the
     // only id-grade evidence left for them.
     if (!tmdbId) {
       tmdbId = await this.resolveTmdbMovieIdBySearch(candidate.id);
+      if (tmdbId) evidence = 'unique exact title/year TMDB search';
     }
     if (!tmdbId) {
       const meta = await this.resolveProviderDuplicateMovieTargetByMetadata(candidate.id);
-      return { ...meta, attachTmdbId: null };
+      return { ...meta, attachTmdbId: null, tmdbId: null };
     }
     const target = await this.prisma.externalId.findFirst({
       where: {
@@ -1376,13 +1629,20 @@ export class MetadataBackfillService {
     });
     // Verified id but no local row: not a duplicate — attach the cross-id instead of skipping.
     if (!target?.mediaId) {
-      return { targetId: null, attachTmdbId: tmdbId, definitive: true, reason: 'attach TMDB id' };
+      return {
+        targetId: null,
+        attachTmdbId: tmdbId,
+        tmdbId,
+        definitive: true,
+        reason: `attach TMDB id (${evidence})`,
+      };
     }
     return {
       targetId: target.mediaId,
       attachTmdbId: null,
+      tmdbId,
       definitive: true,
-      reason: 'matched local TMDB movie',
+      reason: `matched local TMDB movie (${evidence})`,
     };
   }
 
@@ -1687,12 +1947,27 @@ export class MetadataBackfillService {
           UPDATE watchlist_items w SET media_id = ${targetMediaId}
           WHERE w.media_id = ${sourceMediaId}
             AND NOT EXISTS (SELECT 1 FROM watchlist_items t WHERE t.media_id = ${targetMediaId} AND t.user_id = w.user_id)`;
+        await tx.$executeRaw`
+          UPDATE watchlist_items t
+          SET priority = GREATEST(t.priority, s.priority),
+              created_at = LEAST(t.created_at, s.created_at)
+          FROM watchlist_items s
+          WHERE s.media_id = ${sourceMediaId}
+            AND t.media_id = ${targetMediaId}
+            AND t.user_id = s.user_id`;
         await tx.watchlistItem.deleteMany({ where: { mediaId: sourceMediaId } });
 
         await tx.$executeRaw`
           UPDATE favorites f SET media_id = ${targetMediaId}
           WHERE f.media_id = ${sourceMediaId}
             AND NOT EXISTS (SELECT 1 FROM favorites t WHERE t.media_id = ${targetMediaId} AND t.user_id = f.user_id)`;
+        await tx.$executeRaw`
+          UPDATE favorites t
+          SET created_at = LEAST(t.created_at, s.created_at)
+          FROM favorites s
+          WHERE s.media_id = ${sourceMediaId}
+            AND t.media_id = ${targetMediaId}
+            AND t.user_id = s.user_id`;
         await tx.favorite.deleteMany({ where: { mediaId: sourceMediaId } });
 
         await tx.$executeRaw`
@@ -1743,6 +2018,14 @@ export class MetadataBackfillService {
           UPDATE custom_list_items i SET media_id = ${targetMediaId}
           WHERE i.media_id = ${sourceMediaId}
             AND NOT EXISTS (SELECT 1 FROM custom_list_items t WHERE t.media_id = ${targetMediaId} AND t.list_id = i.list_id)`;
+        await tx.$executeRaw`
+          UPDATE custom_list_items t
+          SET "order" = LEAST(t."order", s."order"),
+              created_at = LEAST(t.created_at, s.created_at)
+          FROM custom_list_items s
+          WHERE s.media_id = ${sourceMediaId}
+            AND t.media_id = ${targetMediaId}
+            AND t.list_id = s.list_id`;
         await tx.customListItem.deleteMany({ where: { mediaId: sourceMediaId } });
 
         await tx.comment.updateMany({
@@ -1757,6 +2040,66 @@ export class MetadataBackfillService {
           where: { mediaId: sourceMediaId },
           data: { mediaId: targetMediaId },
         });
+        // These are audit/progress references rather than foreign keys. Repoint them
+        // explicitly so historical import/admin reports do not link to a deleted row.
+        await tx.importItem.updateMany({
+          where: { matchedMediaId: sourceMediaId },
+          data: { matchedMediaId: targetMediaId },
+        });
+        await tx.hydrationJobItem.updateMany({
+          where: { mediaId: sourceMediaId },
+          data: { mediaId: targetMediaId },
+        });
+
+        // Watch-provider alerts are user-owned movie data too. Their uniqueness includes
+        // mediaId, so merge collisions explicitly instead of letting the source cascade.
+        const sourceAlerts = await tx.watchProviderAlert.findMany({
+          where: { mediaId: sourceMediaId },
+        });
+        for (const sourceAlert of sourceAlerts) {
+          const targetAlert = await tx.watchProviderAlert.findFirst({
+            where: {
+              userId: sourceAlert.userId,
+              mediaId: targetMediaId,
+              offerType: sourceAlert.offerType,
+            },
+          });
+          if (!targetAlert) {
+            await tx.watchProviderAlert.update({
+              where: { id: sourceAlert.id },
+              data: { mediaId: targetMediaId },
+            });
+            continue;
+          }
+          const sourceIsNewer = sourceAlert.createdAt > targetAlert.createdAt;
+          const newer = sourceIsNewer ? sourceAlert : targetAlert;
+          const sameCountry = sourceAlert.country === targetAlert.country;
+          const providerIds = sameCountry
+            ? sourceAlert.providerIds.length === 0 || targetAlert.providerIds.length === 0
+              ? []
+              : [...new Set([...targetAlert.providerIds, ...sourceAlert.providerIds])]
+            : newer.providerIds;
+          const notifiedAt =
+            sourceAlert.notifiedAt && targetAlert.notifiedAt
+              ? sourceAlert.notifiedAt > targetAlert.notifiedAt
+                ? sourceAlert.notifiedAt
+                : targetAlert.notifiedAt
+              : (sourceAlert.notifiedAt ?? targetAlert.notifiedAt);
+          await tx.watchProviderAlert.update({
+            where: { id: targetAlert.id },
+            data: {
+              active: sourceAlert.active || targetAlert.active,
+              country: newer.country,
+              providerIds,
+              createdAt:
+                sourceAlert.createdAt < targetAlert.createdAt
+                  ? sourceAlert.createdAt
+                  : targetAlert.createdAt,
+              notifiedAt,
+            },
+          });
+          await tx.watchProviderAlert.delete({ where: { id: sourceAlert.id } });
+        }
 
         await tx.mediaItem.delete({ where: { id: sourceMediaId } });
       },
@@ -2001,13 +2344,29 @@ export class MetadataBackfillService {
 
   // ---- Cast character-id backfill (admin button) ----
 
+  private terminalSkipUnresolvableCharacterVotes(): Promise<number> {
+    return this.prisma.$executeRaw`
+      UPDATE import_items ii
+      SET status='SKIPPED',
+          error_message='Character vote skipped: matched show has no TVDB series identity',
+          updated_at=NOW()
+      FROM imports i
+      WHERE i.id=ii.import_id AND i.status='COMPLETED'
+        AND ii.source_entity_type='EPISODE_CHARACTER_VOTE'
+        AND ii.status='PENDING_MATCH'
+        AND NOT EXISTS (
+          SELECT 1 FROM external_ids x WHERE x.media_id=ii.matched_media_id
+            AND x.provider='THE_TVDB' AND x.provider_entity_kind='SERIES')`;
+  }
+
   /**
    * Fill `media_cast.characterExternalId` (TVDB character ids) for shows whose cast rows
    * predate the field. One full TVDB hydration per show — the cast rewrite fills every
    * role at once; never per-character calls. Powers TVTime character-vote resolution.
    * Also re-hydrates shows hydrated with the OLD top-20 cast slice (exactly 20 cast
-   * rows, ids present — the old cap's fingerprint) so the widened TVDB_CAST_LIMIT (40)
-   * lets rank 21+ character votes resolve. Stops early on TVDB rate limits.
+   * rows, ids present — the old cap's fingerprint). CAST_ONLY stores the normal top 40
+   * plus every staged imported character found in TVDB's full response, so rank 41+
+   * votes resolve without permanently storing an unbounded cast. Stops on rate limits.
    */
   async backfillCharacterIds(limit?: number): Promise<{
     processed: number;
@@ -2015,6 +2374,7 @@ export class MetadataBackfillService {
     failed: number;
     rateLimited: number;
     parked: number;
+    terminalSkipped: number;
     sample: string[];
   }> {
     const empty = {
@@ -2023,12 +2383,17 @@ export class MetadataBackfillService {
       failed: 0,
       rateLimited: 0,
       parked: 0,
+      terminalSkipped: 0,
       sample: [] as string[],
     };
     if (this.charIdFixRunning) {
       this.logger.log('Character-id backfill already running — skipping');
       return empty;
     }
+    // This terminal path needs no provider call and is valid even when TVDB is not
+    // configured: without a TVDB series identity the staged character id has no
+    // namespace in which it can ever resolve.
+    empty.terminalSkipped = Number(await this.terminalSkipUnresolvableCharacterVotes());
     if (!this.tvdb.enabled) {
       this.logger.warn('TVDB not configured — skipping character-id backfill');
       return empty;
@@ -2054,10 +2419,20 @@ export class MetadataBackfillService {
           (SELECT e.value FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB'
              AND e.provider_entity_kind = 'SERIES' LIMIT 1) AS tvdb_id
         FROM media_items m
+        JOIN shows sh ON sh.media_id=m.id
         WHERE m.type = 'SHOW'
-          AND EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id)
           AND (
-            NOT EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id AND mc.character_external_id IS NOT NULL)
+            EXISTS (
+              SELECT 1 FROM import_items ii JOIN imports i ON i.id=ii.import_id
+              WHERE ii.matched_media_id=m.id
+                AND ii.source_entity_type='EPISODE_CHARACTER_VOTE'
+                AND ii.status='PENDING_MATCH' AND i.status='COMPLETED'
+            )
+            OR (
+              sh.structure_provider='TVDB'::"StructureProvider"
+              AND EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id)
+              AND NOT EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id AND mc.character_external_id IS NOT NULL)
+            )
             OR (
               (SELECT count(*) FROM media_cast mc WHERE mc.media_id = m.id) = 20
               AND m.metadata_provenance->>'castWidenedAt' IS NULL
@@ -2136,9 +2511,17 @@ export class MetadataBackfillService {
         finishedAt: new Date(),
       });
       this.logger.log(
-        `Character-id backfill: ${succeeded}/${candidates.length} rehydrated, ${failed} failed, ${rateLimited} rate-limited, ${parked} parked (404)`,
+        `Character-id backfill: ${succeeded}/${candidates.length} rehydrated, ${failed} failed, ${rateLimited} rate-limited, ${parked} parked (404), ${empty.terminalSkipped} pending votes terminally skipped`,
       );
-      return { processed: candidates.length, succeeded, failed, rateLimited, parked, sample };
+      return {
+        processed: candidates.length,
+        succeeded,
+        failed,
+        rateLimited,
+        parked,
+        terminalSkipped: empty.terminalSkipped,
+        sample,
+      };
     } finally {
       this.charIdFixRunning = false;
     }
@@ -3168,7 +3551,9 @@ export class MetadataBackfillService {
              LIMIT 1) AS tvdb_id
         FROM media_items m
         WHERE m.rating IS NULL
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider IN ('TMDB','THE_TVDB'))
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id
+            AND e.provider IN ('TMDB','THE_TVDB')
+            AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
           AND (m.metadata_provenance->>'ratingCheckedAt' IS NULL
                OR (m.metadata_provenance->>'ratingCheckedAt')::timestamptz < NOW() - INTERVAL '90 days')
         ORDER BY m.popularity DESC
@@ -3198,24 +3583,29 @@ export class MetadataBackfillService {
           let checkedRatingSource = false;
           if (this.tmdbProvider.enabled) {
             if (!tmdbId && m.tvdb_id) {
-              const found = await this.tmdbProvider.findByExternalIdStrict(m.tvdb_id, 'tvdb_id');
-              tmdbId =
-                (m.type === MediaType.SHOW ? found?.show?.tmdbId : found?.movie?.tmdbId) ?? null;
+              let imdbId: string | null = null;
+              if (m.type === MediaType.SHOW) {
+                const found = await this.tmdbProvider.findByExternalIdStrict(m.tvdb_id, 'tvdb_id');
+                tmdbId = found?.show?.tmdbId ?? null;
+              } else if (this.tvdb.enabled) {
+                // TMDB /find does not resolve TVDB movie ids. Read TVDB's verified
+                // remote TMDB/IMDb ids, then use IMDb as the identity bridge if needed.
+                const identity = await this.tvdb.getMovieIdentity(Number(m.tvdb_id));
+                tmdbId = identity?.tmdbId ?? null;
+                imdbId = identity?.imdbId ?? null;
+              }
               if (!tmdbId && this.tvdb.enabled) {
-                const imdbId = await this.tvdb.fetchImdbId(
+                imdbId ??= await this.tvdb.fetchImdbId(
                   m.type === MediaType.SHOW ? 'show' : 'movie',
                   Number(m.tvdb_id),
                 );
-                if (imdbId) {
-                  const foundImdb = await this.tmdbProvider.findByExternalIdStrict(
-                    imdbId,
-                    'imdb_id',
-                  );
-                  tmdbId =
-                    (m.type === MediaType.SHOW
-                      ? foundImdb?.show?.tmdbId
-                      : foundImdb?.movie?.tmdbId) ?? null;
-                }
+              }
+              if (!tmdbId && imdbId) {
+                const foundImdb = await this.tmdbProvider.findByExternalIdStrict(imdbId, 'imdb_id');
+                tmdbId =
+                  (m.type === MediaType.SHOW
+                    ? foundImdb?.show?.tmdbId
+                    : foundImdb?.movie?.tmdbId) ?? null;
               }
               checkedRatingSource = true;
             }
@@ -3279,43 +3669,200 @@ export class MetadataBackfillService {
     }
   }
 
+  // ---- Wrong-kind external ids ----
+  private wrongKindIdFixRunning = false;
+
+  /**
+   * Detach provider aliases whose entity namespace contradicts the media row. A bad
+   * MOVIE alias on a SHOW (or SERIES alias on a MOVIE) is safe to remove only when the
+   * row already has at least one correct-kind provider identity. Unanchored rows are
+   * reported as ambiguous and retained for manual review. User data is untouched.
+   */
+  async repairWrongKindExternalIds(
+    limit?: number,
+    mode: 'dry-run' | 'repair' = 'repair',
+  ): Promise<{
+    mode: 'dry-run' | 'repair';
+    processed: number;
+    detached: number;
+    ambiguous: number;
+    outcomes: {
+      mediaId: string;
+      title: string;
+      action: 'detach' | 'ambiguous';
+      aliases: { id: string; provider: string; value: string; kind: string }[];
+      reason: string;
+    }[];
+  }> {
+    const empty = { mode, processed: 0, detached: 0, ambiguous: 0, outcomes: [] as any[] };
+    if (this.wrongKindIdFixRunning) return empty;
+    this.wrongKindIdFixRunning = true;
+    this.trackRepair('wrong-kind-external-ids', {
+      running: true,
+      processed: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      finishedAt: null,
+    });
+    try {
+      const rows = await this.prisma.$queryRaw<
+        {
+          mediaId: string;
+          title: string;
+          aliases: { id: string; provider: string; value: string; kind: string }[];
+          anchored: boolean;
+        }[]
+      >`
+        SELECT m.id AS "mediaId", m.title,
+          jsonb_agg(jsonb_build_object('id', bad.id, 'provider', bad.provider,
+            'value', bad.value, 'kind', bad.provider_entity_kind) ORDER BY bad.provider, bad.value) AS aliases,
+          EXISTS (
+            SELECT 1 FROM external_ids good WHERE good.media_id=m.id
+              AND good.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind"
+              AND good.provider IN ('TMDB','IMDB','THE_TVDB')
+          ) AS anchored
+        FROM media_items m
+        JOIN external_ids bad ON bad.media_id=m.id
+          AND bad.provider_entity_kind!=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind"
+        GROUP BY m.id, m.title, m.type
+        ORDER BY m.popularity DESC, m.id
+        LIMIT ${Math.max(1, Math.min(limit ?? 500, 100000))}`;
+      this.trackRepair('wrong-kind-external-ids', { total: rows.length });
+      let detached = 0;
+      let ambiguous = 0;
+      const outcomes: typeof empty.outcomes = [];
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const aliases = Array.isArray(row.aliases) ? row.aliases : [];
+        if (!row.anchored) {
+          ambiguous++;
+          outcomes.push({
+            mediaId: row.mediaId,
+            title: row.title,
+            action: 'ambiguous',
+            aliases,
+            reason: 'no correct-kind provider identity anchors this media row',
+          });
+        } else {
+          if (mode === 'repair' && aliases.length) {
+            await this.prisma.externalId.deleteMany({
+              where: { id: { in: aliases.map((alias) => alias.id) } },
+            });
+          }
+          detached += aliases.length;
+          outcomes.push({
+            mediaId: row.mediaId,
+            title: row.title,
+            action: 'detach',
+            aliases,
+            reason: `${mode === 'repair' ? 'detached' : 'would detach'} wrong-kind aliases; correct-kind identity retained`,
+          });
+        }
+        this.trackRepair('wrong-kind-external-ids', {
+          processed: i + 1,
+          succeeded: detached,
+          failed: ambiguous,
+          current: row.title,
+        });
+      }
+      this.trackRepair('wrong-kind-external-ids', {
+        running: false,
+        processed: rows.length,
+        succeeded: detached,
+        failed: ambiguous,
+        finishedAt: new Date(),
+      });
+      return { mode, processed: rows.length, detached, ambiguous, outcomes };
+    } finally {
+      this.wrongKindIdFixRunning = false;
+    }
+  }
+
   // ---- TVDB id conflicts (multi-id rows) ----
   private tvdbIdFixRunning = false;
 
+  private async stampTvdbIdAudit(
+    mediaId: string,
+    kind: ProviderEntityKind,
+    status: 'benign' | 'unresolved' | 'ambiguous',
+  ): Promise<void> {
+    await this.prisma.$executeRaw`
+      UPDATE media_items m
+      SET metadata_provenance=jsonb_set(
+        COALESCE(m.metadata_provenance, '{}'::jsonb), '{tvdbIdAudit}',
+        jsonb_build_object(
+          'fingerprint', ids.fingerprint,
+          'status', ${status}::text,
+          'checkedAt', ${new Date().toISOString()}::text
+        ), true)
+      FROM (
+        SELECT media_id, md5(string_agg(value, '|' ORDER BY value)) AS fingerprint
+        FROM external_ids
+        WHERE media_id=${mediaId} AND provider='THE_TVDB'
+          AND provider_entity_kind=${kind}::"ProviderEntityKind"
+        GROUP BY media_id
+      ) ids
+      WHERE m.id=ids.media_id`;
+  }
+
   /**
    * Repair rows carrying MORE THAN ONE TVDB id (same entity kind). Two cases:
-   *  - Merge leftovers: every id maps to the SAME TMDB entity → benign, kept as-is.
-   *  - Id poisoning (the old title-attach bug): ids map to DIFFERENT TMDB entities →
-   *    the id matching the row's own TMDB id stays, the others are DETACHED.
+   *  - Merge leftovers: every id maps to the same identity → benign, kept as-is.
+   *  - Id poisoning (the old title-attach bug): ids map to different identities →
+   *    aliases contradicting the row's TMDB/IMDb anchor are detached.
+   * Series ids resolve through TMDB /find; movie ids resolve through TVDB remote ids.
    * Rows where no decisive id can be picked are reported as ambiguous (never guessed).
    * NON-DESTRUCTIVE for user data: detaching an external id never deletes history —
    * it only stops future lookups from resolving to the wrong row.
    */
-  async repairTvdbIdConflicts(limit?: number): Promise<{
+  async repairTvdbIdConflicts(
+    limit?: number,
+    mode: 'dry-run' | 'repair' = 'repair',
+  ): Promise<{
+    mode: 'dry-run' | 'repair';
     processed: number;
     mergedKept: number;
     conflictsFixed: number;
     idsDetached: number;
+    rateLimited: boolean;
     ambiguous: {
       mediaId: string;
       title: string;
       ids: string[];
       mapped: Record<string, number | null>;
+      mappedImdb: Record<string, string | null>;
+    }[];
+    outcomes: {
+      mediaId: string;
+      title: string;
+      action: 'keep' | 'detach' | 'ambiguous' | 'failed';
+      ids: string[];
+      reason: string;
     }[];
   }> {
     const empty = {
+      mode,
       processed: 0,
       mergedKept: 0,
       conflictsFixed: 0,
       idsDetached: 0,
+      rateLimited: false,
       ambiguous: [] as any[],
+      outcomes: [] as {
+        mediaId: string;
+        title: string;
+        action: 'keep' | 'detach' | 'ambiguous' | 'failed';
+        ids: string[];
+        reason: string;
+      }[],
     };
     if (this.tvdbIdFixRunning) {
       this.logger.log('TVDB-id conflict repair already running — skipping');
       return empty;
     }
-    if (!this.tmdbProvider.enabled) {
-      this.logger.warn('TMDB not configured — skipping TVDB-id conflict repair');
+    if (!this.tmdbProvider.enabled && !this.tvdb.enabled) {
+      this.logger.warn('TMDB and TVDB are not configured — skipping TVDB-id conflict repair');
       return empty;
     }
     this.tvdbIdFixRunning = true;
@@ -3335,19 +3882,34 @@ export class MetadataBackfillService {
           type: string;
           kind: string;
           ids: string[];
+          fingerprint: string;
           tmdb: string | null;
+          imdb: string | null;
         }[]
       >`
         SELECT e.media_id AS "mediaId", m.title, m.type, e.provider_entity_kind AS kind,
-               array_agg(e.value) AS ids,
+               array_agg(e.value ORDER BY e.value) AS ids,
+               md5(string_agg(e.value, '|' ORDER BY e.value)) AS fingerprint,
                (SELECT value FROM external_ids t
                 WHERE t.media_id = e.media_id AND t.provider = 'TMDB' AND t.provider_entity_kind = e.provider_entity_kind
-                LIMIT 1) AS tmdb
+                LIMIT 1) AS tmdb,
+               (SELECT value FROM external_ids i
+                WHERE i.media_id = e.media_id AND i.provider = 'IMDB' AND i.provider_entity_kind = e.provider_entity_kind
+                LIMIT 1) AS imdb
         FROM external_ids e
         JOIN media_items m ON m.id = e.media_id
         WHERE e.provider = 'THE_TVDB'
-        GROUP BY e.media_id, m.title, m.type, e.provider_entity_kind
-        HAVING count(*) > 1
+        GROUP BY e.media_id, m.title, m.type, m.metadata_provenance, e.provider_entity_kind
+        HAVING count(*) > 1 AND (
+          COALESCE(m.metadata_provenance #>> '{tvdbIdAudit,fingerprint}', '')
+            != md5(string_agg(e.value, '|' ORDER BY e.value))
+          OR COALESCE(m.metadata_provenance #>> '{tvdbIdAudit,checkedAt}', '1970-01-01')::timestamptz
+            < NOW() - CASE COALESCE(m.metadata_provenance #>> '{tvdbIdAudit,status}', '')
+                WHEN 'benign' THEN INTERVAL '100 years'
+                WHEN 'unresolved' THEN INTERVAL '90 days'
+                WHEN 'ambiguous' THEN INTERVAL '180 days'
+                ELSE INTERVAL '0 days' END
+        )
         ORDER BY m.title
         LIMIT ${Math.max(1, Math.min(limit ?? 500, 100000))}
       `;
@@ -3356,9 +3918,13 @@ export class MetadataBackfillService {
       let mergedKept = 0;
       let conflictsFixed = 0;
       let idsDetached = 0;
+      let processed = 0;
+      let rateLimited = false;
       const ambiguous: any[] = [];
+      const outcomes: typeof empty.outcomes = [];
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
+        processed = i + 1;
         this.trackRepair('tvdb-id-conflicts', {
           processed: i + 1,
           succeeded: conflictsFixed,
@@ -3367,40 +3933,148 @@ export class MetadataBackfillService {
         });
         try {
           const mapped: Record<string, number | null> = {};
+          const mappedImdb: Record<string, string | null> = {};
           for (const id of row.ids) {
-            const found = await this.tmdbProvider.findByExternalId(id, 'tvdb_id').catch(() => null);
-            // Whatever the id maps to (a poisoned id may even map cross-type).
-            mapped[id] = found?.show?.tmdbId ?? found?.movie?.tmdbId ?? null;
+            if (row.kind === ProviderEntityKind.MOVIE) {
+              let identity: Awaited<ReturnType<TvdbProvider['getMovieIdentity']>> | null = null;
+              if (this.tvdb.enabled) {
+                try {
+                  identity = await this.tvdb.getMovieIdentity(Number(id));
+                } catch (e) {
+                  if (this.isRateLimitError(e)) throw e;
+                }
+              }
+              mapped[id] = identity?.tmdbId ?? null;
+              mappedImdb[id] = identity?.imdbId ?? null;
+            } else {
+              let found: Awaited<ReturnType<TmdbProvider['findByExternalId']>> | null = null;
+              if (this.tmdbProvider.enabled) {
+                try {
+                  found = await this.tmdbProvider.findByExternalId(id, 'tvdb_id');
+                } catch (e) {
+                  if (this.isRateLimitError(e)) throw e;
+                }
+              }
+              mapped[id] = found?.show?.tmdbId ?? null;
+              mappedImdb[id] = null;
+            }
           }
-          const distinct = [
-            ...new Set(Object.values(mapped).filter((v): v is number => v != null)),
-          ];
-          if (distinct.length <= 1) {
-            mergedKept++; // merge leftovers (or unverifiable-but-uniform) — benign
-            continue;
-          }
-          // Poison: pick the id whose mapped TMDB entity equals the row's own TMDB id.
           const rowTmdb = row.tmdb ? Number(row.tmdb) : null;
-          const keep = rowTmdb != null ? row.ids.find((id) => mapped[id] === rowTmdb) : undefined;
-          if (!keep) {
-            ambiguous.push({ mediaId: row.mediaId, title: row.title, ids: row.ids, mapped });
+          const identityKey = (id: string) =>
+            mapped[id] != null
+              ? `tmdb:${mapped[id]}`
+              : mappedImdb[id]
+                ? `imdb:${mappedImdb[id]}`
+                : null;
+          const distinct = [
+            ...new Set(row.ids.map(identityKey).filter((v): v is string => v != null)),
+          ];
+          const hasUnresolved = row.ids.some((id) => identityKey(id) == null);
+          const matchesAnchor = (id: string) =>
+            (rowTmdb != null && mapped[id] === rowTmdb) ||
+            Boolean(row.imdb && mappedImdb[id] === row.imdb);
+          const hasAnchor = rowTmdb != null || Boolean(row.imdb);
+          const keep = hasAnchor ? row.ids.filter(matchesAnchor) : [];
+          const bad =
+            keep.length > 0
+              ? row.ids.filter((id) => identityKey(id) != null && !matchesAnchor(id))
+              : [];
+
+          if (bad.length > 0) {
+            if (mode === 'repair') {
+              await this.prisma.externalId.deleteMany({
+                where: {
+                  mediaId: row.mediaId,
+                  provider: 'THE_TVDB',
+                  providerEntityKind: row.kind as any,
+                  value: { in: bad },
+                },
+              });
+              const remaining = row.ids.filter((id) => !bad.includes(id));
+              if (remaining.length > 1) {
+                await this.stampTvdbIdAudit(
+                  row.mediaId,
+                  row.kind as ProviderEntityKind,
+                  remaining.every((id) => identityKey(id) != null && matchesAnchor(id))
+                    ? 'benign'
+                    : 'unresolved',
+                );
+              }
+            }
+            conflictsFixed++;
+            idsDetached += bad.length;
+            outcomes.push({
+              mediaId: row.mediaId,
+              title: row.title,
+              action: 'detach',
+              ids: bad,
+              reason: `verified ids conflict with row ${rowTmdb ? `TMDB ${rowTmdb}` : `IMDb ${row.imdb}`}`,
+            });
+            this.logger.log(
+              `TVDB-id conflict ${mode} for "${row.title}" (${row.mediaId}): kept ${keep.join(', ')}, ${mode === 'repair' ? 'detached' : 'would detach'} ${bad.join(', ')}`,
+            );
             continue;
           }
-          const bad = row.ids.filter((id) => id !== keep);
-          await this.prisma.externalId.deleteMany({
-            where: {
+
+          if (
+            (hasAnchor && keep.length === 0 && distinct.length > 0) ||
+            (!hasAnchor && distinct.length > 1)
+          ) {
+            ambiguous.push({
               mediaId: row.mediaId,
-              provider: 'THE_TVDB',
-              providerEntityKind: row.kind as any,
-              value: { in: bad },
-            },
+              title: row.title,
+              ids: row.ids,
+              mapped,
+              mappedImdb,
+            });
+            outcomes.push({
+              mediaId: row.mediaId,
+              title: row.title,
+              action: 'ambiguous',
+              ids: row.ids,
+              reason: hasAnchor
+                ? 'no TVDB id resolves to the row identity'
+                : 'multiple resolved identities and no row anchor',
+            });
+            if (mode === 'repair') {
+              await this.stampTvdbIdAudit(row.mediaId, row.kind as ProviderEntityKind, 'ambiguous');
+            }
+            continue;
+          }
+
+          mergedKept++;
+          outcomes.push({
+            mediaId: row.mediaId,
+            title: row.title,
+            action: 'keep',
+            ids: row.ids,
+            reason:
+              distinct.length === 0
+                ? 'unresolved; retained conservatively'
+                : hasUnresolved
+                  ? 'resolved ids agree; unresolved aliases retained for later verification'
+                  : 'all resolved ids describe the same media identity',
           });
-          conflictsFixed++;
-          idsDetached += bad.length;
-          this.logger.log(
-            `TVDB-id conflict repaired for "${row.title}" (${row.mediaId}): kept ${keep}, detached ${bad.join(', ')}`,
-          );
+          if (mode === 'repair') {
+            await this.stampTvdbIdAudit(
+              row.mediaId,
+              row.kind as ProviderEntityKind,
+              distinct.length === 0 || hasUnresolved ? 'unresolved' : 'benign',
+            );
+          }
         } catch (e) {
+          if (this.isRateLimitError(e)) {
+            rateLimited = true;
+            this.logger.warn(`TVDB-id conflict ${mode} rate-limited after ${i} rows`);
+            break;
+          }
+          outcomes.push({
+            mediaId: row.mediaId,
+            title: row.title,
+            action: 'failed',
+            ids: row.ids,
+            reason: (e as Error).message,
+          });
           this.logger.warn(
             `TVDB-id conflict check failed for "${row.title}": ${(e as Error).message}`,
           );
@@ -3408,15 +4082,24 @@ export class MetadataBackfillService {
       }
       this.trackRepair('tvdb-id-conflicts', {
         running: false,
-        processed: rows.length,
+        processed,
         succeeded: conflictsFixed,
         failed: ambiguous.length,
         finishedAt: new Date(),
       });
       this.logger.log(
-        `TVDB-id conflict repair: ${rows.length} rows checked — ${mergedKept} merge-leftover kept, ${conflictsFixed} conflicts fixed (${idsDetached} ids detached), ${ambiguous.length} ambiguous`,
+        `TVDB-id conflict ${mode}: ${processed} rows checked — ${mergedKept} same/unresolved kept, ${conflictsFixed} conflicts ${mode === 'repair' ? 'fixed' : 'found'} (${idsDetached} ids ${mode === 'repair' ? 'detached' : 'would detach'}), ${ambiguous.length} ambiguous${rateLimited ? ', rate-limited' : ''}`,
       );
-      return { processed: rows.length, mergedKept, conflictsFixed, idsDetached, ambiguous };
+      return {
+        mode,
+        processed,
+        mergedKept,
+        conflictsFixed,
+        idsDetached,
+        ambiguous,
+        outcomes,
+        rateLimited,
+      };
     } finally {
       this.tvdbIdFixRunning = false;
     }
@@ -4212,16 +4895,25 @@ export class MetadataBackfillService {
           id: string;
           title: string;
           type: string;
-          tvdb: string;
+          structureProvider: StructureProvider | null;
+          tmdb: string | null;
+          tvdb: string | null;
           posterUrl: string | null;
           posterUrls: unknown;
         }[]
       >`
-        SELECT m.id, m.title, m.type, m.poster_url AS "posterUrl", m.poster_urls AS "posterUrls",
+        SELECT m.id, m.title, m.type, sh.structure_provider AS "structureProvider",
+               m.poster_url AS "posterUrl", m.poster_urls AS "posterUrls",
+               (SELECT e.value FROM external_ids e
+                  WHERE e.media_id=m.id AND e.provider='TMDB'
+                    AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind"
+                  ORDER BY e.value LIMIT 1) AS tmdb,
                (SELECT e.value FROM external_ids e
                   WHERE e.media_id = m.id AND e.provider = 'THE_TVDB'
+                    AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind"
                   ORDER BY e.value LIMIT 1) AS tvdb
         FROM media_items m
+        LEFT JOIN shows sh ON sh.media_id=m.id
         WHERE (
             m.poster_url ~ '/banners/[^/]+$'
             OR m.poster_url LIKE 'https://artworks.thetvdb.com/banners/https://artworks.thetvdb.com/banners/%'
@@ -4233,7 +4925,9 @@ export class MetadataBackfillService {
                  OR p.value LIKE 'http://artworks.thetvdb.com/banners/http://artworks.thetvdb.com/banners/%'
             )
           )
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB')
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id
+            AND e.provider IN ('TMDB','THE_TVDB')
+            AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
           AND COALESCE(m.metadata_provenance->>'bannerCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'
         ORDER BY m.popularity DESC, m.id
         LIMIT ${take}`;
@@ -4272,14 +4966,36 @@ export class MetadataBackfillService {
             if (sample.length < 5) sample.push(m.title);
             continue;
           }
-          // Clear the freshness stamp so the TVDB rehydration actually re-fetches
-          // (and re-picks artworks with the fixed mapper).
-          await this.prisma.mediaItem.update({
-            where: { id: m.id },
-            data: { metadataRefreshedAt: null },
-          });
-          if (m.type === 'SHOW') await this.meta.ensureShowFullTvdb(Number(m.tvdb));
-          else await this.meta.ensureMovieFullTvdb(Number(m.tvdb));
+          if (m.type === 'SHOW') {
+            if (m.structureProvider === StructureProvider.TMDB && m.tmdb) {
+              await this.meta.ensureShowFull(Number(m.tmdb), undefined, {
+                forceRefresh: true,
+                writeScope: 'ARTWORK_ONLY',
+              });
+            } else if (m.tvdb) {
+              await this.meta.ensureShowFullTvdb(Number(m.tvdb), undefined, {
+                skipClassification: true,
+                forceRefresh: true,
+                writeScope: 'ARTWORK_ONLY',
+              });
+            } else {
+              throw new Error('No correct-kind structural-owner id for artwork repair');
+            }
+          } else if (m.tmdb) {
+            await this.prisma.mediaItem.update({
+              where: { id: m.id },
+              data: { metadataRefreshedAt: null },
+            });
+            await this.meta.ensureMovieFull(Number(m.tmdb));
+          } else if (m.tvdb) {
+            await this.prisma.mediaItem.update({
+              where: { id: m.id },
+              data: { metadataRefreshedAt: null },
+            });
+            await this.meta.ensureMovieFullTvdb(Number(m.tvdb));
+          } else {
+            throw new Error('No correct-kind provider id for artwork repair');
+          }
           succeeded++;
           if (sample.length < 5) sample.push(m.title);
         } catch (e) {
@@ -4366,10 +5082,12 @@ export class MetadataBackfillService {
         SELECT m.id, m.title, m.type,
                (SELECT e.value FROM external_ids e
                   WHERE e.media_id = m.id AND e.provider = 'TMDB'
+                    AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind"
                   ORDER BY e.value LIMIT 1) AS tmdb
         FROM media_items m
         WHERE m.recommendations_synced_at IS NULL
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB')
+          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB'
+            AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
           AND COALESCE(m.metadata_provenance->>'recsCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'
         ORDER BY m.popularity DESC, m.id
         LIMIT ${take}`;

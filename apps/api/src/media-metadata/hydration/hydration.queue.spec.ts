@@ -6,6 +6,7 @@ function makeQueue() {
   const q = new HydrationQueue({} as any);
   const calls: Array<{ name: string; data: any; opts: any }> = [];
   (q as any).queue = {
+    getJob: async () => null,
     add: async (name: string, data: any, opts: any) => {
       calls.push({ name, data, opts });
       return {};
@@ -48,5 +49,36 @@ describe('HydrationQueue — stable deterministic job ids (dedup)', () => {
     // Transient anime-match failures retry instead of persisting a degraded classification.
     expect(calls[0].opts.attempts).toBe(5);
     expect(calls[0].opts.backoff).toEqual({ type: 'exponential', delay: 120000 });
+  });
+
+  it('re-enqueues a retained completed TVDB cast refresh job', async () => {
+    const { q, calls } = makeQueue();
+    const remove = jest.fn(async () => undefined);
+    (q as any).queue.getJob = jest.fn(async () => ({
+      getState: jest.fn(async () => 'completed'),
+      remove,
+    }));
+
+    await q.enqueueTvdbRehydrate('m9', 123);
+
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(calls[0]).toMatchObject({
+      name: 'tvdb-rehydrate',
+      data: { mediaId: 'm9', tvdbId: 123 },
+      opts: { jobId: 'tvdb-rehydrate-media-m9' },
+    });
+  });
+
+  it('keeps active TVDB cast refresh jobs deduplicated', async () => {
+    const { q } = makeQueue();
+    const remove = jest.fn(async () => undefined);
+    (q as any).queue.getJob = jest.fn(async () => ({
+      getState: jest.fn(async () => 'active'),
+      remove,
+    }));
+
+    await q.enqueueTvdbRehydrate('m9', 123);
+
+    expect(remove).not.toHaveBeenCalled();
   });
 });

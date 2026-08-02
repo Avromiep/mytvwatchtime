@@ -68,8 +68,8 @@ const animeShow = (over: Record<string, unknown> = {}) => ({
   title: 'Naruto',
   type: 'SHOW',
   externalIds: [
-    { provider: ExternalProvider.TMDB, value: '11' },
-    { provider: ExternalProvider.THE_TVDB, value: '789' },
+    { provider: ExternalProvider.TMDB, value: '11', providerEntityKind: 'SERIES' },
+    { provider: ExternalProvider.THE_TVDB, value: '789', providerEntityKind: 'SERIES' },
   ],
   show: { yearStart: 2002 },
   ...over,
@@ -108,8 +108,8 @@ describe('MetadataBackfillService — backfill anime routing (isAnimeMedia)', ()
     type: 'SHOW',
     metadataRefreshedAt: null,
     externalIds: [
-      { provider: 'TMDB', value: '65942' },
-      { provider: 'THE_TVDB', value: '305089' },
+      { provider: 'TMDB', value: '65942', providerEntityKind: 'SERIES' },
+      { provider: 'THE_TVDB', value: '305089', providerEntityKind: 'SERIES' },
     ],
     genres: [],
     show: { keywords: null },
@@ -308,6 +308,7 @@ describe('MetadataBackfillService.repairTvdbIdConflicts', () => {
   function make(rows: any[], mappedById: Record<string, { show?: number; movie?: number } | null>) {
     const prisma: any = {
       $queryRaw: jest.fn(async () => rows),
+      $executeRaw: jest.fn(async () => 1),
       externalId: { deleteMany: jest.fn(async () => ({ count: 1 })) },
     };
     const tmdbProvider = {
@@ -343,6 +344,7 @@ describe('MetadataBackfillService.repairTvdbIdConflicts', () => {
     kind: 'SERIES',
     ids: ['111', '222'],
     tmdb: '60989',
+    imdb: null,
     ...over,
   });
 
@@ -356,6 +358,11 @@ describe('MetadataBackfillService.repairTvdbIdConflicts', () => {
       expect.objectContaining({ processed: 1, mergedKept: 1, conflictsFixed: 0, idsDetached: 0 }),
     );
     expect(prisma.externalId.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).toHaveBeenCalled();
+    expect((prisma.$executeRaw as jest.Mock).mock.calls[0][0].join(' ')).toContain('tvdbIdAudit');
+    expect((prisma.$queryRaw as jest.Mock).mock.calls[0][0].join(' ')).toContain(
+      "'{tvdbIdAudit,fingerprint}'",
+    );
   });
 
   it('detaches only the poisoned id (keeps the one matching the row TMDB id)', async () => {
@@ -385,6 +392,116 @@ describe('MetadataBackfillService.repairTvdbIdConflicts', () => {
     const res = await service.repairTvdbIdConflicts();
     expect(res.ambiguous).toHaveLength(1);
     expect(res.conflictsFixed).toBe(0);
+    expect(prisma.externalId.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('dry-runs a conflict without detaching ids', async () => {
+    const { service, prisma } = make([row()], {
+      '111': { show: 60989 },
+      '222': { show: 62705 },
+    });
+    const res = await service.repairTvdbIdConflicts(undefined, 'dry-run');
+    expect(res).toEqual(
+      expect.objectContaining({ mode: 'dry-run', conflictsFixed: 1, idsDetached: 1 }),
+    );
+    expect(res.outcomes[0]).toEqual(expect.objectContaining({ action: 'detach', ids: ['222'] }));
+    expect(prisma.externalId.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('uses TVDB movie remote ids instead of TMDB tvdb_id /find', async () => {
+    const prisma: any = {
+      $queryRaw: jest.fn(async () => [
+        row({
+          type: 'MOVIE',
+          kind: 'MOVIE',
+          tmdb: '680',
+          imdb: 'tt0110912',
+          ids: ['16858', '99999'],
+        }),
+      ]),
+      $executeRaw: jest.fn(async () => 1),
+      externalId: { deleteMany: jest.fn(async () => ({ count: 1 })) },
+    };
+    const tvdb = {
+      enabled: true,
+      getMovieIdentity: jest.fn(async (id: number) =>
+        id === 16858
+          ? { tvdbId: id, tmdbId: 680, imdbId: 'tt0110912' }
+          : { tvdbId: id, tmdbId: 999, imdbId: 'tt9999999' },
+      ),
+    };
+    const tmdbProvider = { enabled: true, findByExternalId: jest.fn() };
+    const service = new MetadataBackfillService(
+      prisma,
+      mockMeta(),
+      {} as any,
+      {} as any,
+      {} as any,
+      tvdb as any,
+      tmdbProvider as any,
+      {} as any,
+      new CastDedupService(),
+    );
+
+    const res = await service.repairTvdbIdConflicts();
+
+    expect(tmdbProvider.findByExternalId).not.toHaveBeenCalled();
+    expect(tvdb.getMovieIdentity).toHaveBeenCalledTimes(2);
+    expect(res).toEqual(expect.objectContaining({ conflictsFixed: 1, idsDetached: 1 }));
+    expect(prisma.externalId.deleteMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ value: { in: ['99999'] } }) }),
+    );
+  });
+});
+
+describe('MetadataBackfillService.repairWrongKindExternalIds', () => {
+  function make(rows: any[]) {
+    const prisma: any = {
+      $queryRaw: jest.fn(async () => rows),
+      externalId: { deleteMany: jest.fn(async () => ({ count: 1 })) },
+    };
+    const service = new MetadataBackfillService(
+      prisma,
+      mockMeta(),
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      new CastDedupService(),
+    );
+    return { service, prisma };
+  }
+
+  const row = (anchored: boolean) => ({
+    mediaId: 'show-1',
+    title: 'Some Show',
+    anchored,
+    aliases: [{ id: 'bad-1', provider: 'THE_TVDB', value: '44', kind: 'MOVIE' }],
+  });
+
+  it('detaches wrong-kind aliases only when a correct-kind identity anchors the row', async () => {
+    const { service, prisma } = make([row(true)]);
+    const result = await service.repairWrongKindExternalIds(10, 'repair');
+    expect(result).toMatchObject({ processed: 1, detached: 1, ambiguous: 0 });
+    expect(prisma.externalId.deleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ['bad-1'] } },
+    });
+  });
+
+  it('retains unanchored wrong-kind aliases for manual review', async () => {
+    const { service, prisma } = make([row(false)]);
+    const result = await service.repairWrongKindExternalIds(10, 'repair');
+    expect(result).toMatchObject({ processed: 1, detached: 0, ambiguous: 1 });
+    expect(prisma.externalId.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('reports dry-run detachments without writing', async () => {
+    const { service, prisma } = make([row(true)]);
+    const result = await service.repairWrongKindExternalIds(10, 'dry-run');
+    expect(result.outcomes[0]).toMatchObject({ action: 'detach' });
     expect(prisma.externalId.deleteMany).not.toHaveBeenCalled();
   });
 });
@@ -651,6 +768,7 @@ describe('MetadataBackfillService', () => {
           metadataProvenance: {
             animeTvdbRemapVersion: StructureRemapService.MATCHER_VERSION,
             structureProvider: 'tvdb',
+            structureRemapVersion: StructureRemapService.MATCHER_VERSION,
           },
         },
       });
@@ -716,7 +834,9 @@ describe('MetadataBackfillService', () => {
           id: 'm9',
           title: 'House',
           type: 'SHOW',
-          externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }],
+          externalIds: [
+            { provider: ExternalProvider.TMDB, value: '11', providerEntityKind: 'SERIES' },
+          ],
           genres: [{ genre: { slug: 'drama', name: 'Drama' } }],
         },
       ]);
@@ -732,7 +852,9 @@ describe('MetadataBackfillService', () => {
           id: 'm9',
           title: 'House',
           type: 'SHOW',
-          externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }],
+          externalIds: [
+            { provider: ExternalProvider.TMDB, value: '11', providerEntityKind: 'SERIES' },
+          ],
           genres: [],
         },
       ]);
@@ -1576,6 +1698,8 @@ describe('MetadataBackfillService.repairBannerPosters', () => {
         id: 'm1',
         title: 'Show A',
         type: 'SHOW',
+        structureProvider: 'TVDB',
+        tmdb: null,
         tvdb: '368495',
         posterUrl: 'https://artworks.thetvdb.com/banners/v4/series/368495/banners/foo.jpg',
         posterUrls: null,
@@ -1584,6 +1708,8 @@ describe('MetadataBackfillService.repairBannerPosters', () => {
         id: 'm2',
         title: 'Movie B',
         type: 'MOVIE',
+        structureProvider: null,
+        tmdb: null,
         tvdb: '777',
         posterUrl: 'https://artworks.thetvdb.com/banners/v4/movie/777/banners/foo.jpg',
         posterUrls: null,
@@ -1604,11 +1730,11 @@ describe('MetadataBackfillService.repairBannerPosters', () => {
 
     const res = await service.repairBannerPosters();
 
-    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
-      where: { id: 'm1' },
-      data: { metadataRefreshedAt: null },
+    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(368495, undefined, {
+      skipClassification: true,
+      forceRefresh: true,
+      writeScope: 'ARTWORK_ONLY',
     });
-    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(368495);
     expect(meta.ensureMovieFullTvdb).toHaveBeenCalledWith(777);
     expect(res).toEqual(expect.objectContaining({ processed: 2, succeeded: 2, failed: 0 }));
   });
@@ -1620,6 +1746,8 @@ describe('MetadataBackfillService.repairBannerPosters', () => {
         id: 'm1',
         title: 'Show A',
         type: 'SHOW',
+        structureProvider: 'TVDB',
+        tmdb: null,
         tvdb: '417289',
         posterUrl:
           'https://artworks.thetvdb.com/banners/https://artworks.thetvdb.com/banners/v4/series/417289/posters/621e6277de9a1.jpg',
@@ -1755,6 +1883,20 @@ describe('MetadataBackfillService.repairProviderDuplicateMovies', () => {
     expect(res).toMatchObject({ merged: 1, attached: 0 });
   });
 
+  it('dry-runs a verified merge without mutating either movie row', async () => {
+    const { service, mergeSpy } = make({
+      candidates: [{ id: 'src1', title: 'X', tvdbId: null, imdbId: 'tt123' }],
+      findResult: { movie: { tmdbId: 555 } },
+      localTarget: 'dst9',
+    });
+    const res = await service.repairProviderDuplicateMovies(undefined, 'dry-run');
+    expect(res).toMatchObject({ mode: 'dry-run', merged: 1, attached: 0 });
+    expect(res.outcomes[0]).toEqual(
+      expect.objectContaining({ action: 'merge', sourceId: 'src1', targetId: 'dst9' }),
+    );
+    expect(mergeSpy).not.toHaveBeenCalled();
+  });
+
   it('parks rows with provably no TMDB counterpart', async () => {
     const { service, prisma } = make({
       candidates: [{ id: 'src1', title: 'Obscure Flick', tvdbId: '1', imdbId: null }],
@@ -1837,5 +1979,90 @@ describe('MetadataBackfillService.repairProviderDuplicateMovies', () => {
     const selectionSql = (prisma.$queryRaw.mock.calls[0]?.[0] ?? []).join(' ');
     expect(selectionSql).toContain('providerDupNoMatch');
     expect(selectionSql).toContain("INTERVAL '180 days'");
+  });
+});
+
+describe('MetadataBackfillService movie duplicate merge data preservation', () => {
+  it('merges colliding watch-provider alerts before deleting the source movie', async () => {
+    const older = new Date('2026-01-01T00:00:00Z');
+    const newer = new Date('2026-02-01T00:00:00Z');
+    const alertUpdate = jest.fn(async () => ({}));
+    const alertDelete = jest.fn(async () => ({}));
+    const tx: any = {
+      $executeRaw: jest.fn(async () => 0),
+      mediaItem: {
+        findUnique: jest.fn(async ({ where }: any) => ({
+          type: 'MOVIE',
+          title: where.id === 'src' ? 'Source' : 'Target',
+        })),
+        delete: jest.fn(async () => ({})),
+      },
+      userMovieStatus: { deleteMany: jest.fn(async () => ({ count: 0 })) },
+      watchHistory: { updateMany: jest.fn(async () => ({ count: 0 })) },
+      watchlistItem: { deleteMany: jest.fn(async () => ({ count: 0 })) },
+      favorite: { deleteMany: jest.fn(async () => ({ count: 0 })) },
+      rating: { deleteMany: jest.fn(async () => ({ count: 0 })) },
+      reaction: { deleteMany: jest.fn(async () => ({ count: 0 })) },
+      customListItem: { deleteMany: jest.fn(async () => ({ count: 0 })) },
+      comment: { updateMany: jest.fn(async () => ({ count: 0 })) },
+      externalReview: { updateMany: jest.fn(async () => ({ count: 0 })) },
+      importItem: { updateMany: jest.fn(async () => ({ count: 0 })) },
+      hydrationJobItem: { updateMany: jest.fn(async () => ({ count: 0 })) },
+      watchProviderAlert: {
+        findMany: jest.fn(async () => [
+          {
+            id: 'source-alert',
+            userId: 'u1',
+            mediaId: 'src',
+            offerType: 'STREAM',
+            country: 'CA',
+            providerIds: [8],
+            active: true,
+            createdAt: newer,
+            notifiedAt: null,
+          },
+        ]),
+        findFirst: jest.fn(async () => ({
+          id: 'target-alert',
+          userId: 'u1',
+          mediaId: 'dst',
+          offerType: 'STREAM',
+          country: 'US',
+          providerIds: [9],
+          active: false,
+          createdAt: older,
+          notifiedAt: older,
+        })),
+        update: alertUpdate,
+        delete: alertDelete,
+      },
+    };
+    const prisma: any = { $transaction: jest.fn(async (fn: any) => fn(tx)) };
+    const service = new MetadataBackfillService(
+      prisma,
+      mockMeta(),
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      new CastDedupService(),
+    );
+
+    await (service as any).mergeDuplicateMovieRows('src', 'dst');
+
+    expect(alertUpdate).toHaveBeenCalledWith({
+      where: { id: 'target-alert' },
+      data: {
+        active: true,
+        country: 'CA',
+        providerIds: [8],
+        createdAt: older,
+        notifiedAt: older,
+      },
+    });
+    expect(alertDelete).toHaveBeenCalledWith({ where: { id: 'source-alert' } });
+    expect(tx.mediaItem.delete).toHaveBeenCalledWith({ where: { id: 'src' } });
   });
 });

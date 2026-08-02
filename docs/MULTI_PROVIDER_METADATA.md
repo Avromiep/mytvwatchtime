@@ -104,6 +104,21 @@ TMDB/TVDB mappings, compare title/year/type/episodes, and if confident, acquire 
 derived from the **sorted** identities, then attach all identities to one record. Insufficient
 evidence → review (no automatic merge; identities stay separate).
 
+For movies, IMDb is the preferred identity bridge. A TVDB movie ID is translated only through
+TVDB's `/movies/{id}/extended` remote TMDB/IMDb IDs; TMDB `/find?external_source=tvdb_id` is not a
+movie lookup and must not be used. Search, import, discovery, and hydration all converge through
+`lightUpsertMovieTvdb`, so a verified bridge reuses the TMDB canonical row and records the TVDB and
+IMDb aliases on it. Historical duplicates are merged only by the dry-runnable admin repair, which
+preserves user-owned movie relations before deleting the source row.
+
+Every provider alias is entity-kind scoped. A SHOW may consume only SERIES aliases and a MOVIE only
+MOVIE aliases; ratings, recommendations, artwork, generic backfill, discovery, and import routing
+apply the same gate. Metadata Health reports wrong-kind aliases separately and its repair detaches
+one only when a correct-kind identity anchors the row. Multiple same-kind TVDB aliases are not
+automatically duplicates: the audited repair fingerprints each set, permanently parks verified
+benign aliases, periodically retries unresolved/ambiguous sets, and detaches only aliases proven to
+contradict the row's TMDB/IMDb anchor.
+
 ## Rate limiting & resilience
 
 - Redis-backed **fixed-window** limiter (per-second + per-minute, atomic) shared across all

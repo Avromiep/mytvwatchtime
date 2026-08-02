@@ -136,12 +136,17 @@ export class ImportMatcher {
       // TVDB merge carry no identity signal, while an inconclusive failure keeps the
       // refusal (we can't tell whether the id is live).
       if (r.mediaId || !r.allDead) {
-        this.mediaCache.set(key, {
+        const result: MediaMatch = {
           mediaId: r.mediaId,
           confidence: r.confidence,
-          title: r.matchedTitle,
+          matchedTitle: r.matchedTitle,
+        };
+        this.mediaCache.set(key, {
+          mediaId: result.mediaId,
+          confidence: result.confidence,
+          title: result.matchedTitle,
         });
-        return r;
+        return result;
       }
       if (!allowTitleFallback) {
         this.mediaCache.set(key, { mediaId: null, confidence: 0, title: null });
@@ -457,17 +462,18 @@ export class ImportMatcher {
    * The CALLER is responsible for caching the result.
    */
   private async matchByTvdbId(
-    rawTvdbSeriesId: string,
+    rawTvdbId: string,
     title: string,
     type: 'SHOW' | 'MOVIE',
     year: number | null = null,
   ): Promise<MediaMatch> {
+    const providerKind = type === 'SHOW' ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
     // 0) Reuse a VERIFIED LOCAL TVDB mapping — no external call.
     const ext = await this.prisma.externalId.findFirst({
       where: {
         provider: ExternalProvider.THE_TVDB,
-        providerEntityKind: ProviderEntityKind.SERIES,
-        value: rawTvdbSeriesId,
+        providerEntityKind: providerKind,
+        value: rawTvdbId,
       },
       include: { media: true },
     });
@@ -475,24 +481,84 @@ export class ImportMatcher {
       const expected = type === 'SHOW' ? MediaType.SHOW : MediaType.MOVIE;
       if (ext.media.type !== expected) {
         this.logger.warn(
-          `TVDB id ${rawTvdbSeriesId} ("${title}") resolves to ${ext.media.type}, expected ${type} — rejecting incompatible identity`,
+          `TVDB id ${rawTvdbId} ("${title}") resolves to ${ext.media.type}, expected ${type} — rejecting incompatible identity`,
         );
         return { mediaId: null, confidence: 0, matchedTitle: null, dead: true };
       }
-      return { mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title };
+      if (type === 'MOVIE' && this.tvdb.enabled) {
+        // Re-verify historical local aliases through TVDB remote ids. The centralized
+        // upsert repoints an alias that the removed title matcher parked on the wrong movie.
+        const mediaId = await this.meta.lightUpsertMovieTvdb({
+          tvdbId: Number(rawTvdbId),
+          title: ext.media.title,
+          year,
+        });
+        return { mediaId, confidence: 0.95, matchedTitle: ext.media.title };
+      }
+      if (type === 'SHOW' && this.tmdb.enabled) {
+        try {
+          const found = await this.tmdb.findByExternalId(rawTvdbId, 'tvdb_id');
+          if (found?.show) {
+            const ownTmdb = await this.prisma.externalId.findFirst({
+              where: {
+                mediaId: ext.media.id,
+                provider: ExternalProvider.TMDB,
+                providerEntityKind: ProviderEntityKind.SERIES,
+              },
+              select: { value: true },
+            });
+            const tmdbOwner = await this.prisma.externalId.findFirst({
+              where: {
+                provider: ExternalProvider.TMDB,
+                providerEntityKind: ProviderEntityKind.SERIES,
+                value: String(found.show.tmdbId),
+              },
+              select: { mediaId: true },
+            });
+            if (ownTmdb?.value === String(found.show.tmdbId)) {
+              return { mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title };
+            }
+            if (!ownTmdb && !tmdbOwner) {
+              await this.attachExternalId(
+                ext.media.id,
+                ExternalProvider.TMDB,
+                ProviderEntityKind.SERIES,
+                String(found.show.tmdbId),
+              );
+              return { mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title };
+            }
+            // A different TMDB owner (or a conflicting TMDB id on this row) proves the
+            // local TVDB alias is suspect. Fall through to the normal routing branch,
+            // which reassigns the verified alias and applies the anime authority rule.
+          } else if (found?.movie) {
+            return { mediaId: null, confidence: 0, matchedTitle: null, dead: true };
+          } else {
+            return { mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title };
+          }
+        } catch (e) {
+          this.logger.debug(
+            `Local TVDB series alias ${rawTvdbId} could not be re-verified: ${(e as Error).message}`,
+          );
+          return { mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title };
+        }
+      } else {
+        return { mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title };
+      }
     }
 
     // 0a) Exact TMDB /find translation (one call, no title search). Anime shows take the
     //     TVDB-authoritative branch instead of the TMDB record. A sibling-kind result is
     //     retained only in import diagnostics; it is never attached to incompatible media.
-    if (this.tmdb.enabled) {
+    // TMDB's tvdb_id /find namespace resolves TVDB series/episodes, not TVDB movies.
+    // Movie ids go through TVDB's verified TMDB/IMDb remote ids in step 0b.
+    if (type === 'SHOW' && this.tmdb.enabled) {
       try {
-        const found = await this.tmdb.findByExternalId(rawTvdbSeriesId, 'tvdb_id');
+        const found = await this.tmdb.findByExternalId(rawTvdbId, 'tvdb_id');
         const preferred = (type === 'SHOW' ? found?.show : found?.movie) ?? null;
         const sibling = (type === 'SHOW' ? found?.movie : found?.show) ?? null;
         if (!preferred && sibling) {
           this.logger.warn(
-            `TVDB id ${rawTvdbSeriesId} ("${title}") is ${type === 'SHOW' ? 'MOVIE' : 'SHOW'} per TMDB /find, expected ${type} — rejecting incompatible identity`,
+            `TVDB id ${rawTvdbId} ("${title}") is ${type === 'SHOW' ? 'MOVIE' : 'SHOW'} per TMDB /find, expected ${type} — rejecting incompatible identity`,
           );
           return { mediaId: null, confidence: 0, matchedTitle: null, dead: true };
         }
@@ -558,7 +624,7 @@ export class ImportMatcher {
               return { mediaId, confidence: 0.9, matchedTitle: s.title };
             } catch (e) {
               this.logger.warn(
-                `Anime TVDB-authoritative hydration failed for ${rawTvdbSeriesId} ("${title}") — retaining an identity-only pending stub: ${(e as Error).message}`,
+                `Anime TVDB-authoritative hydration failed for ${rawTvdbId} ("${title}") — retaining an identity-only pending stub: ${(e as Error).message}`,
               );
               return pendingAnime();
             }
@@ -567,11 +633,12 @@ export class ImportMatcher {
             kind === 'SHOW'
               ? await this.meta.lightUpsertShow({ tmdbId: hit.tmdbId, title, year })
               : await this.meta.lightUpsertMovie({ tmdbId: hit.tmdbId, title, year });
+          await this.attachExternalId(mediaId, ExternalProvider.THE_TVDB, providerKind, rawTvdbId);
           return { mediaId, confidence: 0.95, matchedTitle: title };
         }
       } catch (e) {
         this.logger.debug(
-          `TMDB /find for TVDB id ${rawTvdbSeriesId} ("${title}") failed: ${(e as Error).message}`,
+          `TMDB /find for TVDB id ${rawTvdbId} ("${title}") failed: ${(e as Error).message}`,
         );
       }
     }
@@ -581,7 +648,7 @@ export class ImportMatcher {
     //     id from a dead id. The sibling result is never persisted or attached.
     let dead = false;
     if (this.tvdb.enabled) {
-      const numId = Number(rawTvdbSeriesId);
+      const numId = Number(rawTvdbId);
       const upsertShow = async () => {
         const s = await this.tvdb.getShow(numId);
         const mediaId = await this.meta.lightUpsertShowTvdb({
@@ -597,8 +664,13 @@ export class ImportMatcher {
       };
       const upsertMovie = async () => {
         const mv = await this.tvdb.getMovie(numId);
+        const tmdbValue = mv.externals.find((e) => e.provider === ExternalProvider.TMDB)?.value;
+        const imdbId = mv.externals.find((e) => e.provider === ExternalProvider.IMDB)?.value;
+        const parsedTmdb = tmdbValue ? Number(tmdbValue) : NaN;
         const mediaId = await this.meta.lightUpsertMovieTvdb({
           tvdbId: numId,
+          tmdbId: Number.isSafeInteger(parsedTmdb) && parsedTmdb > 0 ? parsedTmdb : null,
+          imdbId: imdbId ?? null,
           title: mv.title,
           overview: mv.overview ?? null,
           posterUrl: mv.posterUrl ?? null,
@@ -617,7 +689,7 @@ export class ImportMatcher {
             if (type === 'SHOW') await this.tvdb.getMovie(numId);
             else await this.tvdb.getShow(numId);
             this.logger.warn(
-              `TVDB id ${rawTvdbSeriesId} ("${title}") exists as ${type === 'SHOW' ? 'MOVIE' : 'SHOW'}, expected ${type} — rejecting incompatible identity`,
+              `TVDB id ${rawTvdbId} ("${title}") exists as ${type === 'SHOW' ? 'MOVIE' : 'SHOW'}, expected ${type} — rejecting incompatible identity`,
             );
             return { mediaId: null, confidence: 0, matchedTitle: null, dead: true };
           } catch (e2) {
@@ -627,13 +699,13 @@ export class ImportMatcher {
             dead = isProviderError(e2) && e2.category === 'not_found';
             if (!dead) {
               this.logger.warn(
-                `TVDB exact-id recovery failed for ${rawTvdbSeriesId}: ${(e2 as Error).message}`,
+                `TVDB exact-id recovery failed for ${rawTvdbId}: ${(e2 as Error).message}`,
               );
             }
           }
         } else {
           this.logger.warn(
-            `TVDB exact-id recovery failed for ${rawTvdbSeriesId}: ${(e as Error).message}`,
+            `TVDB exact-id recovery failed for ${rawTvdbId}: ${(e as Error).message}`,
           );
         }
       }
@@ -642,7 +714,7 @@ export class ImportMatcher {
     // 0c) TVDB ID present but UNRESOLVABLE — do NOT fall back to title matching
     //     (unless the id is provably dead — see matchByTvdbIds).
     this.logger.warn(
-      `TVDB series ID ${rawTvdbSeriesId} for "${title}" could not be resolved via TMDB or TVDB — refusing title fallback`,
+      `TVDB ${type === 'SHOW' ? 'series' : 'movie'} ID ${rawTvdbId} for "${title}" could not be resolved via TMDB or TVDB — refusing title fallback`,
     );
     return { mediaId: null, confidence: 0, matchedTitle: null, dead };
   }
@@ -877,10 +949,15 @@ export class ImportMatcher {
         where: { provider: ExternalProvider.IMDB, providerEntityKind: kind, value: ids.imdb },
         include: { media: true },
       });
-      if (ext?.media && ext.media.type === type) {
-        return done({ mediaId: ext.media.id, confidence: 0.9, matchedTitle: ext.media.title });
+      const compatibleLocal = ext?.media && ext.media.type === type ? ext.media : null;
+      if (compatibleLocal && !this.tmdb.enabled) {
+        return done({
+          mediaId: compatibleLocal.id,
+          confidence: 0.9,
+          matchedTitle: compatibleLocal.title,
+        });
       }
-      if (ext?.media) {
+      if (ext?.media && !compatibleLocal) {
         this.logger.warn(
           `IMDB id ${ids.imdb} is attached to ${ext.media.type}, expected ${type} — rejecting incompatible identity`,
         );
@@ -889,7 +966,29 @@ export class ImportMatcher {
         try {
           const found = await this.tmdb.findByExternalId(ids.imdb, 'imdb_id');
           const hit = type === 'SHOW' ? found?.show : found?.movie;
+          const sibling = type === 'SHOW' ? found?.movie : found?.show;
           if (hit) {
+            if (type === 'MOVIE' && compatibleLocal) {
+              const tmdbOwner = await this.prisma.externalId.findFirst({
+                where: {
+                  provider: ExternalProvider.TMDB,
+                  providerEntityKind: ProviderEntityKind.MOVIE,
+                  value: String(hit.tmdbId),
+                },
+                select: { mediaId: true },
+              });
+              if (!tmdbOwner) {
+                // The IMDb-only local row is the canonical movie, merely missing its
+                // TMDB cross-link. Attach before light-upsert so we enrich this row
+                // instead of manufacturing a duplicate that needs a later merge.
+                await this.attachExternalId(
+                  compatibleLocal.id,
+                  ExternalProvider.TMDB,
+                  ProviderEntityKind.MOVIE,
+                  String(hit.tmdbId),
+                );
+              }
+            }
             const mediaId =
               type === 'SHOW'
                 ? await this.meta.lightUpsertShow({ tmdbId: hit.tmdbId, title, year: year ?? null })
@@ -901,10 +1000,28 @@ export class ImportMatcher {
             await this.attachExternalId(mediaId, ExternalProvider.IMDB, kind, ids.imdb);
             return done({ mediaId, confidence: 0.9, matchedTitle: title });
           }
+          if (sibling) {
+            this.logger.warn(
+              `IMDB id ${ids.imdb} resolves to ${type === 'SHOW' ? 'MOVIE' : 'SHOW'}, expected ${type} — rejecting stale local identity`,
+            );
+          } else if (compatibleLocal) {
+            return done({
+              mediaId: compatibleLocal.id,
+              confidence: 0.9,
+              matchedTitle: compatibleLocal.title,
+            });
+          }
         } catch (e) {
           this.logger.debug(
             `IMDB /find for ${ids.imdb} ("${title}") failed: ${(e as Error).message}`,
           );
+          if (compatibleLocal) {
+            return done({
+              mediaId: compatibleLocal.id,
+              confidence: 0.9,
+              matchedTitle: compatibleLocal.title,
+            });
+          }
         }
       }
     }
@@ -988,19 +1105,71 @@ export class ImportMatcher {
     return episodeId;
   }
 
-  /** Best-effort attach of an external id to a media row (skips silently on unique conflicts). */
+  /** Attach an id already verified by its provider; repair a stale alias owner if needed. */
   private async attachExternalId(
     mediaId: string,
     provider: ExternalProvider,
     kind: ProviderEntityKind,
     value: string,
   ) {
+    const existing = await this.prisma.externalId.findFirst({
+      where: { provider, providerEntityKind: kind, value },
+      select: { id: true, mediaId: true },
+    });
+    if (existing) {
+      const anchoredOwner =
+        existing.mediaId !== mediaId && provider !== ExternalProvider.TMDB
+          ? await this.prisma.externalId.findFirst({
+              where: {
+                mediaId: existing.mediaId,
+                provider: ExternalProvider.TMDB,
+                providerEntityKind: kind,
+              },
+              select: { value: true },
+            })
+          : null;
+      if (existing.mediaId !== mediaId && anchoredOwner) {
+        await this.prisma.externalId.update({
+          where: { id: existing.id },
+          data: { mediaId },
+        });
+        this.logger.warn(
+          `Repointed verified ${provider}/${kind} id ${value} from ${existing.mediaId} to ${mediaId}`,
+        );
+      } else if (existing.mediaId !== mediaId) {
+        this.logger.warn(
+          `Verified ${provider}/${kind} id ${value} is held by unanchored row ${existing.mediaId}; preserving it for the audited duplicate/remap repair`,
+        );
+      }
+      return;
+    }
     try {
       await this.prisma.externalId.create({
         data: { mediaId, provider, providerEntityKind: kind, value },
       });
-    } catch {
-      // Another row already owns this (provider, kind, value) pair — fine.
+    } catch (e: any) {
+      if (e?.code !== 'P2002') throw e;
+      const raced = await this.prisma.externalId.findFirst({
+        where: { provider, providerEntityKind: kind, value },
+        select: { id: true, mediaId: true },
+      });
+      const anchoredOwner =
+        raced && raced.mediaId !== mediaId && provider !== ExternalProvider.TMDB
+          ? await this.prisma.externalId.findFirst({
+              where: {
+                mediaId: raced.mediaId,
+                provider: ExternalProvider.TMDB,
+                providerEntityKind: kind,
+              },
+              select: { value: true },
+            })
+          : null;
+      if (raced && raced.mediaId !== mediaId && anchoredOwner) {
+        await this.prisma.externalId.update({
+          where: { id: raced.id },
+          data: { mediaId },
+        });
+      }
     }
   }
 

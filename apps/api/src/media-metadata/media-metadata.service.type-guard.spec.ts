@@ -1,4 +1,4 @@
-import { ExternalProvider, MediaType } from '@tvwatch/shared';
+import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
 import { MediaMetadataService } from './media-metadata.service';
 import { runInLanguage } from '../common/language.context';
 import { EN_CONTENT_VERIFIER_VERSION } from './util/en-content-verifier';
@@ -127,9 +127,15 @@ function fakeTx(over: Record<string, any> = {}) {
   return { tx, calls };
 }
 
-function makeService(tx: any, externalFindFirst: jest.Mock, tvdbGetShow?: jest.Mock) {
+function makeService(
+  tx: any,
+  externalFindFirst: jest.Mock,
+  tvdbGetShow?: jest.Mock,
+  pendingCharacterIds: number[] = [],
+) {
   const prisma = {
     $transaction: async (fn: any) => fn(tx),
+    $queryRaw: async () => pendingCharacterIds.map((characterId) => ({ characterId })),
     mediaItem: { findUnique: async () => ({ metadataRefreshedAt: new Date() }) },
     externalId: { findFirst: externalFindFirst },
     show: { findUnique: async () => ({ id: 'show-1' }) }, // syncSeasons root lookup
@@ -241,6 +247,29 @@ describe('MediaMetadataService — cross-type protections', () => {
       expect(u.where.provider_providerEntityKind_value.providerEntityKind).toBe('SERIES');
       expect(u.update).toEqual({});
     }
+  });
+
+  it('passes every pending imported TVDB character id into structure-free CAST_ONLY hydration', async () => {
+    const { tx } = fakeTx();
+    const findFirst = jest.fn(async () => ({
+      mediaId: 'show-1',
+      media: { id: 'show-1', type: 'SHOW', metadataRefreshedAt: null },
+    }));
+    const tvdbGetShow = jest.fn(async () => makeShow([{ name: 'Animation' }]));
+    const svc = makeService(tx, findFirst, tvdbGetShow, [64771402, 64771393]);
+
+    await runInLanguage('en', () =>
+      svc.ensureShowFullTvdb(280103, undefined, {
+        skipClassification: true,
+        forceRefresh: true,
+        writeScope: 'CAST_ONLY',
+      }),
+    );
+
+    expect(tvdbGetShow).toHaveBeenCalledWith(280103, 'en', {
+      includeStructure: false,
+      requiredCharacterIds: [64771402, 64771393],
+    });
   });
 });
 
@@ -827,5 +856,66 @@ describe('MediaMetadataService — TVDB light upserts are born with an English b
     );
 
     expect(updated).toHaveLength(0);
+  });
+});
+
+describe('MediaMetadataService — TVDB movie identity bridge', () => {
+  it('reuses the canonical TMDB movie and attaches verified TVDB/IMDb aliases', async () => {
+    const canonical = { id: 'tmdb-movie', type: MediaType.MOVIE, title: 'Pulp Fiction' };
+    const externalCreates: any[] = [];
+    const prisma = {
+      externalId: {
+        findFirst: jest.fn(async ({ where }: any) => {
+          if (where.provider === ExternalProvider.TMDB && where.value === '680') {
+            return { media: canonical };
+          }
+          return null;
+        }),
+        findUnique: jest.fn(async () => null),
+        create: jest.fn(async (args: any) => {
+          externalCreates.push(args.data);
+          return {};
+        }),
+      },
+      mediaItem: { create: jest.fn(), update: jest.fn() },
+    };
+    const tvdb = {
+      enabled: true,
+      getMovieIdentity: jest.fn(async () => ({
+        tvdbId: 16858,
+        tmdbId: 680,
+        imdbId: 'tt0110912',
+      })),
+    };
+    const svc = new MediaMetadataService(
+      prisma as any,
+      { enabled: true } as any,
+      tvdb as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    const id = await svc.lightUpsertMovieTvdb({ tvdbId: 16858, title: 'Pulp Fiction' });
+
+    expect(id).toBe('tmdb-movie');
+    expect(prisma.mediaItem.create).not.toHaveBeenCalled();
+    expect(externalCreates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          mediaId: 'tmdb-movie',
+          provider: ExternalProvider.THE_TVDB,
+          providerEntityKind: ProviderEntityKind.MOVIE,
+          value: '16858',
+        }),
+        expect.objectContaining({
+          mediaId: 'tmdb-movie',
+          provider: ExternalProvider.IMDB,
+          providerEntityKind: ProviderEntityKind.MOVIE,
+          value: 'tt0110912',
+        }),
+      ]),
+    );
   });
 });

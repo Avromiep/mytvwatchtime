@@ -18,7 +18,7 @@ function makeService(castRows: any[], existingVotes: any[]) {
     characterVote: model(['findMany']),
     externalId: model(['findFirst']),
     import: model(['update']),
-    importItem: model(['updateMany']),
+    importItem: model(['findMany', 'updateMany']),
     $transaction: jest.fn(async (fn: any) => fn(prisma)),
   };
   prisma.mediaCast.findMany.mockResolvedValue(castRows);
@@ -147,5 +147,59 @@ describe('ImportService.applyCharacterVotes', () => {
     const res = await service.applyCharacterVotes('u1', 'imp1', [item()]);
     expect(res).toEqual({ created: 0, skipped: 1 });
     expect(chunked).toHaveLength(0);
+  });
+});
+
+describe('ImportService.reconcilePendingCharacterVotes', () => {
+  it('replays a completed import after cast refresh and applies the vote', async () => {
+    const { service, prisma, chunked } = makeService(
+      [{ id: 'cast-1', mediaId: 'media-1', characterExternalId: 64771402 }],
+      [],
+    );
+    prisma.importItem.findMany.mockResolvedValue([
+      item({ status: 'PENDING_MATCH', import: { id: 'imp1', userId: 'u1', format: 'tvtime' } }),
+    ]);
+
+    const result = await service.reconcilePendingCharacterVotes({
+      mediaId: 'media-1',
+      terminalUnresolved: true,
+    });
+
+    expect(result).toEqual({ imports: 1, created: 1, skipped: 0 });
+    expect(chunked[0]).toMatchObject({ episodeId: 'ep-1', castId: 'cast-1' });
+    expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['it1'] } },
+      data: { status: 'APPLIED' },
+    });
+    expect(prisma.import.update).toHaveBeenCalledWith({
+      where: { id: 'imp1' },
+      data: { characterVotesImported: { increment: 1 } },
+    });
+  });
+
+  it('terminally skips a character absent from the refreshed authoritative cast', async () => {
+    const { service, prisma, hydration } = makeService([], []);
+    prisma.importItem.findMany.mockResolvedValue([
+      item({ status: 'PENDING_MATCH', import: { id: 'imp1', userId: 'u1', format: 'tvtime' } }),
+    ]);
+
+    const result = await service.reconcilePendingCharacterVotes({
+      mediaId: 'media-1',
+      terminalUnresolved: true,
+    });
+
+    expect(result).toEqual({ imports: 1, created: 0, skipped: 0 });
+    expect(hydration.enqueueTvdbRehydrate).not.toHaveBeenCalled();
+    expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['it1'] } },
+      data: {
+        status: 'SKIPPED',
+        errorMessage: 'TVDB character id not present after cast refresh',
+      },
+    });
+    expect(prisma.import.update).toHaveBeenCalledWith({
+      where: { id: 'imp1' },
+      data: { characterVotesImported: { increment: 0 } },
+    });
   });
 });

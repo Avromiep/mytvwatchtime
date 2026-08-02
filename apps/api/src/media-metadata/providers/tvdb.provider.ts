@@ -240,6 +240,12 @@ interface TvdbMovieExtended {
   production_countries?: { country: string; name: string }[];
 }
 
+export interface TvdbMovieIdentity {
+  tvdbId: number;
+  tmdbId: number | null;
+  imdbId: string | null;
+}
+
 const tvdbStatusMap = (s?: string): MediaStatus => {
   switch ((s || '').toLowerCase()) {
     case 'ended':
@@ -251,9 +257,9 @@ const tvdbStatusMap = (s?: string): MediaStatus => {
   }
 };
 
-/** Cast rows persisted per entity — deliberately generous (was 20): imported TV Time
- *  character votes resolve locally via media_cast.characterExternalId, and a vote for
- *  a character beyond the slice can NEVER resolve. Detail pages slice for display. */
+/** Normal cast rows persisted per entity (detail pages slice further for display).
+ *  CAST_ONLY import repair supplements this bounded set with every requested TVDB
+ *  character id found in the complete extended-series character response. */
 const TVDB_CAST_LIMIT = 40;
 
 @Injectable()
@@ -275,13 +281,36 @@ export class TvdbProvider {
       );
       return res.data?.imdbId || null;
     }
+    return (await this.getMovieIdentity(tvdbId)).imdbId;
+  }
+
+  /**
+   * TVDB movie ids are not supported by TMDB's `/find?external_source=tvdb_id` movie
+   * namespace. TVDB's own extended record is therefore the authoritative bridge to
+   * TMDB/IMDb. Keeping this in one helper prevents import/search/repair code from
+   * guessing by title or accidentally treating a TVDB movie id as a series id.
+   */
+  async getMovieIdentity(tvdbId: number): Promise<TvdbMovieIdentity> {
     const res = await this.client.get<{ data: { remoteIds?: TvdbRemoteId[] } }>(
       `/movies/${tvdbId}/extended`,
     );
-    const hit = (res.data?.remoteIds ?? []).find(
-      (r) => (r.sourceName || '').toUpperCase() === 'IMDB',
-    );
-    return hit?.id || null;
+    return this.movieIdentity(tvdbId, res.data?.remoteIds);
+  }
+
+  private movieIdentity(tvdbId: number, remoteIds?: TvdbRemoteId[]): TvdbMovieIdentity {
+    const imdb = (remoteIds ?? []).find(
+      (r) => (r.sourceName || '').trim().toUpperCase() === 'IMDB',
+    )?.id;
+    const tmdbRaw = (remoteIds ?? []).find((r) => {
+      const source = (r.sourceName || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+      return source === 'themoviedbcom' || source === 'tmdb';
+    })?.id;
+    const parsedTmdb = tmdbRaw ? Number(tmdbRaw) : NaN;
+    return {
+      tvdbId,
+      tmdbId: Number.isSafeInteger(parsedTmdb) && parsedTmdb > 0 ? parsedTmdb : null,
+      imdbId: imdb?.trim() || null,
+    };
   }
 
   /**
@@ -361,7 +390,11 @@ export class TvdbProvider {
     return Number.isFinite(y) ? y : null;
   }
 
-  async getShow(tvdbId: number, language?: string): Promise<NormalizedShow> {
+  async getShow(
+    tvdbId: number,
+    language?: string,
+    opts?: { includeStructure?: boolean; requiredCharacterIds?: readonly number[] },
+  ): Promise<NormalizedShow> {
     // meta=translations: without it the only title available is `s.name`, which is
     // ALWAYS the original-language name on TVDB (e.g. Japanese for anime) regardless
     // of the requested language — that leaked into the base title of anime shows.
@@ -416,7 +449,10 @@ export class TvdbProvider {
     // full episode list (aired/default order) and group by seasonNumber. This is best-effort
     // + rate-limit-resilient: a TVDB failure/rate-limit returns whatever we have so far
     // rather than throwing (so a TVDB hiccup never breaks a show's detail page or an import).
-    const episodesBySeason = await this.fetchSeriesEpisodes(tvdbId, language);
+    const episodesBySeason =
+      opts?.includeStructure === false
+        ? new Map<number, TvdbEpisode[]>()
+        : await this.fetchSeriesEpisodes(tvdbId, language);
     // Season numbers: union of the extended seasons list and any season that has episodes.
     const seasonNums = new Set<number>();
     for (const se of s.seasons || []) if (se.number != null) seasonNums.add(se.number);
@@ -439,18 +475,55 @@ export class TvdbProvider {
         };
       });
 
-    const cast: NormalizedCast[] = (s.characters || [])
+    const characters = s.characters ?? [];
+    const requiredCharacterIds = new Set(
+      (opts?.requiredCharacterIds ?? []).filter(
+        (id): id is number => Number.isSafeInteger(id) && id > 0,
+      ),
+    );
+    const normalCast = characters
       .filter((c) => c.personName && c.peopleType === 'Actor')
-      .slice(0, TVDB_CAST_LIMIT)
-      .map((c, i) => ({
+      .slice(0, TVDB_CAST_LIMIT);
+    // Import votes carry TVDB's role-level character id. Preserve the normal bounded
+    // detail cast, then add every specifically requested role from the COMPLETE extended
+    // response regardless of rank/peopleType. Requested roles come first so a person with
+    // several TVDB roles retains the imported role under the current one-credit-per-person
+    // schema instead of being shadowed by a different top-40 role.
+    const selectedCharacters = [
+      ...characters.filter((c) => c.id != null && requiredCharacterIds.has(c.id)),
+      ...normalCast,
+    ].filter(
+      (character, index, all) =>
+        all.findIndex((candidate) =>
+          character.id != null && candidate.id != null
+            ? candidate.id === character.id
+            : candidate === character,
+        ) === index,
+    );
+    const cast: NormalizedCast[] = selectedCharacters.map((c, i) => {
+      // media_cast is normally one credit per person. When imported targets request
+      // multiple TVDB roles performed by the same person, give those requested roles
+      // stable show+character-scoped cast identities so none is discarded by the
+      // one-person dedupe and every role-level TVDB id remains voteable.
+      const requestedDuplicateRole =
+        c.id != null &&
+        requiredCharacterIds.has(c.id) &&
+        c.peopleId != null &&
+        selectedCharacters.some(
+          (other) => other !== c && other.peopleId != null && other.peopleId === c.peopleId,
+        );
+      return {
         tmdbPersonId: c.peopleId ?? 900000000 + i, // legacy numeric slot (unused when personExternalId is set)
         name: c.personName ?? 'Unknown',
         character: c.name ?? null,
         profileUrl: c.personImgURL ?? c.image ?? null,
         order: c.sort ?? i,
         characterExternalId: c.id ?? null,
-        personExternalId: tvdbPersonExternalId(tvdbId, c),
-      }));
+        personExternalId: requestedDuplicateRole
+          ? `TVDB_${tvdbId}_CHAR_${c.id}`
+          : tvdbPersonExternalId(tvdbId, c),
+      };
+    });
 
     return {
       type: MediaType.SHOW,
@@ -710,8 +783,7 @@ export class TvdbProvider {
       .filter((g) => g.name);
 
     // Extract IMDB and TMDB IDs from remoteIds array.
-    const imdbId = m.remoteIds?.find((r) => r.sourceName === 'IMDB')?.id;
-    const tmdbRemoteId = m.remoteIds?.find((r) => r.sourceName === 'TheMovieDB.com')?.id;
+    const identity = this.movieIdentity(tvdbId, m.remoteIds);
     // Release date: prefer first_release, then first entry in releases.
     const releaseDate = m.first_release?.date ?? m.releases?.[0]?.date ?? null;
     const releaseYear = m.year
@@ -764,8 +836,10 @@ export class TvdbProvider {
       genres,
       externals: [
         { provider: ExternalProvider.THE_TVDB, value: String(tvdbId) },
-        ...(imdbId ? [{ provider: ExternalProvider.IMDB, value: imdbId }] : []),
-        ...(tmdbRemoteId ? [{ provider: ExternalProvider.TMDB, value: tmdbRemoteId }] : []),
+        ...(identity.imdbId ? [{ provider: ExternalProvider.IMDB, value: identity.imdbId }] : []),
+        ...(identity.tmdbId
+          ? [{ provider: ExternalProvider.TMDB, value: String(identity.tmdbId) }]
+          : []),
       ],
       cast,
       providers: [] as NormalizedProvider[],

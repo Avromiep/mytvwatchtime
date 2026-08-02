@@ -6,7 +6,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Prisma, ListSource } from '@prisma/client';
 import { COMMENT_SPOILER_THRESHOLD, MediaType } from '@tvwatch/shared';
 import { shadowEmail, shadowUsername } from './lib/shadow-user';
@@ -58,6 +58,7 @@ const EPISODE_TO_MOVIE_RETYPE: Record<string, string> = {
 @Injectable()
 export class ImportService {
   private readonly logger = new Logger(ImportService.name);
+  private readonly pendingVoteReconcileInflight = new Set<string>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -222,7 +223,13 @@ export class ImportService {
   async getItems(
     userId: string,
     importId: string,
-    opts: { status?: string; entity?: string; page?: number; pageSize?: number },
+    opts: {
+      status?: string;
+      hideUnmatched?: boolean;
+      entity?: string;
+      page?: number;
+      pageSize?: number;
+    },
   ) {
     // Verify ownership separately (the `import` relation filter is unreliable due to the reserved word)
     const owned = await this.prisma.import.findFirst({ where: { id: importId, userId } });
@@ -235,6 +242,7 @@ export class ImportService {
     const pageSize = Math.min(opts.pageSize || 50, 500);
     const where: any = { importId };
     if (opts.status) where.status = opts.status.toUpperCase();
+    else if (opts.hideUnmatched) where.status = { not: 'UNMATCHED' };
     const entityWhere: any = { ...where };
     if (opts.entity && isNaN(Number(opts.entity))) {
       // Single type or comma-separated group (e.g. "FAVORITE_SHOW,FAVORITE_MOVIE" for the
@@ -625,6 +633,16 @@ export class ImportService {
         where: { id: importId },
         data: { status: 'COMPLETED', completedAt: new Date(), progress: 100 },
       });
+      // A cast refresh may finish before the import reaches COMPLETED, in which case the
+      // event listener intentionally ignores it to avoid racing this apply. Re-check once
+      // after completion: already-resolved votes apply immediately; missing cast ids stay
+      // pending until the queued CAST_ONLY refresh emits its completion event.
+      await this.reconcilePendingCharacterVotes({ importId, terminalUnresolved: false }).catch(
+        (e) =>
+          this.logger.warn(
+            `Import ${importId}: pending character-vote reconciliation deferred: ${(e as Error).message}`,
+          ),
+      );
       // A FAILED retry excludes section-level APPLIED items from `items`. Rebuild from every
       // episode item in the import so shows completed before the original failure are included.
       const rebuildItems = await this.prisma.importItem.findMany({
@@ -1672,9 +1690,9 @@ export class ImportService {
    * Apply character votes (favorite character per episode) with fully local resolution:
    *   episode  → staged matchedEpisodeId (resolved at staging via TVDB episode external ids)
    *   character → media_cast.characterExternalId (TVDB character id, persisted by hydration)
-   * Shows whose cast predates the field are queued for ONE background TVDB re-hydration
-   * each (BullMQ, deduped, retried with backoff) — the import never blocks on TVDB.
-   * Their votes stay MATCHED (applied on a later confirm) and are counted unresolved.
+   * Shows whose cast predates the field are queued for one scoped background TVDB cast
+   * refresh (BullMQ, deduped, retried with backoff). Completed imports replay
+   * automatically after refresh; a character still absent then is audited SKIPPED.
    * Conflict policy mirrors ratings: create only when no vote exists; idempotent re-import
    * via (source, sourceKey); manual votes are NEVER overwritten. Historical createdAt kept.
    */
@@ -1683,6 +1701,11 @@ export class ImportService {
     importId: string,
     items: any[],
     source: ListSource = 'TVTIME',
+    opts: {
+      enqueueMissing?: boolean;
+      terminalUnresolved?: boolean;
+      countUnresolved?: boolean;
+    } = {},
   ): Promise<{ created: number; skipped: number }> {
     const voteItems = items.filter(
       (it) =>
@@ -1720,7 +1743,7 @@ export class ImportService {
 
     // Shows whose cast lacks the needed character ids: enqueue ONE background TVDB
     // re-hydration per show (stable job id dedupes) — never block the import on TVDB.
-    // Their votes stay MATCHED below and apply on a later confirm.
+    // Their votes stay pending below and replay automatically after the cast refresh.
     const missingMediaIds = [
       ...new Set(
         voteItems
@@ -1731,8 +1754,10 @@ export class ImportService {
           .map((it: any) => it.matchedMediaId as string),
       ),
     ];
-    for (const mediaId of missingMediaIds) {
-      await this.enqueueShowTvdbHydration(mediaId).catch(() => undefined);
+    if (opts.enqueueMissing !== false) {
+      for (const mediaId of missingMediaIds) {
+        await this.enqueueShowTvdbHydration(mediaId).catch(() => undefined);
+      }
     }
 
     const epIds = [...new Set(voteItems.map((it: any) => it.matchedEpisodeId as string))];
@@ -1753,8 +1778,8 @@ export class ImportService {
       const castId = castMap.get(castKey(it.matchedMediaId, charId));
       if (!castId) {
         // Not resolvable now (character beyond the top-20 cast, or cast rows predating
-        // the field): mark PENDING_MATCH — the queued background rehydration plus a
-        // later confirm applies it. Counted as unresolved.
+        // the field): mark PENDING_MATCH — post-refresh reconciliation applies it.
+        // Counted as unresolved once during confirmation.
         unresolved++;
         pendingMatchIds.push(it.id);
         continue;
@@ -1848,13 +1873,18 @@ export class ImportService {
       });
     }
 
-    // Unresolved items are visibly "scheduled for match": the queued background
-    // rehydration resolves them and a later confirm picks them up (confirm loads
-    // MATCHED + PENDING_MATCH).
+    // The initial apply leaves unresolved votes pending while CAST_ONLY hydration runs.
+    // A post-refresh reconciliation is terminal: ids still absent after the authoritative
+    // TVDB cast snapshot are audited SKIPPED instead of remaining stranded forever.
     if (pendingMatchIds.length) {
       await this.prisma.importItem.updateMany({
         where: { id: { in: pendingMatchIds } },
-        data: { status: 'PENDING_MATCH' },
+        data: opts.terminalUnresolved
+          ? {
+              status: 'SKIPPED',
+              errorMessage: 'TVDB character id not present after cast refresh',
+            }
+          : { status: 'PENDING_MATCH' },
       });
     }
 
@@ -1862,16 +1892,88 @@ export class ImportService {
       where: { id: importId },
       data: {
         characterVotesImported: { increment: created },
-        characterVotesSkippedUnresolved: { increment: unresolved },
+        ...(opts.countUnresolved === false
+          ? {}
+          : { characterVotesSkippedUnresolved: { increment: unresolved } }),
       },
     });
     return { created, skipped };
   }
 
+  /**
+   * Replay staged character votes after a scoped TVDB cast refresh. This is safe for
+   * COMPLETED imports: source identities and CharacterVote uniqueness keep it idempotent,
+   * manual/existing votes are never overwritten, and terminal misses retain their audit row.
+   */
+  async reconcilePendingCharacterVotes(opts: {
+    mediaId?: string;
+    importId?: string;
+    terminalUnresolved?: boolean;
+  }): Promise<{ imports: number; created: number; skipped: number }> {
+    const scopeKey = opts.mediaId ? `media:${opts.mediaId}` : `import:${opts.importId ?? 'all'}`;
+    if (this.pendingVoteReconcileInflight.has(scopeKey)) {
+      return { imports: 0, created: 0, skipped: 0 };
+    }
+    this.pendingVoteReconcileInflight.add(scopeKey);
+    try {
+      const items = await this.prisma.importItem.findMany({
+        where: {
+          status: 'PENDING_MATCH',
+          sourceEntityType: 'EPISODE_CHARACTER_VOTE',
+          ...(opts.mediaId ? { matchedMediaId: opts.mediaId } : {}),
+          ...(opts.importId ? { importId: opts.importId } : {}),
+          import: { status: 'COMPLETED' },
+        },
+        include: {
+          import: { select: { id: true, userId: true, format: true } },
+        },
+      });
+      const grouped = new Map<string, { imp: any; items: any[] }>();
+      for (const item of items) {
+        const imp = (item as any).import;
+        if (!imp?.id || !imp.userId) continue;
+        const group = grouped.get(imp.id) ?? { imp, items: [] };
+        group.items.push(item);
+        grouped.set(imp.id, group);
+      }
+
+      let created = 0;
+      let skipped = 0;
+      for (const { imp, items: groupItems } of grouped.values()) {
+        const source: ListSource = imp.format === 'trakt' ? 'TRAKT' : 'TVTIME';
+        const result = await this.applyCharacterVotes(imp.userId, imp.id, groupItems, source, {
+          enqueueMissing: !opts.terminalUnresolved,
+          terminalUnresolved: opts.terminalUnresolved === true,
+          // The initial confirmation already counted these as unresolved.
+          countUnresolved: false,
+        });
+        created += result.created;
+        skipped += result.skipped;
+      }
+      return { imports: grouped.size, created, skipped };
+    } finally {
+      this.pendingVoteReconcileInflight.delete(scopeKey);
+    }
+  }
+
+  @OnEvent('metadata.cast-refreshed', { async: true })
+  async onCastRefreshed(payload: { mediaId?: string }): Promise<void> {
+    if (!payload?.mediaId) return;
+    const result = await this.reconcilePendingCharacterVotes({
+      mediaId: payload.mediaId,
+      terminalUnresolved: true,
+    });
+    if (result.imports > 0) {
+      this.logger.log(
+        `Character-vote replay for ${payload.mediaId}: ${result.created} created, ${result.skipped} existing across ${result.imports} imports`,
+      );
+    }
+  }
+
   /** Queue one background TVDB re-hydration for a show (deduped by stable job id). */
   private async enqueueShowTvdbHydration(mediaId: string): Promise<void> {
     const ext = await this.prisma.externalId.findFirst({
-      where: { mediaId, provider: 'THE_TVDB' },
+      where: { mediaId, provider: 'THE_TVDB', providerEntityKind: 'SERIES' },
       select: { value: true },
     });
     if (ext) await this.hydration.enqueueTvdbRehydrate(mediaId, Number(ext.value));

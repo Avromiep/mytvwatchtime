@@ -41,4 +41,39 @@ describe('ImportService.getItems — entityCounts', () => {
     expect(res.total).toBe(7);
     expect(prisma.importItem.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 500 }));
   });
+
+  it('excludes unmatched audit rows from unfiltered mobile review queries', async () => {
+    const prisma: any = {
+      import: { findFirst: jest.fn(async () => ({ id: 'imp1', userId: 'u1' })) },
+      importItem: {
+        findMany: jest.fn(async () => []),
+        count: jest.fn(async () => 3),
+        groupBy: jest.fn(async () => []),
+      },
+    };
+    const service = new ImportService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await service.getItems('u1', 'imp1', { hideUnmatched: true, pageSize: 500 });
+
+    const visibleWhere = { importId: 'imp1', status: { not: 'UNMATCHED' } };
+    expect(prisma.importItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: visibleWhere }),
+    );
+    expect(prisma.importItem.count).toHaveBeenCalledWith({ where: visibleWhere });
+    expect(prisma.importItem.groupBy).toHaveBeenCalledWith({
+      by: ['sourceEntityType'],
+      where: visibleWhere,
+      _count: { _all: true },
+    });
+  });
 });
