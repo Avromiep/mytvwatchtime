@@ -95,7 +95,10 @@ export class StructureRemapService {
    * verified date is reinforced by matching S/E coordinates or a strong title. Legacy
    * rows are reconsidered once when this version bump re-arms the repair.
    */
-  static readonly MATCHER_VERSION = 5;
+  // v6 re-arms rows quarantined by v5 when TVDB's paginated routing snapshot could
+  // silently truncate or swallow throttling. The matching ladder is unchanged; the
+  // provider evidence feeding it is now required to be complete.
+  static readonly MATCHER_VERSION = 6;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -366,8 +369,9 @@ export class StructureRemapService {
   /**
    * Replace an untrusted stored date with a provider-verified date for matching only.
    * Looking the episode up inside the show's verified TVDB series snapshot proves both
-   * the episode identity and canonical-show membership. Failure is non-fatal: the row
-   * falls through to the remaining conservative rules and is quarantined if ambiguous.
+   * the episode identity and canonical-show membership. Verification is fail-closed:
+   * without a complete provider snapshot, remapping aborts before transferring or
+   * quarantining anything and the show remains eligible for a later retry.
    */
   private async verifyForeignEpisodeDates(
     mediaId: string,
@@ -386,27 +390,23 @@ export class StructureRemapService {
       select: { value: true },
     });
     const seriesId = Number(tvdbSeries?.value);
-    if (!Number.isSafeInteger(seriesId) || seriesId <= 0) return;
+    if (!Number.isSafeInteger(seriesId) || seriesId <= 0) {
+      throw new Error(`Cannot verify TVDB episode aliases for media ${mediaId}: series id missing`);
+    }
 
-    try {
-      const verified = await this.tvdb.getEpisodeRoutingIndex(seriesId);
-      for (const episode of stale) {
-        const episodeId = Number(episode.tvdbValue);
-        if (!Number.isSafeInteger(episodeId) || episodeId <= 0) continue;
-        const providerEpisode = verified.get(episodeId);
-        if (!providerEpisode) continue;
-        episode.verifiedForeignSeasonNumber = providerEpisode.seasonNumber;
-        episode.verifiedForeignEpisodeNumber = providerEpisode.episodeNumber;
-        episode.verifiedForeignAbsoluteNumber = providerEpisode.absoluteNumber;
-        if (providerEpisode.airDate) {
-          const date = new Date(`${providerEpisode.airDate}T00:00:00.000Z`);
-          if (!Number.isNaN(date.getTime())) episode.verifiedForeignAirDate = date;
-        }
+    const verified = await this.tvdb.getEpisodeRoutingIndex(seriesId);
+    for (const episode of stale) {
+      const episodeId = Number(episode.tvdbValue);
+      if (!Number.isSafeInteger(episodeId) || episodeId <= 0) continue;
+      const providerEpisode = verified.get(episodeId);
+      if (!providerEpisode) continue;
+      episode.verifiedForeignSeasonNumber = providerEpisode.seasonNumber;
+      episode.verifiedForeignEpisodeNumber = providerEpisode.episodeNumber;
+      episode.verifiedForeignAbsoluteNumber = providerEpisode.absoluteNumber;
+      if (providerEpisode.airDate) {
+        const date = new Date(`${providerEpisode.airDate}T00:00:00.000Z`);
+        if (!Number.isNaN(date.getTime())) episode.verifiedForeignAirDate = date;
       }
-    } catch (error) {
-      this.logger.warn(
-        `remap: TVDB episode-date verification failed for media ${mediaId}: ${(error as Error).message}`,
-      );
     }
   }
 
@@ -876,14 +876,18 @@ export class StructureRemapService {
     );
   }
 
-  /** Classify episode ids by whether ANY user data is attached — one set-based query
+  /** Classify episode ids by whether meaningful user data is attached — one set-based query
    *  (EXISTS per data table) instead of 5 count queries per episode. */
   private async splitByUserData(episodeIds: string[]): Promise<{ withData: Set<string> }> {
     if (episodeIds.length === 0) return { withData: new Set() };
     const rows = await this.prisma.$queryRaw<{ id: string; has_data: boolean }[]>(
       Prisma.sql`
         SELECT e.id, (
-          EXISTS (SELECT 1 FROM user_episode_status u WHERE u.episode_id = e.id)
+          EXISTS (
+            SELECT 1 FROM user_episode_status u
+            WHERE u.episode_id = e.id
+              AND (u.watched = true OR u.watched_at IS NOT NULL OR u.watch_count > 0 OR u.device IS NOT NULL)
+          )
           OR EXISTS (SELECT 1 FROM watch_history h WHERE h.episode_id = e.id)
           OR EXISTS (SELECT 1 FROM ratings r WHERE r.episode_id = e.id)
           OR EXISTS (SELECT 1 FROM reactions r WHERE r.episode_id = e.id)

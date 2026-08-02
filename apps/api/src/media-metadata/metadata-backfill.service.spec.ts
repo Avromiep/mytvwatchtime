@@ -1169,17 +1169,56 @@ describe('MetadataBackfillService — recommendations backfill', () => {
     ).toBe(true);
   });
 
+  it('counts anime structure contamination and missing TVDB identity in one EXISTS query', async () => {
+    const { service, prisma } = make({});
+
+    await service.getHealthStats();
+
+    const sqls = (prisma.$queryRaw as jest.Mock).mock.calls
+      .map((c) => (Array.isArray(c[0]) ? c[0].join(' ') : String(c[0] ?? '')).replace(/\s+/g, ' '))
+      .filter((sql) => sql.includes('WITH contaminated AS MATERIALIZED'));
+    expect(sqls).toHaveLength(1);
+    expect(sqls[0]).toContain('count(*) FILTER (WHERE missing_tvdb)');
+    expect(sqls[0]).toContain('AND EXISTS (');
+    expect(sqls[0]).not.toContain('count(DISTINCT e.id)');
+  });
+
   it('derives the dashboard dual-structure count from the repair selector', async () => {
     const { service } = make({});
-    const selector = jest.spyOn(service as any, 'findDualStructureShows').mockResolvedValue([
-      { mediaId: 'm1', stale: 2, fresh: 10 },
-      { mediaId: 'm2', stale: 1, fresh: 8 },
-    ]);
+    const selector = jest.spyOn(service as any, 'countDualStructureShows').mockResolvedValue(2);
 
     const stats = await service.getHealthStats();
 
-    expect(selector).toHaveBeenCalledWith(100000);
+    expect(selector).toHaveBeenCalledTimes(1);
     expect(stats.dualStructureShows).toBe(2);
+  });
+
+  it('returns a short refreshing response instead of blocking a cold admin request', async () => {
+    const { service } = make({});
+    jest.spyOn(service as any, 'startHealthStatsRefresh').mockImplementation(() => undefined);
+
+    const response = await service.getHealthStats(false, false, { backgroundOnMiss: true });
+
+    expect(response).toEqual({
+      _health: { status: 'refreshing', stale: false, computedAt: null },
+    });
+    expect((service as any).startHealthStatsRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves the last snapshot immediately while a production refresh runs', async () => {
+    const { service } = make({});
+    const computedAt = '2026-08-02T12:00:00.000Z';
+    (service as any).redis.get.mockImplementation(async (key: string) =>
+      key.endsWith(':snapshot') ? { computedAt, stats: { total: 42 } } : null,
+    );
+    jest.spyOn(service as any, 'startHealthStatsRefresh').mockImplementation(() => undefined);
+
+    const response = await service.getHealthStats(false, false, { backgroundOnMiss: true });
+
+    expect(response).toEqual({
+      total: 42,
+      _health: { status: 'refreshing', stale: true, computedAt },
+    });
   });
 
   it('repair selection SQL mirrors the stat (null stamp + TMDB id), writes snapshot + stamp', async () => {

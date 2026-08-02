@@ -2214,7 +2214,10 @@ export class MediaMetadataService {
       sourceProvider === structureDecision.provider
     ) {
       await this.syncSeasons(mediaId, data.seasons, lang, enData?.seasons, episodeExternalProvider);
-    } else if (data.seasons.length > 0) {
+    } else if (
+      data.seasons.length > 0 &&
+      (writeScope === 'STRUCTURE' || writeScope === 'STRUCTURE_REMAP')
+    ) {
       this.logger.warn(
         `persistShow: blocked ${sourceProvider} structure write for ${mediaId}; canonical provider is ${structureDecision.provider} (scope=${writeScope})`,
       );

@@ -1705,6 +1705,8 @@ export class ImportService {
       enqueueMissing?: boolean;
       terminalUnresolved?: boolean;
       countUnresolved?: boolean;
+      /** Internal one-shot retry after a concurrent cast rewrite invalidates a cast FK. */
+      retryCastRace?: boolean;
     } = {},
   ): Promise<{ created: number; skipped: number }> {
     const voteItems = items.filter(
@@ -1816,8 +1818,8 @@ export class ImportService {
       // Guard against concurrent cast rewrites: a queued tvdb-rehydrate (or the anime
       // cron) REWRITES media_cast, deleting rows the castMap resolved moments ago —
       // a stale castId then violates the FK and fails the whole apply. Re-validate
-      // inside the transaction (and once more on an FK error); vanished castIds fall
-      // back to PENDING_MATCH so a later confirm re-resolves them post-rehydration.
+      // inside the transaction; vanished castIds fall back to PENDING_MATCH. If the
+      // insert still races, the whole apply restarts once outside the aborted transaction.
       const validateCastIds = async (tx: any, rows: any[]) => {
         const ids = [...new Set(rows.map((r) => r.castId))];
         const found = await tx.mediaCast.findMany({
@@ -1826,46 +1828,51 @@ export class ImportService {
         });
         return new Set(found.map((f: any) => f.id) as string[]);
       };
-      await this.prisma.$transaction(
-        async (tx) => {
-          const dropStale = (valid: Set<string>) => {
-            const droppedRows = toCreate.filter((r) => !valid.has(r.castId));
-            if (!droppedRows.length) return;
-            const droppedItemIds = new Set(
-              audit.filter((a) => !valid.has(a.targetRecordId)).map((a) => a.importItemId),
-            );
-            for (let i = toCreate.length - 1; i >= 0; i--) {
-              if (!valid.has(toCreate[i].castId)) toCreate.splice(i, 1);
-            }
-            for (let i = audit.length - 1; i >= 0; i--) {
-              if (!valid.has(audit[i].targetRecordId)) audit.splice(i, 1);
-            }
-            for (let i = appliedIds.length - 1; i >= 0; i--) {
-              if (droppedItemIds.has(appliedIds[i])) appliedIds.splice(i, 1);
-            }
-            pendingMatchIds.push(...droppedItemIds);
-            unresolved += droppedItemIds.size;
-            created -= droppedItemIds.size;
-          };
-          dropStale(await validateCastIds(tx, toCreate));
-          try {
-            await this.chunkedCreateMany(tx, 'characterVote', toCreate, true);
-          } catch (e: any) {
-            if (e?.code !== 'P2003') throw e;
-            // Backstop: a cast delete landed between the check and the insert.
+      const dropStale = (valid: Set<string>) => {
+        const droppedRows = toCreate.filter((r) => !valid.has(r.castId));
+        if (!droppedRows.length) return;
+        const droppedItemIds = new Set(
+          audit.filter((a) => !valid.has(a.targetRecordId)).map((a) => a.importItemId),
+        );
+        for (let i = toCreate.length - 1; i >= 0; i--) {
+          if (!valid.has(toCreate[i].castId)) toCreate.splice(i, 1);
+        }
+        for (let i = audit.length - 1; i >= 0; i--) {
+          if (!valid.has(audit[i].targetRecordId)) audit.splice(i, 1);
+        }
+        for (let i = appliedIds.length - 1; i >= 0; i--) {
+          if (droppedItemIds.has(appliedIds[i])) appliedIds.splice(i, 1);
+        }
+        pendingMatchIds.push(...droppedItemIds);
+        unresolved += droppedItemIds.size;
+        created -= droppedItemIds.size;
+      };
+      try {
+        await this.prisma.$transaction(
+          async (tx) => {
             dropStale(await validateCastIds(tx, toCreate));
             await this.chunkedCreateMany(tx, 'characterVote', toCreate, true);
-          }
-          await this.chunkedCreateMany(tx, 'importAppliedRecord', audit);
-          if (appliedIds.length) {
-            await tx.importItem.updateMany({
-              where: { id: { in: appliedIds } },
-              data: { status: 'APPLIED' },
-            });
-          }
-        },
-        { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
-      );
+            await this.chunkedCreateMany(tx, 'importAppliedRecord', audit);
+            if (appliedIds.length) {
+              await tx.importItem.updateMany({
+                where: { id: { in: appliedIds } },
+                data: { status: 'APPLIED' },
+              });
+            }
+          },
+          { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
+        );
+      } catch (e: any) {
+        if (e?.code !== 'P2003' || opts.retryCastRace === false) throw e;
+        // PostgreSQL marks an interactive transaction aborted as soon as the FK insert
+        // fails. Never query/retry inside that transaction (it can only return 25P02).
+        // Start the apply once more from scratch so the newly rewritten media_cast id is
+        // resolved and validated in a fresh transaction.
+        return this.applyCharacterVotes(userId, importId, items, source, {
+          ...opts,
+          retryCastRace: false,
+        });
+      }
     } else if (appliedIds.length) {
       await this.prisma.importItem.updateMany({
         where: { id: { in: appliedIds } },

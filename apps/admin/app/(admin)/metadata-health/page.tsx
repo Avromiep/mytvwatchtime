@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { Badge } from '@/components/ui';
@@ -66,6 +66,10 @@ interface RepairProgress {
   total: number;
   succeeded: number;
   failed: number;
+  remapped?: number;
+  legacyQuarantined?: number;
+  episodesRemoved?: number;
+  transferred?: number;
   current?: string;
   finishedAt?: string;
 }
@@ -146,6 +150,9 @@ export default function MetadataHealthPage() {
   const { user } = useAuth();
   const [stats, setStats] = useState<MetadataHealth | null>(null);
   const [loading, setLoading] = useState(true);
+  const [healthNotice, setHealthNotice] = useState<string | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
+  const healthRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [backfilling, setBackfilling] = useState(false);
   const [backfillResult, setBackfillResult] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -213,20 +220,53 @@ export default function MetadataHealthPage() {
   const canView = user?.role && ['ADMIN', 'SUPER_ADMIN'].includes(user.role);
 
   const load = () => {
+    if (healthRetryRef.current) {
+      clearTimeout(healthRetryRef.current);
+      healthRetryRef.current = null;
+    }
     setLoading(true);
+    setHealthError(null);
     const params = new URLSearchParams();
     if (enContentStats) params.set('content', '1');
     if (enContentDeep) params.set('deep', '1');
     const qs = params.toString();
     api
       .get(`/admin/metadata-health${qs ? `?${qs}` : ''}`)
-      .then((r) => setStats(r.data))
+      .then((r) => {
+        const health = r.data?._health as
+          { status?: string; stale?: boolean; computedAt?: string | null } | undefined;
+        if (typeof r.data?.total === 'number') setStats(r.data);
+        if (health?.status === 'refreshing') {
+          setHealthNotice(
+            health.stale
+              ? `Showing the snapshot from ${health.computedAt ? new Date(health.computedAt).toLocaleString() : 'the last run'} while production metrics refresh.`
+              : 'Calculating the first metadata-health snapshot in the background…',
+          );
+          healthRetryRef.current = setTimeout(() => load(), 3000);
+        } else {
+          setHealthNotice(null);
+        }
+      })
+      .catch((error) => {
+        setHealthError(
+          error?.response?.data?.message ??
+            error?.message ??
+            'Metadata health could not be loaded.',
+        );
+      })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     if (canView) load();
   }, [canView, enContentStats, enContentDeep]);
+
+  useEffect(
+    () => () => {
+      if (healthRetryRef.current) clearTimeout(healthRetryRef.current);
+    },
+    [],
+  );
 
   // Live repair progress — poll every 3s while the page is open.
   useEffect(() => {
@@ -651,6 +691,17 @@ export default function MetadataHealthPage() {
         </div>
       </div>
 
+      {healthNotice && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200">
+          {healthNotice}
+        </div>
+      )}
+      {healthError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
+          Metadata health failed to load: {healthError}
+        </div>
+      )}
+
       {syncResult && (
         <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-200">
           {syncResult}
@@ -801,6 +852,13 @@ export default function MetadataHealthPage() {
                     </span>
                     <span className="shrink-0 text-xs text-zinc-400">
                       {p.processed}/{p.total} · {p.succeeded} ok / {p.failed} fail
+                      {job === 'structure-reconcile' && (
+                        <>
+                          {' '}
+                          · {p.remapped ?? 0} mapped / {p.legacyQuarantined ?? 0} legacy /{' '}
+                          {p.episodesRemoved ?? 0} removed / {p.transferred ?? 0} data moved
+                        </>
+                      )}
                     </span>
                   </div>
                   <div className="mt-1 h-2 w-full overflow-hidden rounded bg-zinc-200 dark:bg-zinc-700">
@@ -819,9 +877,9 @@ export default function MetadataHealthPage() {
         </div>
       )}
 
-      {loading || !stats ? (
+      {loading || (!stats && !healthError) ? (
         <p className="text-sm text-zinc-500">Loading…</p>
-      ) : (
+      ) : stats ? (
         <>
           {/* Health metrics */}
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
@@ -1364,7 +1422,7 @@ export default function MetadataHealthPage() {
             structure. Provider refreshes cannot write non-owner seasons or episodes.
           </p>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

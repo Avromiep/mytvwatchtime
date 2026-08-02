@@ -18,6 +18,19 @@ import { STRUCTURE_RULE_VERSION } from './structure-authority.service';
 
 const EN_CONTENT_DEEP_CURSOR_KEY = 'EN_CONTENT_DEEP_CURSOR';
 const REPAIR_STALL_MS = 30 * 60 * 1000;
+const HEALTH_CACHE_FRESH_TTL_SECONDS = 60;
+const HEALTH_CACHE_SNAPSHOT_TTL_SECONDS = 24 * 60 * 60;
+const HEALTH_REFRESH_LOCK_TTL_MS = 10 * 60 * 1000;
+
+type HealthSnapshot = {
+  computedAt: string;
+  stats: Record<string, unknown>;
+};
+
+type LocalHealthSnapshot = HealthSnapshot & {
+  freshUntil: number;
+  expiresAt: number;
+};
 
 /**
  * Metadata health stats + background backfill.
@@ -50,6 +63,10 @@ export class MetadataBackfillService {
       total: number;
       succeeded: number;
       failed: number;
+      remapped?: number;
+      legacyQuarantined?: number;
+      episodesRemoved?: number;
+      transferred?: number;
       current?: string;
       finishedAt?: Date;
       updatedAt?: Date;
@@ -64,6 +81,10 @@ export class MetadataBackfillService {
       total: number;
       succeeded: number;
       failed: number;
+      remapped: number;
+      legacyQuarantined: number;
+      episodesRemoved: number;
+      transferred: number;
       current: string;
       finishedAt: Date | null;
     }>,
@@ -118,6 +139,12 @@ export class MetadataBackfillService {
     string,
     Promise<{ fixed: boolean; remapped: number; report?: RemapStats }>
   >();
+  /** Whole-catalog health scans never run twice in one API process. Redis also guards
+   *  the same refresh across API/worker instances. */
+  private readonly healthStatsInflight = new Map<string, Promise<void>>();
+  /** Redis is preferred, but a disconnected cache must not leave the Admin page polling
+   *  forever after this process successfully computed a snapshot. */
+  private readonly localHealthSnapshots = new Map<string, LocalHealthSnapshot>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -238,23 +265,134 @@ export class MetadataBackfillService {
       FROM health`;
   }
 
-  /** Counts of media needing attention — powers the admin "metadata health" view. */
-  async getHealthStats(includeContentStats = false, includeDeepContentStats = false) {
-    // The page polls this on every open/refresh and repairs trigger re-loads; the
-    // aggregates scan the whole catalog. Cache briefly — 60s staleness is fine for
-    // health metrics and keeps prod-sized scans off the request path.
-    const cacheKey = `admin:metadata-health:v2:${includeContentStats ? 1 : 0}:${includeDeepContentStats ? 1 : 0}`;
-    const cached =
-      typeof this.redis.get === 'function'
-        ? await this.redis.get<string>(cacheKey).catch(() => null)
-        : null;
-    if (cached) {
+  private async readHealthCache<T>(key: string): Promise<T | null> {
+    if (typeof this.redis.get !== 'function') return null;
+    const cached = await this.redis.get<unknown>(key).catch(() => null);
+    if (cached === null || cached === undefined) return null;
+    // Compatibility with the old cache writer, which explicitly JSON-stringified before
+    // RedisService stringified it a second time.
+    if (typeof cached === 'string') {
       try {
-        return JSON.parse(cached);
+        return JSON.parse(cached) as T;
       } catch {
-        // fall through to recompute
+        return null;
       }
     }
+    return cached as T;
+  }
+
+  private async computeAndCacheHealthStats(
+    cacheKey: string,
+    includeContentStats: boolean,
+    includeDeepContentStats: boolean,
+  ) {
+    const stats = await this.computeHealthStats(includeContentStats, includeDeepContentStats);
+    const computedAt = new Date().toISOString();
+    this.localHealthSnapshots.set(cacheKey, {
+      computedAt,
+      stats,
+      freshUntil: Date.now() + HEALTH_CACHE_FRESH_TTL_SECONDS * 1000,
+      expiresAt: Date.now() + HEALTH_CACHE_SNAPSHOT_TTL_SECONDS * 1000,
+    });
+    if (typeof this.redis.set === 'function') {
+      const snapshot: HealthSnapshot = { computedAt, stats };
+      await Promise.all([
+        this.redis.set(cacheKey, stats, HEALTH_CACHE_FRESH_TTL_SECONDS).catch(() => undefined),
+        this.redis
+          .set(`${cacheKey}:snapshot`, snapshot, HEALTH_CACHE_SNAPSHOT_TTL_SECONDS)
+          .catch(() => undefined),
+      ]);
+    }
+    return stats;
+  }
+
+  private startHealthStatsRefresh(
+    cacheKey: string,
+    includeContentStats: boolean,
+    includeDeepContentStats: boolean,
+  ) {
+    if (this.healthStatsInflight.has(cacheKey)) return;
+
+    const refresh = (async () => {
+      const client = (this.redis as any)?.client;
+      const lockKey = `LOCK:${cacheKey}:refresh`;
+      const token = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
+      const release = `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end`;
+      let ownsDistributedLock = false;
+      if (client?.set) {
+        try {
+          const acquired = await client.set(lockKey, token, 'PX', HEALTH_REFRESH_LOCK_TTL_MS, 'NX');
+          if (acquired !== 'OK') return;
+          ownsDistributedLock = true;
+        } catch {
+          // Redis degraded: the local in-flight map still prevents duplicate work in this
+          // process, and the local snapshot below keeps this instance usable.
+        }
+      }
+
+      try {
+        await this.computeAndCacheHealthStats(
+          cacheKey,
+          includeContentStats,
+          includeDeepContentStats,
+        );
+      } finally {
+        if (ownsDistributedLock && client?.eval) {
+          await client.eval(release, 1, lockKey, token).catch(() => undefined);
+        }
+      }
+    })()
+      .catch((error) => {
+        this.logger.error(`Metadata health refresh failed: ${(error as Error).message}`);
+      })
+      .finally(() => {
+        this.healthStatsInflight.delete(cacheKey);
+      });
+
+    this.healthStatsInflight.set(cacheKey, refresh);
+  }
+
+  /** Counts of media needing attention — powers the admin "metadata health" view.
+   *
+   * Browser requests use backgroundOnMiss: a fresh snapshot returns immediately; a stale
+   * snapshot returns while one distributed refresh runs; a first-ever cold load returns a
+   * small refreshing marker for the page to poll. Internal callers/tests may omit the option
+   * and await an exact computation as before. */
+  async getHealthStats(
+    includeContentStats = false,
+    includeDeepContentStats = false,
+    options?: { backgroundOnMiss?: boolean },
+  ) {
+    const cacheKey = `admin:metadata-health:v2:${includeContentStats ? 1 : 0}:${includeDeepContentStats ? 1 : 0}`;
+    const local = this.localHealthSnapshots.get(cacheKey);
+    if (local && local.freshUntil > Date.now()) return local.stats;
+
+    const cached = await this.readHealthCache<Record<string, unknown>>(cacheKey);
+    if (cached) return cached;
+
+    if (options?.backgroundOnMiss) {
+      const redisSnapshot = await this.readHealthCache<HealthSnapshot>(`${cacheKey}:snapshot`);
+      const snapshot = redisSnapshot ?? (local && local.expiresAt > Date.now() ? local : undefined);
+      this.startHealthStatsRefresh(cacheKey, includeContentStats, includeDeepContentStats);
+      if (snapshot?.stats) {
+        return {
+          ...snapshot.stats,
+          _health: {
+            status: 'refreshing',
+            stale: true,
+            computedAt: snapshot.computedAt,
+          },
+        };
+      }
+      return {
+        _health: { status: 'refreshing', stale: false, computedAt: null },
+      };
+    }
+
+    return this.computeAndCacheHealthStats(cacheKey, includeContentStats, includeDeepContentStats);
+  }
+
+  private async computeHealthStats(includeContentStats: boolean, includeDeepContentStats: boolean) {
     const deepCursor =
       (await this.redis.get<string>(EN_CONTENT_DEEP_CURSOR_KEY).catch(() => null)) ?? '';
     // Optimized queries: avoid NOT EXISTS on episodes (573k rows); check at the season level.
@@ -266,8 +404,7 @@ export class MetadataBackfillService {
       tvdbOnly,
       stale,
       classification,
-      animeOnTmdb,
-      animeOnTmdbNoTvdbId,
+      animeStructure,
       structuralTypeMismatch,
       castMissingCharacterIds,
       movieDataOnShows,
@@ -309,36 +446,38 @@ export class MetadataBackfillService {
       // Rows whose TVDB id recently proved UNRESOLVABLE (animeTvdbNoId stamp < 30d) are
       // excluded — they are parked, not actionable. Ambiguous user-data rows become
       // LEGACY_UNMAPPED and disappear from this active-structure metric.
-      this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
+      this.prisma.$queryRaw<{ c: bigint; withoutTvdb: bigint }[]>`
+        WITH contaminated AS MATERIALIZED (
+          SELECT m.id,
+            NOT EXISTS (
+              SELECT 1 FROM external_ids x
+              WHERE x.media_id = m.id
+                AND x.provider = 'THE_TVDB'
+                AND x.provider_entity_kind = 'SERIES'
+            ) AS missing_tvdb
+          FROM media_items m
           JOIN shows sh ON sh.media_id = m.id
-          WHERE m.type='SHOW'
+          WHERE m.type = 'SHOW'
             AND sh.structure_provider = 'TVDB'::"StructureProvider"
             AND sh.structure_reason = 'ANIME_TVDB'::"StructureReason"
-            AND (SELECT count(DISTINCT e.id) FROM seasons s
-                 JOIN episodes e ON e.season_id = s.id
-                 JOIN episode_external_ids ee ON ee.episode_id = e.id AND ee.provider = 'TMDB'
-                 WHERE s.show_id = sh.id
-                   AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-                   AND NOT EXISTS (SELECT 1 FROM episode_external_ids tv
-                                   WHERE tv.episode_id = e.id AND tv.provider = 'THE_TVDB'))
-                > 0
-            AND COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '1970-01-01')::timestamptz < NOW() - INTERVAL '30 days'`,
-      // Same set, but missing the series-level TVDB id (the fix needs a cross-id lookup).
-      this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
-          JOIN shows sh ON sh.media_id = m.id
-          WHERE m.type='SHOW'
-            AND sh.structure_provider = 'TVDB'::"StructureProvider"
-            AND sh.structure_reason = 'ANIME_TVDB'::"StructureReason"
-            AND (SELECT count(DISTINCT e.id) FROM seasons s
-                 JOIN episodes e ON e.season_id = s.id
-                 JOIN episode_external_ids ee ON ee.episode_id = e.id AND ee.provider = 'TMDB'
-                 WHERE s.show_id = sh.id
-                   AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-                   AND NOT EXISTS (SELECT 1 FROM episode_external_ids tv
-                                   WHERE tv.episode_id = e.id AND tv.provider = 'THE_TVDB'))
-                > 0
-            AND NOT EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id AND x.provider = 'THE_TVDB')
-            AND COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '1970-01-01')::timestamptz < NOW() - INTERVAL '30 days'`,
+            AND EXISTS (
+              SELECT 1
+              FROM seasons s
+              JOIN episodes e ON e.season_id = s.id
+              JOIN episode_external_ids tmdb
+                ON tmdb.episode_id = e.id AND tmdb.provider = 'TMDB'
+              WHERE s.show_id = sh.id
+                AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
+                AND NOT EXISTS (
+                  SELECT 1 FROM episode_external_ids tvdb
+                  WHERE tvdb.episode_id = e.id AND tvdb.provider = 'THE_TVDB'
+                )
+            )
+            AND COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '1970-01-01')::timestamptz < NOW() - INTERVAL '30 days'
+        )
+        SELECT count(*)::bigint AS c,
+               count(*) FILTER (WHERE missing_tvdb)::bigint AS "withoutTvdb"
+        FROM contaminated`,
       // Cross-type contamination: a MOVIE row carrying a shows row (or the reverse) —
       // two entities merged into one record by a cross-namespace id confusion.
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
@@ -475,8 +614,8 @@ export class MetadataBackfillService {
         castDuplicateRows: 0,
         castDuplicateVotes: 0,
       })),
-      this.findDualStructureShows(100000)
-        .then((rows) => [{ c: BigInt(rows.length) }])
+      this.countDualStructureShows()
+        .then((count) => [{ c: BigInt(count) }])
         .catch(() => [{ c: BigInt(0) }]),
     ]);
     // One compact integrity query covers typed authority, import replay, alias-kind,
@@ -539,12 +678,14 @@ export class MetadataBackfillService {
         (SELECT count(DISTINCT s.show_id) FROM episodes e JOIN seasons s ON s.id=e.season_id
           WHERE e.structure_state='LEGACY_UNMAPPED'::"EpisodeStructureState")::bigint AS "legacyUnmappedShows",
         (SELECT count(*) FROM episodes e WHERE e.structure_state='LEGACY_UNMAPPED'::"EpisodeStructureState"
-          AND (EXISTS (SELECT 1 FROM user_episode_status u WHERE u.episode_id=e.id)
+          AND (EXISTS (SELECT 1 FROM user_episode_status u WHERE u.episode_id=e.id
+                       AND (u.watched=true OR u.watched_at IS NOT NULL OR u.watch_count > 0 OR u.device IS NOT NULL))
             OR EXISTS (SELECT 1 FROM watch_history h WHERE h.episode_id=e.id)
             OR EXISTS (SELECT 1 FROM ratings r WHERE r.episode_id=e.id)
             OR EXISTS (SELECT 1 FROM reactions r WHERE r.episode_id=e.id)
             OR EXISTS (SELECT 1 FROM character_votes v WHERE v.episode_id=e.id)
-            OR EXISTS (SELECT 1 FROM comments c WHERE c.thread_type='EPISODE' AND c.thread_id=e.id)))::bigint AS "legacyUnmappedWithUserData",
+            OR EXISTS (SELECT 1 FROM comments c WHERE c.thread_type='EPISODE' AND c.thread_id=e.id)
+            OR EXISTS (SELECT 1 FROM external_reviews er WHERE er.episode_id=e.id)))::bigint AS "legacyUnmappedWithUserData",
         (SELECT count(*) FROM multi_tvdb mt JOIN media_items m ON m.id=mt.media_id
           WHERE COALESCE(m.metadata_provenance #>> '{tvdbIdAudit,fingerprint}', '') != mt.fingerprint
              OR COALESCE(m.metadata_provenance #>> '{tvdbIdAudit,checkedAt}', '1970-01-01')::timestamptz < NOW() -
@@ -574,8 +715,8 @@ export class MetadataBackfillService {
           c._count._all,
         ]),
       ),
-      animeOnTmdb: toNum(animeOnTmdb as any),
-      animeOnTmdbNoTvdbId: toNum(animeOnTmdbNoTvdbId as any),
+      animeOnTmdb: toNum(animeStructure as any),
+      animeOnTmdbNoTvdbId: Number(animeStructure?.[0]?.withoutTvdb ?? 0),
       structuralTypeMismatch: toNum(structuralTypeMismatch as any),
       castMissingCharacterIds: toNum(castMissingCharacterIds as any),
       pendingCharacterVoteItems: Number(integrity?.pendingCharacterVoteItems ?? 0),
@@ -617,10 +758,6 @@ export class MetadataBackfillService {
       ...castDuplicates,
       dualStructureShows: toNum(dualStructure as any),
     };
-    // Cache write is best-effort (RedisService may be a reduced mock in tests).
-    if (typeof this.redis.set === 'function') {
-      await this.redis.set(cacheKey, JSON.stringify(stats), 60).catch(() => undefined);
-    }
     return stats;
   }
 
@@ -3090,11 +3227,8 @@ export class MetadataBackfillService {
    *  structure-reconcile job's candidate list. Canonical ownership comes from the
    *  typed Show.structureProvider field. LEGACY_UNMAPPED rows are excluded, so this
    *  selector and the dashboard metric converge on the same active set. */
-  private async findDualStructureShows(
-    limit: number,
-    cursor?: string,
-  ): Promise<{ mediaId: string; stale: number; fresh: number }[]> {
-    const rows = await this.prisma.$queryRaw<{ media_id: string; stale: bigint; fresh: bigint }[]>`
+  private dualStructureCandidatesSql(cursor?: string) {
+    return Prisma.sql`
       WITH flags AS (
         SELECT episode_id,
           bool_or(provider = 'TMDB') AS has_tmdb,
@@ -3126,18 +3260,38 @@ export class MetadataBackfillService {
         FROM per_show p
         JOIN media_items mi ON mi.id = p.media_id
         JOIN shows sh ON sh.media_id = p.media_id
-      )
-      SELECT r.media_id,
-        ((CASE WHEN r.canonical = 'tvdb' THEN r.tmdb_only + r.no_ids ELSE r.tvdb_only + r.no_ids END)
-          + CASE WHEN r.remap_version < ${StructureRemapService.MATCHER_VERSION} THEN r.legacy ELSE 0 END)::bigint AS stale,
-        (CASE WHEN r.canonical = 'tvdb' THEN r.tvdb ELSE r.tmdb END)::bigint AS fresh
-      FROM resolved r
-      WHERE (CASE WHEN r.canonical = 'tvdb' THEN r.tvdb ELSE r.tmdb END) > 0
-        AND ((CASE WHEN r.canonical = 'tvdb' THEN r.tmdb_only + r.no_ids ELSE r.tvdb_only + r.no_ids END)
-          + CASE WHEN r.remap_version < ${StructureRemapService.MATCHER_VERSION} THEN r.legacy ELSE 0 END) > 0
-        AND (${cursor ?? ''} = '' OR r.media_id > ${cursor ?? ''})
-      ORDER BY r.media_id ASC
-      LIMIT ${limit}`;
+      ),
+      candidates AS (
+        SELECT r.media_id,
+          ((CASE WHEN r.canonical = 'tvdb' THEN r.tmdb_only + r.no_ids ELSE r.tvdb_only + r.no_ids END)
+            + CASE WHEN r.remap_version < ${StructureRemapService.MATCHER_VERSION} THEN r.legacy ELSE 0 END)::bigint AS stale,
+          (CASE WHEN r.canonical = 'tvdb' THEN r.tvdb ELSE r.tmdb END)::bigint AS fresh
+        FROM resolved r
+        WHERE (CASE WHEN r.canonical = 'tvdb' THEN r.tvdb ELSE r.tmdb END) > 0
+          AND ((CASE WHEN r.canonical = 'tvdb' THEN r.tmdb_only + r.no_ids ELSE r.tvdb_only + r.no_ids END)
+            + CASE WHEN r.remap_version < ${StructureRemapService.MATCHER_VERSION} THEN r.legacy ELSE 0 END) > 0
+          AND (${cursor ?? ''} = '' OR r.media_id > ${cursor ?? ''})
+      )`;
+  }
+
+  private async countDualStructureShows(): Promise<number> {
+    const [row] = await this.prisma.$queryRaw<{ c: bigint }[]>(
+      Prisma.sql`${this.dualStructureCandidatesSql()} SELECT count(*)::bigint AS c FROM candidates`,
+    );
+    return Number(row?.c ?? 0);
+  }
+
+  private async findDualStructureShows(
+    limit: number,
+    cursor?: string,
+  ): Promise<{ mediaId: string; stale: number; fresh: number }[]> {
+    const rows = await this.prisma.$queryRaw<{ media_id: string; stale: bigint; fresh: bigint }[]>(
+      Prisma.sql`${this.dualStructureCandidatesSql(cursor)}
+        SELECT media_id, stale, fresh
+        FROM candidates
+        ORDER BY media_id ASC
+        LIMIT ${limit}`,
+    );
     return rows.map((r) => ({
       mediaId: r.media_id,
       stale: Number(r.stale),
@@ -3238,6 +3392,10 @@ export class MetadataBackfillService {
       total: 0,
       succeeded: 0,
       failed: 0,
+      remapped: 0,
+      legacyQuarantined: 0,
+      episodesRemoved: 0,
+      transferred: 0,
       finishedAt: null,
     });
     try {
@@ -3252,6 +3410,8 @@ export class MetadataBackfillService {
       let remapped = 0;
       let needsReview = 0;
       let failed = 0;
+      let episodesRemoved = 0;
+      let transferred = 0;
 
       for (let i = 0; i < candidates.length; i++) {
         const { mediaId, stale, fresh } = candidates[i];
@@ -3350,6 +3510,8 @@ export class MetadataBackfillService {
               };
               entry.mappingConfidence = summarizeMappingConfidence(remap.matchRules);
               needsReview += remap.legacyQuarantined;
+              episodesRemoved += remap.episodesRemoved;
+              transferred += entry.remap.transferred;
               entry.action = remap.mapped > 0 ? `would-remap-${canonical}` : 'no-matches';
             } else {
               entry.action = anime ? 'would-hydrate-tvdb' : 'would-hydrate-tmdb';
@@ -3382,6 +3544,9 @@ export class MetadataBackfillService {
                     matchRules: report.matchRules,
                   };
                   entry.mappingConfidence = summarizeMappingConfidence(report.matchRules);
+                  needsReview += report.legacyQuarantined;
+                  episodesRemoved += report.episodesRemoved;
+                  transferred += entry.remap.transferred;
                 }
               }
             } else {
@@ -3412,6 +3577,9 @@ export class MetadataBackfillService {
                     matchRules: report.matchRules,
                   };
                   entry.mappingConfidence = summarizeMappingConfidence(report.matchRules);
+                  needsReview += report.legacyQuarantined;
+                  episodesRemoved += report.episodesRemoved;
+                  transferred += entry.remap.transferred;
                 }
               }
             }
@@ -3422,6 +3590,16 @@ export class MetadataBackfillService {
                 : 'tmdb-canonical';
           }
           empty.titles.push(entry);
+          this.trackRepair('structure-reconcile', {
+            processed: i + 1,
+            succeeded: repaired,
+            failed,
+            remapped,
+            legacyQuarantined: needsReview,
+            episodesRemoved,
+            transferred,
+            current: mediaId,
+          });
         } catch (e) {
           failed++;
           this.logger.warn(`structure-reconcile failed for ${mediaId}: ${(e as Error).message}`);
@@ -3444,13 +3622,17 @@ export class MetadataBackfillService {
           !opts?.mediaId && candidates.length === limit
             ? (candidates[candidates.length - 1]?.mediaId ?? null)
             : null,
-        remainingBacklog: (await this.findDualStructureShows(100000)).length,
+        remainingBacklog: await this.countDualStructureShows(),
       };
       this.trackRepair('structure-reconcile', {
         running: false,
         processed: candidates.length,
         succeeded: repaired,
         failed,
+        remapped,
+        legacyQuarantined: needsReview,
+        episodesRemoved,
+        transferred,
         finishedAt: new Date(),
       });
       this.logger.log(

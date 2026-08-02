@@ -126,6 +126,10 @@ contradict the row's TMDB/IMDb anchor.
   single-flighted via a distributed lock.
 - Internal throttling returns a retry delay and is **not** a provider failure (does not trip the
   circuit breaker).
+- TVDB season/episode structure reads paginate to an explicit provider end marker. Structural
+  hydration and reconciliation never persist or match against a partial page set; internal
+  throttling waits and retries the same page, while an incomplete/upstream failure aborts the
+  title without quarantining or convergence-stamping it.
 - Per-provider circuit breaker, request coalescing, positive/negative cache, metrics.
 
 ## Optional Jikan self-host

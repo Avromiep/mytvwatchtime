@@ -604,6 +604,65 @@ describe('StructureRemapService', () => {
     expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'legacy-part-2' } });
   });
 
+  it('aborts before writes when the verified TVDB routing snapshot fails', async () => {
+    const tvdb = {
+      getEpisodeRoutingIndex: jest.fn().mockRejectedValue(new Error('TVDB snapshot incomplete')),
+    };
+    service = new StructureRemapService(prisma, undefined, tvdb as any);
+    prisma.externalId.findFirst.mockResolvedValue({ value: '258111' });
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('legacy', 1, [
+          ep({
+            id: 'legacy-tvdb',
+            number: 1,
+            title: 'Pilot',
+            airDate: D,
+            externalIds: [{ provider: 'THE_TVDB', value: '900001' }],
+          }),
+        ]),
+        season('canonical', 1, [
+          ep({
+            id: 'canonical-tmdb',
+            number: 1,
+            title: 'Pilot',
+            airDate: D,
+            externalIds: [{ provider: 'TMDB', value: '1001' }],
+          }),
+        ]),
+      ]),
+    );
+
+    await expect(service.remapShow('m1', { canonical: 'tmdb' })).rejects.toThrow(
+      'TVDB snapshot incomplete',
+    );
+    expect(prisma.episode.updateMany).not.toHaveBeenCalled();
+    expect(prisma.episode.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.userEpisodeStatus.update).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an all-default unwatched status as protected episode data', async () => {
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('legacy', 1, [ep({ id: 'empty-status', externalIds: [] })]),
+        season('canonical', 1, [
+          ep({ id: 'canonical', externalIds: [{ provider: 'TMDB', value: '1001' }] }),
+        ]),
+      ]),
+    );
+    prisma.$queryRaw.mockResolvedValue([{ id: 'empty-status', has_data: false }]);
+
+    const result = await service.remapShow('m1', { canonical: 'tmdb' });
+
+    expect(result).toMatchObject({ legacyQuarantined: 0, episodesRemoved: 1 });
+    expect(prisma.episode.deleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ['empty-status'] } },
+    });
+    const sql = (prisma.$queryRaw.mock.calls[0][0] as any).strings.join(' ');
+    expect(sql).toContain('u.watched = true');
+    expect(sql).toContain('u.watch_count > 0');
+  });
+
   it('uses verified aired order for a same-day batch across different season layouts', async () => {
     const tvdb = {
       getEpisodeRoutingIndex: jest.fn().mockResolvedValue(

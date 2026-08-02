@@ -1,4 +1,5 @@
 import { TvdbProvider } from './tvdb.provider';
+import { ProviderThrottled } from './shared/provider-http';
 
 /** Fake TvdbClient: returns canned responses per path and resolves artwork like the real one. */
 function fakeClient(routes: Record<string, unknown>) {
@@ -14,16 +15,78 @@ function fakeClient(routes: Record<string, unknown>) {
   };
 }
 
-function fakeClientWithHandler(handler: (path: string) => any) {
+function fakeClientWithHandler(
+  handler: (path: string, params?: Record<string, string | number | undefined>) => any,
+) {
   return {
     enabled: true,
     apiKey: 'k',
     artwork: (p?: string | null) => (p ? `https://art/${p}` : null),
-    get: jest.fn(async <T>(path: string): Promise<T> => handler(path) as T),
+    get: jest.fn(
+      async <T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> =>
+        handler(path, params) as T,
+    ),
   };
 }
 
 describe('TvdbProvider — episode + translations', () => {
+  it('paginates routing snapshots beyond the old 12-page truncation', async () => {
+    const client = fakeClientWithHandler((path, params) => {
+      if (!path.includes('/episodes/default/')) throw new Error(`unexpected path: ${path}`);
+      const page = Number(params?.page ?? 0);
+      return {
+        data: {
+          episodes: [
+            {
+              id: 10_000 + page,
+              name: `Episode ${page + 1}`,
+              seasonNumber: 1,
+              number: page + 1,
+              aired: `2024-01-${String((page % 28) + 1).padStart(2, '0')}`,
+            },
+          ],
+        },
+        links: { next: page < 12 ? `page=${page + 1}` : null },
+      };
+    });
+    const provider = new TvdbProvider(client as any);
+
+    const index = await provider.getEpisodeRoutingIndex(77);
+
+    expect(index.size).toBe(13);
+    expect(client.get).toHaveBeenCalledTimes(13);
+    expect(index.get(10_012)).toMatchObject({ seasonNumber: 1, episodeNumber: 13 });
+  });
+
+  it('retries the same routing page after internal provider throttling', async () => {
+    let attempts = 0;
+    const client = fakeClientWithHandler(() => {
+      attempts++;
+      if (attempts === 1) throw new ProviderThrottled('tvdb', 1);
+      return { data: { episodes: [] }, links: { next: null } };
+    });
+    const provider = new TvdbProvider(client as any);
+
+    await expect(provider.getEpisodeRoutingIndex(77)).resolves.toEqual(new Map());
+    expect(client.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a routing snapshot when a later page fails instead of returning partial data', async () => {
+    const client = fakeClientWithHandler((_path, params) => {
+      const page = Number(params?.page ?? 0);
+      if (page === 1) throw new Error('TVDB page failed');
+      return {
+        data: {
+          episodes: [{ id: 101, name: 'Pilot', seasonNumber: 1, number: 1, aired: '2024-01-01' }],
+        },
+        links: { next: 'page=1' },
+      };
+    });
+    const provider = new TvdbProvider(client as any);
+
+    await expect(provider.getEpisodeRoutingIndex(77)).rejects.toThrow('TVDB page failed');
+  });
+
   it('resolves an episode by TVDB id with parent-series + absolute number', async () => {
     const provider = new TvdbProvider(
       fakeClient({

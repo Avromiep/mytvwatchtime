@@ -34,6 +34,7 @@ import {
 } from './tmdb.provider';
 import { TvdbClient } from './tvdb.client';
 import { slugify } from '../util/slugify';
+import { ProviderThrottled } from './shared/provider-http';
 
 /**
  * CastMember.externalId for a TVDB cast entry. Real TVDB people ids get the TVDB_
@@ -446,9 +447,9 @@ export class TvdbProvider {
     const primaryTvdbLang = tr?.nameTranslations?.find((nt) => nt.isPrimary)?.language;
 
     // TVDB `/series/{id}/extended` does NOT embed episodes per season. Fetch the series'
-    // full episode list (aired/default order) and group by seasonNumber. This is best-effort
-    // + rate-limit-resilient: a TVDB failure/rate-limit returns whatever we have so far
-    // rather than throwing (so a TVDB hiccup never breaks a show's detail page or an import).
+    // complete episode list (aired/default order) and group by seasonNumber. Structural
+    // callers must never persist a partial provider graph: a throttle/upstream failure
+    // rejects the hydration before any season/episode write can begin.
     const episodesBySeason =
       opts?.includeStructure === false
         ? new Map<number, TvdbEpisode[]>()
@@ -576,9 +577,12 @@ export class TvdbProvider {
 
   /**
    * Fetch ALL episodes for a series, grouped by seasonNumber. Paginates TVDB's
-   * `/series/{id}/episodes/{page}` (aired/default order). Best-effort: on a rate-limit or
-   * failure it returns what it has gathered so far instead of throwing, so a TVDB hiccup
-   * never breaks hydration of a show or an import. Capped at 12 pages (~1200 episodes).
+   * aired/default order until the provider explicitly reports no next page.
+   *
+   * Internal throttling is expected during large reconciliation batches, so wait for the
+   * shared rate-limit window and retry the SAME page. Any other failure rejects the whole
+   * snapshot; returning a partial graph would make structure reconciliation quarantine
+   * valid history and then incorrectly stamp the show as converged.
    */
   private async fetchSeriesEpisodes(
     tvdbId: number,
@@ -588,28 +592,59 @@ export class TvdbProvider {
     // TVDB v4: /series/{id}/episodes/{seasonType}/{lang}?page={page}
     // lang must be a 3-letter code (eng, fra, spa, deu, etc.) — NOT 2-letter.
     const lang = tvdbLang3(language);
-    for (let page = 0; page < 12; page++) {
-      try {
-        const res = await this.client.get<{
-          data: { episodes?: TvdbEpisode[] } | TvdbEpisode[];
-          links?: { next?: string | null };
-        }>(`/series/${tvdbId}/episodes/default/${lang}`, { page }, lang);
-        const raw = res.data as any;
-        const eps: TvdbEpisode[] = Array.isArray(raw)
-          ? raw
-          : Array.isArray(raw?.episodes)
-            ? raw.episodes
-            : [];
-        if (eps.length === 0) break;
-        for (const e of eps) {
-          const sn = e.seasonNumber ?? 0;
-          if (!bySeason.has(sn)) bySeason.set(sn, []);
-          bySeason.get(sn)!.push(e);
+    const maxPages = 500; // protects against a broken/cyclic `next` link; ~50k episodes.
+    const throttleDeadline = Date.now() + 15 * 60 * 1000;
+    let complete = false;
+    for (let page = 0; page < maxPages; page++) {
+      let res: {
+        data: { episodes?: TvdbEpisode[] } | TvdbEpisode[];
+        links?: { next?: string | null };
+      };
+      for (;;) {
+        try {
+          res = await this.client.get<{
+            data: { episodes?: TvdbEpisode[] } | TvdbEpisode[];
+            links?: { next?: string | null };
+          }>(`/series/${tvdbId}/episodes/default/${lang}`, { page }, lang);
+          break;
+        } catch (error) {
+          if (!(error instanceof ProviderThrottled)) throw error;
+          const waitMs = Math.max(1, error.retryAfterMs);
+          if (Date.now() + waitMs > throttleDeadline) {
+            throw new ServiceUnavailableException(
+              `TVDB episode snapshot for series ${tvdbId} remained throttled`,
+            );
+          }
+          this.logger.debug(
+            `TVDB episode snapshot ${tvdbId} throttled at page ${page}; retrying in ${waitMs}ms`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
         }
-        if (!res.links?.next) break;
-      } catch {
+      }
+      const raw = res.data as any;
+      const eps: TvdbEpisode[] = Array.isArray(raw)
+        ? raw
+        : Array.isArray(raw?.episodes)
+          ? raw.episodes
+          : [];
+      if (eps.length === 0) {
+        complete = true;
         break;
       }
+      for (const e of eps) {
+        const sn = e.seasonNumber ?? 0;
+        if (!bySeason.has(sn)) bySeason.set(sn, []);
+        bySeason.get(sn)!.push(e);
+      }
+      if (!res.links?.next) {
+        complete = true;
+        break;
+      }
+    }
+    if (!complete) {
+      throw new ServiceUnavailableException(
+        `TVDB episode snapshot for series ${tvdbId} exceeded ${maxPages} pages`,
+      );
     }
     return bySeason;
   }

@@ -25,10 +25,11 @@ describe('ImportService.applyCharacterVotes — stale castId race', () => {
     const statusUpdates: any[] = [];
     const prisma: any = {
       mediaCast: {
-        findMany: jest.fn(async () => {
+        findMany: jest.fn(async (args: any) => {
           castFindCalls++;
-          // 1st call = loadCastRows (cast exists), later = in-tx validation
-          if (castFindCalls === 1) {
+          // Initial + retry loads resolve by media/character; in-transaction guards
+          // validate the already-resolved primary keys.
+          if (args?.where?.mediaId) {
             return [{ id: 'cast1', mediaId: 'm1', characterExternalId: 42 }];
           }
           return opts.validateReturns.map((id) => ({ id }));
@@ -85,7 +86,7 @@ describe('ImportService.applyCharacterVotes — stale castId race', () => {
   });
 
   it('retries the insert after an FK error with re-validated rows', async () => {
-    const { service, inserted } = makeService({
+    const { service, inserted, prisma } = makeService({
       validateReturns: ['cast1'],
       firstInsertFails: true,
     });
@@ -98,5 +99,7 @@ describe('ImportService.applyCharacterVotes — stale castId race', () => {
     expect(voteInserts[0][0]).toEqual(
       expect.objectContaining({ castId: 'cast1', episodeId: 'e1' }),
     );
+    // The FK failure aborts transaction one; retry must start a fresh transaction.
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
   });
 });

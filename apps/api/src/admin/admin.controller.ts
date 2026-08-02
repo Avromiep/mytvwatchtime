@@ -52,7 +52,9 @@ export class AdminController {
   getMetadataHealth(@Query('content') content?: string, @Query('deep') deep?: string) {
     const includeDeep = deep === '1' || deep === 'true';
     const includeContent = includeDeep || content === '1' || content === 'true';
-    return this.metadataBackfill.getHealthStats(includeContent, includeDeep);
+    return this.metadataBackfill.getHealthStats(includeContent, includeDeep, {
+      backgroundOnMiss: true,
+    });
   }
 
   /** Live progress of every running (or recently finished) metadata repair job. */
