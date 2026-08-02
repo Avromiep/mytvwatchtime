@@ -149,7 +149,7 @@ docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-temp-uploa
 
 | Variable        | When Missing                                                                  |
 | --------------- | ----------------------------------------------------------------------------- |
-| `SMTP_HOST`     | Data deletion + password reset emails not sent                                |
+| `SMTP_HOST`     | Data deletion request/completion + password reset emails not sent             |
 | `SMTP_PORT`     | Defaults to `587`                                                             |
 | `SMTP_SECURE`   | Defaults to `false` (use `true` for port 465)                                 |
 | `SMTP_USER`     | —                                                                             |

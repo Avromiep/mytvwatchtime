@@ -42,7 +42,10 @@ export function isDeletedUserAccount(u: {
 
 type PrismaLike = Pick<PrismaService, 'user'>;
 
-const DELETE_TRANSACTION_TIMEOUT_MS = 180_000;
+// Large imported accounts can contain hundreds of thousands of dependent rows. Keep the
+// privacy-preserving transfer + cascade atomic, but allow enough time for PostgreSQL to finish
+// it. Duplicate requests never wait out this budget because the advisory lock below is try-only.
+const DELETE_TRANSACTION_TIMEOUT_MS = 15 * 60_000;
 const COUNTER_UPDATE_CHUNK_SIZE = 5_000;
 const COMMENT_TRANSFER_CHUNK_SIZE = 5_000;
 
@@ -103,6 +106,13 @@ export type DeletedUserResult = {
   deviceVotesPreserved: number;
 };
 
+export class AccountDeletionInProgressError extends Error {
+  constructor() {
+    super('Account deletion is already in progress');
+    this.name = 'AccountDeletionInProgressError';
+  }
+}
+
 /**
  * Privacy-preserving deletion:
  * - creates one non-login ghost identity for this account;
@@ -159,8 +169,13 @@ export async function anonymizeAndDeleteUser(
 
   return prisma.$transaction(
     async (tx: any) => {
-      // Serialize duplicate email-link/admin/self-delete requests for the same account.
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`account-delete:${userId}`}))`;
+      // Serialize duplicate email-link/admin/self-delete requests for the same account without
+      // letting a retry spend its whole transaction timeout waiting behind the first request.
+      // The try-lock returns a Prisma-supported boolean (unlike pg_advisory_xact_lock's `void`).
+      const [lock] = await tx.$queryRaw<Array<{ acquired: boolean }>>`
+        SELECT pg_try_advisory_xact_lock(hashtext(${`account-delete:${userId}`})) AS acquired
+      `;
+      if (!lock?.acquired) throw new AccountDeletionInProgressError();
       const current = await tx.user.findUnique({
         where: { id: userId },
         select: { id: true, email: true, username: true },

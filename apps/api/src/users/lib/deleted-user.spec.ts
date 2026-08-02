@@ -1,5 +1,6 @@
 import {
   anonymizeAndDeleteUser,
+  AccountDeletionInProgressError,
   getOrCreateDeletedUser,
   isDeletedUserAccount,
   isReservedUserEmail,
@@ -95,7 +96,7 @@ function makePrisma(
     },
     $queryRaw: jest.fn(async () => {
       queryRawCall += 1;
-      if (queryRawCall === 1) return [{ pg_advisory_xact_lock: null }];
+      if (queryRawCall === 1) return [{ acquired: true }];
       return protectedCommentIds.map((id) => ({ id }));
     }),
     $executeRaw: jest.fn(async () => 1),
@@ -222,6 +223,8 @@ describe('anonymizeAndDeleteUser', () => {
     });
     expect(prisma.comment.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u1' } });
     expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    // Advisory try-lock + protected-comment tree query.
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
   });
 
   it('deletes an all-self-authored branch instead of preserving unnecessary ghosts', async () => {
@@ -244,6 +247,8 @@ describe('anonymizeAndDeleteUser', () => {
     expect(prisma.commentImage.updateMany).not.toHaveBeenCalled();
     expect(prisma.comment.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u1' } });
     expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    // Advisory try-lock + protected-comment tree query.
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
   });
 
   it('is a no-op when the original user is already gone', async () => {
@@ -251,5 +256,16 @@ describe('anonymizeAndDeleteUser', () => {
     expect(await anonymizeAndDeleteUser(prisma, 'u1')).toBeNull();
     expect(prisma.user.delete).not.toHaveBeenCalled();
     expect(calls.userCreate).toHaveLength(0);
+  });
+
+  it('rejects a concurrent deletion immediately without creating a ghost', async () => {
+    const { prisma, calls } = makePrisma();
+    prisma.$queryRaw.mockResolvedValueOnce([{ acquired: false }]);
+
+    await expect(anonymizeAndDeleteUser(prisma, 'u1')).rejects.toBeInstanceOf(
+      AccountDeletionInProgressError,
+    );
+    expect(calls.userCreate).toHaveLength(0);
+    expect(prisma.user.delete).not.toHaveBeenCalled();
   });
 });

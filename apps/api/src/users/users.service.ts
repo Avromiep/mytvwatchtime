@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -10,8 +10,13 @@ import {
   dtoLangToDb,
 } from '../common/utils/mapper.util';
 import { DeviceRegisterDto, UpdateProfileDto } from './dto/user.dto';
-import { anonymizeAndDeleteUser, RESERVED_USERNAMES } from './lib/deleted-user';
+import {
+  AccountDeletionInProgressError,
+  anonymizeAndDeleteUser,
+  RESERVED_USERNAMES,
+} from './lib/deleted-user';
 import { ExportService } from './export.service';
+import { EmailService } from '../common/email.service';
 
 @Injectable()
 export class UsersService {
@@ -22,6 +27,7 @@ export class UsersService {
     private readonly redis: RedisService,
     private readonly apple: AppleAuthService,
     private readonly exports: ExportService,
+    @Optional() private readonly email?: EmailService,
   ) {}
 
   async getMe(userId: string) {
@@ -119,13 +125,27 @@ export class UsersService {
 
   /** Shared by self-service/email deletion and the audited admin deletion path. */
   async deleteUserAccount(userId: string) {
+    // Keep the destination only in request memory before the user row and deletion-request
+    // identity are removed/anonymized. Never attempt to look it up after the transaction.
+    const account = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, username: true },
+    });
     await this.revokeAppleProviders(userId);
     // Evict the JWT existence cache BEFORE the row delete so in-flight requests
     // re-check the DB instead of racing through on the stale positive entry.
     await this.redis.del(`auth:user:${userId}`);
     // Public/community contributions move to a unique non-login ghost; private account,
     // library, history, device, credential, and notification data cascades away.
-    const preserved = await anonymizeAndDeleteUser(this.prisma, userId);
+    let preserved;
+    try {
+      preserved = await anonymizeAndDeleteUser(this.prisma, userId);
+    } catch (e) {
+      if (e instanceof AccountDeletionInProgressError) {
+        throw new ConflictException(e.message);
+      }
+      throw e;
+    }
     let exportsDeleted = 0;
     try {
       exportsDeleted = await this.exports.deleteForUser(userId);
@@ -136,7 +156,32 @@ export class UsersService {
         `Deferred export cleanup for deleted user ${userId}: ${(e as Error).message}`,
       );
     }
+    if (preserved && account?.email && this.email) {
+      const username = this.escapeEmailHtml(account.username);
+      const html = `
+        <h2>Your TV Watch Time account has been deleted</h2>
+        <p>Hello <strong>${username}</strong>,</p>
+        <p>Your TVWatchTime account and private account data have been permanently deleted.</p>
+        <p>No further action is required.</p>
+      `;
+      await this.email
+        .send(account.email, 'Your TV Watch Time Account Has Been Deleted', html)
+        .catch((e) =>
+          this.logger.warn(
+            `Could not send deletion confirmation for user ${userId}: ${(e as Error).message}`,
+          ),
+        );
+    }
     return preserved ? { ...preserved, exportsDeleted } : null;
+  }
+
+  private escapeEmailHtml(value: string): string {
+    return value
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
   }
 
   private async revokeAppleProviders(userId: string) {

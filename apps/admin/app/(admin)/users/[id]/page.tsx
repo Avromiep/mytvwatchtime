@@ -48,6 +48,9 @@ export default function UserDetailPage() {
     try {
       await api.delete(`/admin/users/${id}`, {
         data: { confirmUsername: confirmation },
+        // Large imported accounts can take several minutes to transfer preserved community
+        // contributions and cascade private data. The API transaction allows 15 minutes.
+        timeout: 16 * 60 * 1000,
       });
       router.replace('/users');
     } catch (e: any) {
