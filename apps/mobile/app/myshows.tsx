@@ -49,7 +49,7 @@ const GRID_CARD_STYLE = { marginRight: 0 } as const;
 export default function MyShowsScreen() {
   const { width } = useWindowDimensions();
   const { tokens } = useAppearance();
-  const { t } = useTranslation(['social', 'common', 'shows']);
+  const { t } = useTranslation(['social', 'common']);
   const summary = useShowProgressSummary();
   const [refreshing, setRefreshing] = useState(false);
   // Expanded defaults are data-driven: sections with fewer than 9 items start
@@ -335,6 +335,20 @@ export default function MyShowsScreen() {
     if (pending && Math.abs(next - pending.offset) > 32) pending.userMoved = true;
     scrollOffset.current = next;
   }, []);
+  const loadMoreRef = useRef(loadMore);
+  loadMoreRef.current = loadMore;
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: any[] }) => {
+    for (const token of viewableItems) {
+      const row = token.item as FlatRow | undefined;
+      if (token.isViewable && row?.type === 'more' && row.section && !row.failed) {
+        loadMoreRef.current(row.section);
+      }
+    }
+  }).current;
+  const viewabilityConfig = useRef({
+    itemVisiblePercentThreshold: 10,
+    minimumViewTime: 150,
+  }).current;
 
   const renderItem = useCallback(
     ({ item }: { item: FlatRow }) => {
@@ -385,25 +399,24 @@ export default function MyShowsScreen() {
       }
 
       if (item.type === 'more') {
-        return (
-          <Pressable
-            disabled={item.loading}
-            onPress={() => loadMore(item.section!)}
-            style={styles.more}
-          >
-            {item.loading ? (
-              <View style={styles.moreContent}>
-                <ActivityIndicator size="small" color={tokens.primary} />
-                <T variant="caption" style={{ color: tokens.primary }}>
-                  {t('common:loading')}
-                </T>
-              </View>
-            ) : (
+        if (item.failed) {
+          return (
+            <Pressable onPress={() => loadMore(item.section!)} style={styles.more}>
               <T variant="caption" style={{ color: tokens.primary }}>
-                {item.failed ? t('common:retry') : t('shows:seeMore')}
+                {t('common:retry')}
               </T>
-            )}
-          </Pressable>
+            </Pressable>
+          );
+        }
+        return (
+          <View style={styles.more} accessibilityRole="progressbar">
+            <View style={styles.moreContent}>
+              <ActivityIndicator size="small" color={tokens.primary} />
+              <T variant="caption" style={{ color: tokens.primary }}>
+                {t('common:loading')}
+              </T>
+            </View>
+          </View>
         );
       }
 
@@ -462,6 +475,8 @@ export default function MyShowsScreen() {
         windowSize={10}
         onScroll={onScroll}
         scrollEventThrottle={16}
+        onViewableItemsChanged={onViewableItemsChanged}
+        viewabilityConfig={viewabilityConfig}
         maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
         refreshControl={
           <RefreshControl

@@ -139,12 +139,14 @@ export class NotificationService {
   }
 
   async getPreferences(userId: string) {
-    let prefs = await this.prisma.notificationPreference.findUnique({ where: { userId } });
-    if (!prefs) {
-      prefs = await this.prisma.notificationPreference.create({
-        data: { userId, preferences: DEFAULT_PREFS },
-      });
-    }
+    // First access can come from several event listeners at once. Use one atomic
+    // statement so concurrent callers cannot both observe a missing row and race
+    // to insert the same unique userId.
+    const prefs = await this.prisma.notificationPreference.upsert({
+      where: { userId },
+      create: { userId, preferences: DEFAULT_PREFS },
+      update: {},
+    });
     return {
       preferences: prefs.preferences as Record<
         NotificationCategory,

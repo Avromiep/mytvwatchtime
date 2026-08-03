@@ -31,6 +31,10 @@ const EXT_TO_SOURCE: Record<string, 'zip' | 'csv' | 'json'> = {
 };
 
 const BATCH_CHUNK = 5000;
+// Leave headroom below PostgreSQL's hard 32,767 bind-variable ceiling. Bulk
+// inserts multiply row count by column count, so their row chunk is calculated
+// dynamically from this parameter budget.
+const MAX_QUERY_BIND_PARAMS = 30_000;
 // Interactive transaction limits. The apply stage splits work across multiple short
 // transactions (one per section) instead of one giant transaction, but each section still
 // needs headroom beyond Prisma's 5s default — that default is what caused the 500 on large
@@ -723,11 +727,44 @@ export class ImportService {
   }
 
   private chunkedCreateMany(tx: any, model: string, rows: any[], skipDuplicates = false) {
+    const columnCount = Math.max(1, new Set(rows.flatMap((row) => Object.keys(row ?? {}))).size);
+    const chunkSize = Math.max(
+      1,
+      Math.min(BATCH_CHUNK, Math.floor(MAX_QUERY_BIND_PARAMS / columnCount)),
+    );
     const work: Promise<unknown>[] = [];
-    for (let i = 0; i < rows.length; i += BATCH_CHUNK) {
-      work.push(tx[model].createMany({ data: rows.slice(i, i + BATCH_CHUNK), skipDuplicates }));
+    for (let i = 0; i < rows.length; i += chunkSize) {
+      work.push(tx[model].createMany({ data: rows.slice(i, i + chunkSize), skipDuplicates }));
     }
     return Promise.all(work);
+  }
+
+  /**
+   * PostgreSQL prepared statements accept at most 32,767 bind variables. Large
+   * archives can exceed that with a single Prisma `in` filter, so every bulk ID
+   * lookup is deduplicated and loaded in the same bounded chunks used by writes.
+   */
+  private async chunkedFindManyByIds<T>(
+    ids: string[],
+    load: (chunk: string[]) => Promise<T[]>,
+  ): Promise<T[]> {
+    const uniqueIds = [...new Set(ids)];
+    const rows: T[] = [];
+    for (let i = 0; i < uniqueIds.length; i += BATCH_CHUNK) {
+      rows.push(...(await load(uniqueIds.slice(i, i + BATCH_CHUNK))));
+    }
+    return rows;
+  }
+
+  /** Keep updateMany `id IN (...)` statements below PostgreSQL's bind limit too. */
+  private async chunkedUpdateManyByIds(tx: any, model: string, ids: string[], data: any) {
+    const uniqueIds = [...new Set(ids)];
+    for (let i = 0; i < uniqueIds.length; i += BATCH_CHUNK) {
+      await tx[model].updateMany({
+        where: { id: { in: uniqueIds.slice(i, i + BATCH_CHUNK) } },
+        data,
+      });
+    }
   }
 
   /** Apply every section, each in its own raised-timeout transaction (no single giant tx). */
@@ -780,12 +817,12 @@ export class ImportService {
         ),
       ),
     ];
-    const typeRows = guardIds.length
-      ? await this.prisma.mediaItem.findMany({
-          where: { id: { in: guardIds } },
-          select: { id: true, type: true },
-        })
-      : [];
+    const typeRows = await this.chunkedFindManyByIds(guardIds, (ids) =>
+      this.prisma.mediaItem.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, type: true },
+      }),
+    );
     const typeById = new Map(typeRows.map((r) => [r.id, r.type]));
     const incompatibleItems: any[] = [];
     const guardFilter = (it: any, expected: string): boolean => {
@@ -806,22 +843,26 @@ export class ImportService {
       guardFilter(it, it.sourceEntityType === 'FAVORITE_MOVIE' ? 'MOVIE' : 'SHOW'),
     );
     if (incompatibleItems.length) {
-      await this.prisma.importItem.updateMany({
-        where: { id: { in: incompatibleItems.map((item) => item.id) } },
-        data: {
+      await this.chunkedUpdateManyByIds(
+        this.prisma,
+        'importItem',
+        incompatibleItems.map((item) => item.id),
+        {
           status: 'SKIPPED',
           errorMessage: 'Matched media type is incompatible with this import item',
         },
-      });
+      );
     }
 
     // --- WATCHED EPISODES ---
     if (epItemsGuarded.length) {
       const stagedEpisodeIds = epItemsGuarded.map((it) => it.matchedEpisodeId as string);
-      const stagedEpisodes = await this.prisma.episode.findMany({
-        where: { id: { in: stagedEpisodeIds }, structureState: 'ACTIVE' },
-        select: { id: true },
-      });
+      const stagedEpisodes = await this.chunkedFindManyByIds(stagedEpisodeIds, (ids) =>
+        this.prisma.episode.findMany({
+          where: { id: { in: ids }, structureState: 'ACTIVE' },
+          select: { id: true },
+        }),
+      );
       const existingEpisodeIds = new Set(stagedEpisodes.map((episode) => episode.id));
 
       // A match can become stale between archive processing and confirmation when metadata
@@ -878,13 +919,10 @@ export class ImportService {
       }
       if (unresolvedItems.length) {
         const unresolvedIds = unresolvedItems.map((item) => item.id);
-        await this.prisma.importItem.updateMany({
-          where: { id: { in: unresolvedIds } },
-          data: {
-            status: 'SKIPPED',
-            matchedEpisodeId: null,
-            errorMessage: 'Episode is missing or its canonical replacement is ambiguous',
-          },
+        await this.chunkedUpdateManyByIds(this.prisma, 'importItem', unresolvedIds, {
+          status: 'SKIPPED',
+          matchedEpisodeId: null,
+          errorMessage: 'Episode is missing or its canonical replacement is ambiguous',
         });
         for (const item of unresolvedItems) item.matchedEpisodeId = null;
         skipped += unresolvedItems.length;
@@ -894,14 +932,18 @@ export class ImportService {
       const applicableEpItems = epItemsGuarded.filter((item) => !unresolvedIds.has(item.id));
       const episodeIds = applicableEpItems.map((item) => item.matchedEpisodeId as string);
       const [episodeData, existingWatched] = await Promise.all([
-        this.prisma.episode.findMany({
-          where: { id: { in: episodeIds }, structureState: 'ACTIVE' },
-          select: { id: true, runtimeMinutes: true, season: { select: { number: true } } },
-        }),
-        this.prisma.userEpisodeStatus.findMany({
-          where: { userId, episodeId: { in: episodeIds }, watched: true },
-          select: { id: true, episodeId: true, watchCount: true },
-        }),
+        this.chunkedFindManyByIds(episodeIds, (ids) =>
+          this.prisma.episode.findMany({
+            where: { id: { in: ids }, structureState: 'ACTIVE' },
+            select: { id: true, runtimeMinutes: true, season: { select: { number: true } } },
+          }),
+        ),
+        this.chunkedFindManyByIds(episodeIds, (ids) =>
+          this.prisma.userEpisodeStatus.findMany({
+            where: { userId, episodeId: { in: ids }, watched: true },
+            select: { id: true, episodeId: true, watchCount: true },
+          }),
+        ),
       ]);
       const runtimeMap = new Map<string, any>(episodeData.map((e: any) => [e.id, e]));
       const watchedSet = new Set(existingWatched.map((e: any) => e.episodeId));
@@ -1023,11 +1065,11 @@ export class ImportService {
                 ),
               );
             }
-            if (appliedIds.length)
-              await tx.importItem.updateMany({
-                where: { id: { in: appliedIds } },
-                data: { status: 'APPLIED' },
+            if (appliedIds.length) {
+              await this.chunkedUpdateManyByIds(tx, 'importItem', appliedIds, {
+                status: 'APPLIED',
               });
+            }
           },
           { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
         );
@@ -1040,14 +1082,18 @@ export class ImportService {
     if (movieItems.length) {
       const movieMediaIds = movieItems.map((it) => it.matchedMediaId);
       const [movieData, existingWatchedMovies] = await Promise.all([
-        this.prisma.movie.findMany({
-          where: { mediaId: { in: movieMediaIds } },
-          select: { mediaId: true, runtimeMinutes: true },
-        }),
-        this.prisma.userMovieStatus.findMany({
-          where: { userId, mediaId: { in: movieMediaIds }, watched: true },
-          select: { mediaId: true },
-        }),
+        this.chunkedFindManyByIds(movieMediaIds, (ids) =>
+          this.prisma.movie.findMany({
+            where: { mediaId: { in: ids } },
+            select: { mediaId: true, runtimeMinutes: true },
+          }),
+        ),
+        this.chunkedFindManyByIds(movieMediaIds, (ids) =>
+          this.prisma.userMovieStatus.findMany({
+            where: { userId, mediaId: { in: ids }, watched: true },
+            select: { mediaId: true },
+          }),
+        ),
       ]);
       const runtimeMap = new Map(movieData.map((m: any) => [m.mediaId, m.runtimeMinutes]));
       const watchedMovieSet = new Set(existingWatchedMovies.map((m: any) => m.mediaId));
@@ -1100,11 +1146,11 @@ export class ImportService {
             await this.chunkedCreateMany(tx, 'userMovieStatus', movieStatusRows, true);
             await this.chunkedCreateMany(tx, 'watchHistory', movieHistoryRows);
             await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
-            if (appliedIds.length)
-              await tx.importItem.updateMany({
-                where: { id: { in: appliedIds } },
-                data: { status: 'APPLIED' },
+            if (appliedIds.length) {
+              await this.chunkedUpdateManyByIds(tx, 'importItem', appliedIds, {
+                status: 'APPLIED',
               });
+            }
           },
           { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
         );
@@ -1116,10 +1162,12 @@ export class ImportService {
     // --- WATCHLIST ---
     if (watchlistItems.length) {
       const mediaIds = [...new Set(watchlistItems.map((it) => it.matchedMediaId))];
-      const existing = await this.prisma.watchlistItem.findMany({
-        where: { userId, mediaId: { in: mediaIds } },
-        select: { mediaId: true },
-      });
+      const existing = await this.chunkedFindManyByIds(mediaIds, (ids) =>
+        this.prisma.watchlistItem.findMany({
+          where: { userId, mediaId: { in: ids } },
+          select: { mediaId: true },
+        }),
+      );
       const existingSet = new Set(existing.map((w: any) => w.mediaId));
 
       const rows: any[] = [];
@@ -1151,11 +1199,11 @@ export class ImportService {
           async (tx) => {
             await this.chunkedCreateMany(tx, 'watchlistItem', rows, true);
             await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
-            if (appliedIds.length)
-              await tx.importItem.updateMany({
-                where: { id: { in: appliedIds } },
-                data: { status: 'APPLIED' },
+            if (appliedIds.length) {
+              await this.chunkedUpdateManyByIds(tx, 'importItem', appliedIds, {
+                status: 'APPLIED',
               });
+            }
           },
           { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
         );
@@ -1167,10 +1215,12 @@ export class ImportService {
     // --- FAVORITES ---
     if (favoriteItems.length) {
       const mediaIds = [...new Set(favoriteItems.map((it) => it.matchedMediaId))];
-      const existing = await this.prisma.favorite.findMany({
-        where: { userId, mediaId: { in: mediaIds } },
-        select: { mediaId: true },
-      });
+      const existing = await this.chunkedFindManyByIds(mediaIds, (ids) =>
+        this.prisma.favorite.findMany({
+          where: { userId, mediaId: { in: ids } },
+          select: { mediaId: true },
+        }),
+      );
       const existingSet = new Set(existing.map((f: any) => f.mediaId));
 
       const rows: any[] = [];
@@ -1202,11 +1252,11 @@ export class ImportService {
           async (tx) => {
             await this.chunkedCreateMany(tx, 'favorite', rows, true);
             await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
-            if (appliedIds.length)
-              await tx.importItem.updateMany({
-                where: { id: { in: appliedIds } },
-                data: { status: 'APPLIED' },
+            if (appliedIds.length) {
+              await this.chunkedUpdateManyByIds(tx, 'importItem', appliedIds, {
+                status: 'APPLIED',
               });
+            }
           },
           { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
         );

@@ -164,7 +164,9 @@ export class LibraryService {
    * Full watch-list computation (uncapped rails), cached per user+lang for 5 min.
    * Both watchNext (capped presentation payload) and watchNextBucket (per-rail
    * pagination for the "See more" buttons) derive from this one computation.
-   * Key carries a v3 infix AFTER the userId (all three rails are now pageable and
+   * Key carries a v4 infix AFTER the userId (all three rails are now pageable and
+   * eligibility is based on an actual watchlist row, not a potentially stale
+   * user_show_status row) and
    * the old 500-show computation cap was removed). The key must stay inside the
    * `watchnext:{userId}:*` invalidation pattern shared by tracking/collections/
    * import/onboarding, or removed/paused shows linger until the TTL. Freshness
@@ -173,75 +175,56 @@ export class LibraryService {
    * need no invalidation because the language is part of the key.
    */
   private async computeWatchNext(userId: string) {
-    const cacheKey = `watchnext:${userId}:v3:${currentLanguage()}`;
+    const cacheKey = `watchnext:${userId}:v4:${currentLanguage()}`;
     return this.cached(cacheKey, WATCH_NEXT_CACHE_TTL_S, async () => {
-      // Shows the user has started watching (has user_show_status). Dropped shows
-      // (removed from the watchlist) are hidden from watch-next even though their
-      // watch history is kept. Paused shows (tracking paused) are hidden the same way.
-      const statuses = await this.prisma.userShowStatus.findMany({
-        where: { userId, dropped: false, pausedAt: null },
-        include: { media: { include: { show: true } } },
-        orderBy: { lastWatchedAt: 'desc' },
-      });
-
-      // Watchlist shows that DON'T have a user_show_status yet (never watched).
-      // The full identity pool is retained server-side; only bounded pages are sent.
-      const statusMediaIds = new Set(statuses.map((s) => s.mediaId));
-      const [watchlistShows, watchlistIdsRaw] = await Promise.all([
-        this.prisma.watchlistItem.findMany({
-          where: {
-            userId,
-            media: { type: 'SHOW', showStatuses: { none: { userId, pausedAt: { not: null } } } },
-            ...(statusMediaIds.size ? { mediaId: { notIn: [...statusMediaIds] } } : {}),
-          },
+      // Watch Next is a view of the user's current watchlist. A show-status row is
+      // only progress state: imports/repairs can legitimately leave one behind after
+      // the watchlist row is gone, so it must never be used as membership by itself.
+      const [statusRows, watchlistIdsRaw] = await Promise.all([
+        this.prisma.userShowStatus.findMany({
+          where: { userId, dropped: false, pausedAt: null },
           include: { media: { include: { show: true } } },
-          orderBy: { createdAt: 'desc' },
+          orderBy: { lastWatchedAt: 'desc' },
         }),
-        // Ids of ALL watchlisted shows: a show that has a status row with watchedCount 0
-        // (every episode unmarked after watching, or import artifact) AND is in the
-        // watchlist must still be treated as watchlist-only — otherwise it vanished
-        // from watch-next entirely (neither "started" nor "start watching").
         this.prisma.watchlistItem.findMany({
           where: { userId, media: { type: 'SHOW' } },
           select: { mediaId: true },
         }),
       ]);
       const watchlistIds = new Set(watchlistIdsRaw.map((w) => w.mediaId));
+      const statuses = statusRows.filter((status) => watchlistIds.has(status.mediaId));
 
-      // Fallback: shows the user has watched episodes for but missing from user_show_status
-      // (e.g. import didn't rebuild statuses, or status was lost)
-      const existingMediaIds = new Set([
-        ...statusMediaIds,
-        ...watchlistShows.map((w) => w.mediaId),
-      ]);
-      // Media ids of dropped or paused shows: the fallback watched-episodes query
-      // below must NOT resurrect them into watch-next.
-      const excludedRows = await this.prisma.userShowStatus.findMany({
-        where: { userId, OR: [{ dropped: true }, { pausedAt: { not: null } }] },
-        select: { mediaId: true },
+      // Watchlist shows that DON'T have a user_show_status yet (never watched).
+      // The full identity pool is retained server-side; only bounded pages are sent.
+      const statusMediaIds = new Set(statuses.map((s) => s.mediaId));
+      const watchlistShows = await this.prisma.watchlistItem.findMany({
+        where: {
+          userId,
+          media: { type: 'SHOW', showStatuses: { none: { userId, pausedAt: { not: null } } } },
+          ...(statusMediaIds.size ? { mediaId: { notIn: [...statusMediaIds] } } : {}),
+        },
+        include: { media: { include: { show: true } } },
+        orderBy: { createdAt: 'desc' },
       });
-      const excludedMediaIds = new Set(excludedRows.map((r) => r.mediaId));
-      const watchedShowsRaw = await this.prisma.$queryRaw<
-        Array<{ mediaId: string; watchedCount: number; lastWatchedAt: Date | null }>
-      >`
+
+      // Correct stale persisted counts from actual episode state, but constrain the
+      // aggregation to watchlisted shows. History-only shows remain visible in the
+      // History rail and cannot be resurrected into Watch Next by this query.
+      const watchedShowsRaw = watchlistIds.size
+        ? await this.prisma.$queryRaw<
+            Array<{ mediaId: string; watchedCount: number; lastWatchedAt: Date | null }>
+          >`
       SELECT sh.media_id AS "mediaId", COUNT(ues.id)::int AS "watchedCount", MAX(ues.watched_at) AS "lastWatchedAt"
       FROM user_episode_status ues
       JOIN episodes e ON ues.episode_id = e.id
       JOIN seasons s ON e.season_id = s.id
       JOIN shows sh ON s.show_id = sh.id
       WHERE ues.user_id = ${userId} AND ues.watched = true
+        AND sh.media_id IN (${Prisma.join([...watchlistIds])})
         AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
         AND s.is_special = false
       GROUP BY sh.media_id
-    `;
-      const missingShowIds = watchedShowsRaw
-        .filter((r) => !existingMediaIds.has(r.mediaId) && !excludedMediaIds.has(r.mediaId))
-        .map((r) => r.mediaId);
-      const missingShows = missingShowIds.length
-        ? await this.prisma.mediaItem.findMany({
-            where: { id: { in: missingShowIds }, type: 'SHOW' },
-            include: { show: true },
-          })
+    `
         : [];
       const watchedMap = new Map(watchedShowsRaw.map((r) => [r.mediaId, r]));
 
@@ -261,20 +244,12 @@ export class LibraryService {
           userId,
           mediaId: w.mediaId,
           media: w.media,
-          watchedCount: 0,
+          watchedCount: watchedMap.get(w.mediaId)?.watchedCount ?? 0,
           totalCount: 0,
-          lastWatchedAt: null,
-          isWatchlistOnly: true,
-        })),
-        ...missingShows.map((m) => ({
-          userId,
-          mediaId: m.id,
-          media: m,
-          watchedCount: watchedMap.get(m.id)?.watchedCount ?? 0,
-          totalCount: 0,
-          lastWatchedAt: watchedMap.get(m.id)?.lastWatchedAt ?? null,
-          isWatchlistOnly: false,
-          fromEpisodeStatus: true,
+          lastWatchedAt: watchedMap.get(w.mediaId)?.lastWatchedAt ?? null,
+          // Usually this row means "never watched", but if a repair/import lost
+          // user_show_status while retaining episode history, preserve that progress.
+          isWatchlistOnly: (watchedMap.get(w.mediaId)?.watchedCount ?? 0) === 0,
         })),
       ];
 
@@ -692,7 +667,7 @@ export class LibraryService {
   }
 
   async upcoming(userId: string) {
-    const cacheKey = `upcoming:${userId}:${currentLanguage()}`;
+    const cacheKey = `upcoming:${userId}:v2:${currentLanguage()}`;
     return this.cached(cacheKey, 60, async () => {
       const tracked = await this.trackedMediaIds(userId);
 
@@ -768,7 +743,9 @@ export class LibraryService {
       throw new BadRequestException('Invalid cursor');
     }
 
-    const cacheKey = `upcoming:past:${userId}:${currentLanguage()}:${beforeDate.toISOString()}:${opts.beforeId}:${limit}`;
+    // Keep paged keys inside `upcoming:{userId}:*` so watchlist mutations clear
+    // already-fetched server pages as well as the initial Upcoming payload.
+    const cacheKey = `upcoming:${userId}:past:v2:${currentLanguage()}:${beforeDate.toISOString()}:${opts.beforeId}:${limit}`;
     const cached = await this.redis.get<any>(cacheKey);
     if (cached) return cached;
 
@@ -987,25 +964,20 @@ export class LibraryService {
 
   // ---------------- helpers ----------------
   private async trackedMediaIds(userId: string): Promise<string[]> {
-    // Dropped shows (removed from the watchlist) are excluded from upcoming even
-    // though their watch history is kept. Paused shows are excluded the same way.
-    const [statuses, watchlist] = await Promise.all([
-      this.prisma.userShowStatus.findMany({
-        where: { userId, dropped: false, pausedAt: null },
-        select: { mediaId: true },
-      }),
-      this.prisma.watchlistItem.findMany({
-        where: {
-          userId,
-          media: {
-            type: MediaType.SHOW,
-            showStatuses: { none: { userId, pausedAt: { not: null } } },
-          },
+    // Upcoming follows actual watchlist membership, just like Watch Next. Status
+    // rows retain progress/history state and may survive imports or repairs, but
+    // cannot independently opt a show back into active tracking.
+    const watchlist = await this.prisma.watchlistItem.findMany({
+      where: {
+        userId,
+        media: {
+          type: MediaType.SHOW,
+          showStatuses: { none: { userId, pausedAt: { not: null } } },
         },
-        select: { mediaId: true },
-      }),
-    ]);
-    return [...new Set([...statuses.map((s) => s.mediaId), ...watchlist.map((w) => w.mediaId)])];
+      },
+      select: { mediaId: true },
+    });
+    return [...new Set(watchlist.map((w) => w.mediaId))];
   }
 
   /** User-scoped aired totals used by the paged My Shows API. Starting from the

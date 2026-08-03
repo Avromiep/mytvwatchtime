@@ -152,4 +152,70 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     });
     expect(chunked).toHaveLength(0);
   });
+
+  it('chunks large episode lookups and applied-item updates below the bind limit', async () => {
+    const { service, prisma } = makeService({ 'show-1': 'SHOW' });
+    (service.chunkedCreateMany as jest.Mock).mockImplementation(async () => undefined);
+    prisma.episode.findMany.mockImplementation(async (args: any) => {
+      const ids: string[] = args.where?.id?.in ?? [];
+      return ids.map((id) => ({ id, runtimeMinutes: 24, season: { number: 1 } }));
+    });
+
+    const items = Array.from({ length: 5001 }, (_, index) => ({
+      ...episodeItem(`ep-${index}`),
+      id: `item-${index}`,
+    }));
+
+    await expect(service.applyBatch('u1', 'imp1', items, 'TVTIME')).resolves.toEqual({
+      created: 5001,
+      skipped: 0,
+    });
+
+    const episodeLookupSizes = prisma.episode.findMany.mock.calls
+      .map(([args]: any[]) => args.where?.id?.in?.length)
+      .filter((size: number | undefined): size is number => size !== undefined);
+    expect(episodeLookupSizes).toEqual([5000, 1, 5000, 1]);
+    expect(
+      prisma.userEpisodeStatus.findMany.mock.calls.every(
+        ([args]: any[]) => args.where.episodeId.in.length <= 5000,
+      ),
+    ).toBe(true);
+
+    const appliedUpdateSizes = prisma.importItem.updateMany.mock.calls
+      .filter(([args]: any[]) => args.data?.status === 'APPLIED')
+      .map(([args]: any[]) => args.where.id.in.length);
+    expect(appliedUpdateSizes).toEqual([5000, 1]);
+  });
+
+  it('sizes createMany chunks by row width as well as row count', async () => {
+    const createMany = jest.fn().mockResolvedValue({ count: 0 });
+    const service = new ImportService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    ) as any;
+    const rows = Array.from({ length: 5000 }, (_, index) => ({
+      a: index,
+      b: index,
+      c: index,
+      d: index,
+      e: index,
+      f: index,
+      g: index,
+      h: index,
+      i: index,
+      j: index,
+    }));
+
+    await service.chunkedCreateMany({ wideModel: { createMany } }, 'wideModel', rows);
+
+    expect(createMany).toHaveBeenCalledTimes(2);
+    expect(createMany.mock.calls.map(([args]) => args.data.length)).toEqual([3000, 2000]);
+  });
 });

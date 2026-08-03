@@ -1,5 +1,12 @@
 import { inspectZip } from './lib/zip-validator';
-import { detectProfile, normalizeRow, normTitle, parseDate, splitTitleYear } from './lib/inference';
+import {
+  detectProfile,
+  normalizeNumericExternalId,
+  normalizeRow,
+  normTitle,
+  parseDate,
+  splitTitleYear,
+} from './lib/inference';
 import { UnsafeArchiveError, InvalidUploadError } from './errors';
 
 // Minimal valid ZIP (1 csv entry "a.csv" containing "h1\nv1") created with adm-zip.
@@ -30,22 +37,34 @@ describe('import zip-validator', () => {
 
 describe('import inference', () => {
   it('detects TVTime watched-episode profile by filename', () => {
-    expect(detectProfile('seen_episode_source.csv', ['episode_id', 'tv_show_name'])).toBe('tvtime_watched_episode');
+    expect(detectProfile('seen_episode_source.csv', ['episode_id', 'tv_show_name'])).toBe(
+      'tvtime_watched_episode',
+    );
   });
   it('detects TVTime rewatched-episode profile by filename', () => {
-    expect(detectProfile('rewatched_episode.csv', ['episode_number', 'cpt', 'tv_show_name'])).toBe('tvtime_rewatched_episode');
+    expect(detectProfile('rewatched_episode.csv', ['episode_number', 'cpt', 'tv_show_name'])).toBe(
+      'tvtime_rewatched_episode',
+    );
   });
   it('detects user_tv_show_data profile', () => {
-    expect(detectProfile('user_tv_show_data.csv', ['user_id', 'is_followed'])).toBe('tvtime_show_data');
+    expect(detectProfile('user_tv_show_data.csv', ['user_id', 'is_followed'])).toBe(
+      'tvtime_show_data',
+    );
   });
   it('detects generic episode profile from headers', () => {
     expect(detectProfile('x.csv', ['title', 'season', 'episode'])).toBe('generic_episode');
   });
 
   it('skips tv_show_rate.csv (owned by the ratings pass — never a watched-movie source)', () => {
-    expect(detectProfile('tv_show_rate.csv', ['user_id', 'tv_show_id', 'rating', 'created_at', 'tv_show_name'])).toBe(
-      'unknown',
-    );
+    expect(
+      detectProfile('tv_show_rate.csv', [
+        'user_id',
+        'tv_show_id',
+        'rating',
+        'created_at',
+        'tv_show_name',
+      ]),
+    ).toBe('unknown');
   });
 
   it('profiles match on basename — a folder prefix must not nuke every file', () => {
@@ -57,8 +76,12 @@ describe('import inference', () => {
       'tvtime_watched_episode',
     );
     expect(detectProfile('gdpr-data/tracking-prod-records.csv', ['type'])).toBe('tvtime_tracking');
-    expect(detectProfile('gdpr-data/tracking-prod-records-v2.csv', ['ep_id'])).toBe('tvtime_tracking');
-    expect(detectProfile('gdpr-data/rewatched_episode.csv', ['cpt'])).toBe('tvtime_rewatched_episode');
+    expect(detectProfile('gdpr-data/tracking-prod-records-v2.csv', ['ep_id'])).toBe(
+      'tvtime_tracking',
+    );
+    expect(detectProfile('gdpr-data/rewatched_episode.csv', ['cpt'])).toBe(
+      'tvtime_rewatched_episode',
+    );
     expect(detectProfile('gdpr-data/user_tv_show_data.csv', ['user_id'])).toBe('tvtime_show_data');
     expect(detectProfile('gdpr-data/followed_tv_show.csv', ['user_id'])).toBe('tvtime_followed');
     // …while the skip list still works on real basenames
@@ -154,7 +177,13 @@ describe('import inference', () => {
   });
 
   it('skips rows missing season/episode', () => {
-    expect(normalizeRow('tvtime_watched_episode', { tv_show_name: 'X', episode_season_number: '', episode_number: '' })).toHaveLength(0);
+    expect(
+      normalizeRow('tvtime_watched_episode', {
+        tv_show_name: 'X',
+        episode_season_number: '',
+        episode_number: '',
+      }),
+    ).toHaveLength(0);
   });
 
   it('splits a year out of a title', () => {
@@ -207,7 +236,10 @@ describe('import inference', () => {
     });
 
     it('parses a v1 follow movie → watchlist', () => {
-      const items = normalizeRow('tvtime_tracking', { type: 'follow', movie_name: 'What Happened to Monday' });
+      const items = normalizeRow('tvtime_tracking', {
+        type: 'follow',
+        movie_name: 'What Happened to Monday',
+      });
       expect(items[0].entityType).toBe('WATCHLIST_MOVIE');
     });
 
@@ -217,7 +249,11 @@ describe('import inference', () => {
     });
 
     it('parses v2 aggregate is_followed → watchlist (no type column)', () => {
-      const items = normalizeRow('tvtime_tracking', { series_name: 'The Office (US)', is_followed: '1', ep_watch_count: '120' });
+      const items = normalizeRow('tvtime_tracking', {
+        series_name: 'The Office (US)',
+        is_followed: '1',
+        ep_watch_count: '120',
+      });
       expect(items[0].entityType).toBe('WATCHLIST_SHOW');
     });
 
@@ -235,12 +271,22 @@ describe('import inference', () => {
     });
 
     it('ignores aggregate count rows', () => {
-      expect(normalizeRow('tvtime_tracking', { type: 'count-watch-episode-series', series_name: 'X', watch_count: '5' })).toHaveLength(0);
+      expect(
+        normalizeRow('tvtime_tracking', {
+          type: 'count-watch-episode-series',
+          series_name: 'X',
+          watch_count: '5',
+        }),
+      ).toHaveLength(0);
     });
 
     it('treats <nil> season/episode as missing (no bogus S0E0 item)', () => {
       // Regression: <nil> previously parsed to 0, creating fake watched-episode items.
-      const items = normalizeRow('tvtime_tracking', { series_name: 'X', season_number: '<nil>', episode_number: '<nil>' });
+      const items = normalizeRow('tvtime_tracking', {
+        series_name: 'X',
+        season_number: '<nil>',
+        episode_number: '<nil>',
+      });
       expect(items).toHaveLength(0);
     });
 
@@ -283,14 +329,50 @@ describe('import inference', () => {
     });
 
     it('extracts tv_show_id from followed_tv_show / show_seen_episode_latest rows', () => {
-      const items = normalizeRow('tvtime_followed', { tv_show_name: 'Show', tv_show_id: '99', is_followed: '1' });
+      const items = normalizeRow('tvtime_followed', {
+        tv_show_name: 'Show',
+        tv_show_id: '99',
+        is_followed: '1',
+      });
       expect(items[0].rawTvdbSeriesId).toBe('99');
     });
 
     it('treats empty and <nil> IDs as null (never as zero)', () => {
-      const a = normalizeRow('tvtime_tracking', { series_name: 'Show', season_number: '1', episode_number: '1', s_id: '<nil>', episode_id: '' });
+      const a = normalizeRow('tvtime_tracking', {
+        series_name: 'Show',
+        season_number: '1',
+        episode_number: '1',
+        s_id: '<nil>',
+        episode_id: '',
+      });
       expect(a[0].rawTvdbSeriesId).toBeNull();
       expect(a[0].rawTvdbEpisodeId).toBeNull();
+    });
+
+    it('canonicalizes spreadsheet-formatted TVDB series and episode IDs', () => {
+      const watched = normalizeRow('tvtime_tracking', {
+        series_name: 'Nova',
+        season_number: '1',
+        episode_number: '1',
+        s_id: '451834.0',
+        episode_id: '6.54321e5',
+      });
+      expect(watched[0].rawTvdbSeriesId).toBe('451834');
+      expect(watched[0].rawTvdbEpisodeId).toBe('654321');
+
+      const followed = normalizeRow('tvtime_followed', {
+        tv_show_name: 'Spartacus: House of Ashur',
+        tv_show_id: '00442083.000',
+        is_followed: '1',
+      });
+      expect(followed[0].rawTvdbSeriesId).toBe('442083');
+    });
+
+    it('drops no-ID sentinels but leaves fractional and unsafe values guarded', () => {
+      expect(normalizeNumericExternalId('-1.0')).toBeNull();
+      expect(normalizeNumericExternalId('0.0')).toBeNull();
+      expect(normalizeNumericExternalId('451834.5')).toBe('451834.5');
+      expect(normalizeNumericExternalId('1e30')).toBe('1e30');
     });
 
     it('extracts absolute episode number when present', () => {

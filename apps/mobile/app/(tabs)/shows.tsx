@@ -373,20 +373,34 @@ function WatchList() {
   const pendingPrepend = useRef<{ height: number; offset: number } | null>(null);
   const pastFetchGate = useRef(0);
   const topArmed = useRef(true);
+  const fetchStartedAtPageCount = useRef<number | null>(null);
   const maybeFetchPast = useCallback(() => {
-    if (!canFetchPast || pastQuery.isFetchingNextPage) return;
+    if (!canFetchPast || pastQuery.isFetchingNextPage) return false;
     const now = Date.now();
-    if (now - pastFetchGate.current < 1200) return;
+    if (now - pastFetchGate.current < 1200) return false;
     pastFetchGate.current = now;
+    fetchStartedAtPageCount.current = pastQuery.data?.pages.length ?? 0;
     pendingPrepend.current = {
       height: rowsRef.current.reduce((sum, r) => sum + r.h, 0),
       offset: offsetRef.current,
     };
-    pastQuery.fetchNextPage();
+    void pastQuery.fetchNextPage();
+    return true;
   }, [canFetchPast, pastQuery]);
-  const onScroll = useCallback((e: any) => {
-    offsetRef.current = e.nativeEvent.contentOffset.y;
-  }, []);
+  const onScroll = useCallback(
+    (e: any) => {
+      const offset = Math.max(0, e.nativeEvent.contentOffset.y);
+      offsetRef.current = offset;
+      if (offset >= 250) {
+        topArmed.current = true;
+        return;
+      }
+      // Start immediately on a real scroll event; the interval below remains the
+      // fallback for programmatic/native anchor moves that emit no event.
+      if (topArmed.current && maybeFetchPast()) topArmed.current = false;
+    },
+    [maybeFetchPast],
+  );
   // Latched level-trigger: fire ONE fetch per arrival at the top, re-arming only
   // after the offset leaves the threshold. Without the latch, an offset pinned in
   // the zone (empty/fully-deduped page, failed fetch, or the spacer anchored at 0
@@ -399,21 +413,37 @@ function WatchList() {
         return;
       }
       if (!topArmed.current) return;
-      topArmed.current = false;
-      maybeFetchPast();
+      // Consume the top-arrival latch only after a request really starts. If a
+      // fast scroll reaches the top during the cooldown or an in-flight request,
+      // leave it armed so the interval retries without a down/up scroll gesture.
+      if (maybeFetchPast()) topArmed.current = false;
     }, 500);
     return () => clearInterval(id);
   }, [maybeFetchPast]);
+  // A successful page is forward progress even if every item was deduplicated or
+  // native anchor restoration emitted no onScroll. Re-arm in that case so a user
+  // who is still at the top can continue loading; failed/no-progress requests stay
+  // latched until the user deliberately leaves and returns to the top.
+  useEffect(() => {
+    if (pastQuery.isFetchingNextPage) return;
+    const startedAt = fetchStartedAtPageCount.current;
+    if (startedAt === null) return;
+    fetchStartedAtPageCount.current = null;
+    if ((pastQuery.data?.pages.length ?? 0) > startedAt) topArmed.current = true;
+  }, [pastQuery.isFetchingNextPage, pastQuery.data?.pages.length]);
   rowsRef.current = rows;
 
   useEffect(() => {
     const pending = pendingPrepend.current;
     if (!pending || pastQuery.isFetchingNextPage) return;
     pendingPrepend.current = null;
-    if (Platform.OS !== 'web') return; // native anchors via maintainVisibleContentPosition
     const delta = rows.reduce((sum, r) => sum + r.h, 0) - pending.height;
     const next = pending.offset + Math.max(0, delta);
+    // Native moves the viewport via maintainVisibleContentPosition, but that
+    // programmatic anchor adjustment does not consistently emit onScroll. Mirror
+    // the expected offset in our detector on every platform.
     offsetRef.current = next;
+    if (Platform.OS !== 'web') return;
     if (next > 0) listRef.current?.scrollToOffset({ offset: next, animated: false });
   }, [rows, pastQuery.isFetchingNextPage]);
 
@@ -639,20 +669,32 @@ function Upcoming() {
   const pendingPrepend = useRef<{ height: number; offset: number } | null>(null);
   const pastFetchGate = useRef(0);
   const topArmed = useRef(true);
+  const fetchStartedAtPageCount = useRef<number | null>(null);
   const maybeFetchPast = useCallback(() => {
-    if (!canFetchPast || pastQuery.isFetchingNextPage) return;
+    if (!canFetchPast || pastQuery.isFetchingNextPage) return false;
     const now = Date.now();
-    if (now - pastFetchGate.current < 1200) return;
+    if (now - pastFetchGate.current < 1200) return false;
     pastFetchGate.current = now;
+    fetchStartedAtPageCount.current = pastQuery.data?.pages.length ?? 0;
     pendingPrepend.current = {
       height: rowsRef.current.reduce((sum, r) => sum + r.h, 0),
       offset: offsetRef.current,
     };
-    pastQuery.fetchNextPage();
+    void pastQuery.fetchNextPage();
+    return true;
   }, [canFetchPast, pastQuery]);
-  const onScroll = useCallback((e: any) => {
-    offsetRef.current = e.nativeEvent.contentOffset.y;
-  }, []);
+  const onScroll = useCallback(
+    (e: any) => {
+      const offset = Math.max(0, e.nativeEvent.contentOffset.y);
+      offsetRef.current = offset;
+      if (offset >= 250) {
+        topArmed.current = true;
+        return;
+      }
+      if (topArmed.current && maybeFetchPast()) topArmed.current = false;
+    },
+    [maybeFetchPast],
+  );
   // Level-triggered top detection: edge-triggered approaches (onStartReached,
   // onScroll crossings) are flaky on web — after the anchor restore the offset can
   // sit inside the threshold with no further events, forcing a scroll-down-and-up
@@ -667,11 +709,19 @@ function Upcoming() {
         return;
       }
       if (!topArmed.current) return;
-      topArmed.current = false;
-      maybeFetchPast();
+      // Do not burn the latch when a fast top arrival overlaps a cooldown or the
+      // previous fetch; keeping it armed lets this level-trigger retry in place.
+      if (maybeFetchPast()) topArmed.current = false;
     }, 500);
     return () => clearInterval(id);
   }, [maybeFetchPast]);
+  useEffect(() => {
+    if (pastQuery.isFetchingNextPage) return;
+    const startedAt = fetchStartedAtPageCount.current;
+    if (startedAt === null) return;
+    fetchStartedAtPageCount.current = null;
+    if ((pastQuery.data?.pages.length ?? 0) > startedAt) topArmed.current = true;
+  }, [pastQuery.isFetchingNextPage, pastQuery.data?.pages.length]);
 
   // Flat rows (header / card) so the list virtualizes (up to 200 cards server-side).
   const rows = useMemo<UpcomingRow[]>(() => {
@@ -702,10 +752,10 @@ function Upcoming() {
     const pending = pendingPrepend.current;
     if (!pending || pastQuery.isFetchingNextPage) return;
     pendingPrepend.current = null;
-    if (Platform.OS !== 'web') return;
     const delta = rows.reduce((sum, r) => sum + r.h, 0) - pending.height;
     const next = pending.offset + Math.max(0, delta);
     offsetRef.current = next;
+    if (Platform.OS !== 'web') return;
     if (next > 0) listRef.current?.scrollToOffset({ offset: next, animated: false });
   }, [rows, pastQuery.isFetchingNextPage]);
 

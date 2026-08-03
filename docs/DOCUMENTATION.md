@@ -138,7 +138,7 @@ TVWatchTime/
 
 | Table                 | Purpose                                                                             |
 | --------------------- | ----------------------------------------------------------------------------------- |
-| `user_show_status`    | watchedCount, totalCount (excl. specials), lastWatchedAt — drives watch-next        |
+| `user_show_status`    | watchedCount, totalCount (excl. specials), lastWatchedAt — progress state; current `watchlist_items` membership gates Watch Next and Upcoming |
 | `user_episode_status` | Per-episode watched bool + watchedAt + device (WatchDevice)                         |
 | `user_movie_status`   | Per-movie watched bool + watchedAt                                                  |
 | `watch_history`       | Append-only log — drives stats, charts, leaderboards (runtimeMinutes for time calc) |

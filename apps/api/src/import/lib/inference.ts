@@ -86,16 +86,37 @@ export function splitTitleYear(title: string): { title: string; year: number | n
 }
 
 export function normTitle(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    // Unicode-aware: keep letters/numbers from EVERY script (Korean, Japanese, Arabic,
-    // Cyrillic…). An ASCII-only class normalizes every non-Latin title to the same ''
-    // — a catastrophic identity collision (bulk "by title" resolves matched dozens of
-    // unrelated Korean/Japanese items to one show).
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim();
+  return (
+    s
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      // Unicode-aware: keep letters/numbers from EVERY script (Korean, Japanese, Arabic,
+      // Cyrillic…). An ASCII-only class normalizes every non-Latin title to the same ''
+      // — a catastrophic identity collision (bulk "by title" resolves matched dozens of
+      // unrelated Korean/Japanese items to one show).
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .trim()
+  );
+}
+
+/**
+ * Canonicalize numeric provider IDs that spreadsheet/CSV tooling serialized as
+ * floats (`451834.0`) or scientific notation (`4.51834e5`). TVDB IDs are positive
+ * safe integers. Preserve other non-empty malformed values so the authority gate
+ * still refuses an unsafe title fallback instead of silently discarding identity.
+ */
+export function normalizeNumericExternalId(value: unknown): string | null {
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw || /^(?:<nil>|null|undefined|nan|-1(?:\.0+)?)$/i.test(raw)) return null;
+
+  const numericShape = /^(?:\d+(?:\.0+)?|\d+(?:\.\d+)?[eE][+-]?\d+)$/;
+  if (!numericShape.test(raw)) return raw;
+
+  const numeric = Number(raw);
+  if (numeric === 0) return null;
+  return Number.isSafeInteger(numeric) && numeric > 0 ? String(numeric) : raw;
 }
 
 const TITLE_KEYS = [
@@ -170,17 +191,24 @@ function baseItem(
   const tvdbSeriesRaw = pick(row, ['s_id', 'series_id', 'tv_show_id']) ?? null;
   const tvdbEpisodeRaw = pick(row, ['episode_id', 'ep_id']) ?? null;
   const absoluteRaw = pick(row, ['absolute_number', 'absolute_episode_number', 'absolute_episode']);
+  const rawTvdbSeriesId = normalizeNumericExternalId(
+    extra.rawTvdbSeriesId !== undefined ? extra.rawTvdbSeriesId : tvdbSeriesRaw,
+  );
+  const rawTvdbEpisodeId = normalizeNumericExternalId(
+    extra.rawTvdbEpisodeId !== undefined ? extra.rawTvdbEpisodeId : tvdbEpisodeRaw,
+  );
   return {
     entityType,
     title: clean,
     normTitle: normTitle(clean),
     year: extra.year ?? year,
     raw: row,
-    rawTvdbSeriesId: extra.rawTvdbSeriesId !== undefined ? extra.rawTvdbSeriesId : tvdbSeriesRaw,
-    rawTvdbEpisodeId:
-      extra.rawTvdbEpisodeId !== undefined ? extra.rawTvdbEpisodeId : tvdbEpisodeRaw,
     absoluteEpisode: extra.absoluteEpisode ?? (absoluteRaw ? toInt(absoluteRaw) : null),
     ...extra,
+    // Keep these after `...extra`: callers may provide IDs explicitly, but those
+    // values require the same canonicalization as IDs read directly from CSV rows.
+    rawTvdbSeriesId,
+    rawTvdbEpisodeId,
   };
 }
 
@@ -317,7 +345,9 @@ export function normalizeRow(profile: Profile, row: Record<string, string>): Nor
           const ordinal = ordinalMatch ? Number(ordinalMatch[1]) : 0;
           const rewatchCount = toInt(pick(row, ['rewatch_count'])) ?? 0;
           const watchCount = Math.max(1, rewatchCount + 1, ordinal + 1);
-          items.push(baseItem('WATCHED_EPISODE', row, series, { season, episode, watchedAt, watchCount }));
+          items.push(
+            baseItem('WATCHED_EPISODE', row, series, { season, episode, watchedAt, watchCount }),
+          );
         } else if (series && (followed || forLater)) {
           items.push(baseItem('WATCHLIST_SHOW', row, series));
         }

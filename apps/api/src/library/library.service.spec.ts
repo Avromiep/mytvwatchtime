@@ -114,6 +114,34 @@ describe('LibraryService watchNext capped rails + bucket pagination', () => {
     // The glob `watchnext:u1:*` must match: prefix + any suffix.
     expect(`watchnext:u1:*`.slice(0, -1) + key.slice('watchnext:u1:'.length)).toContain(key);
   });
+
+  it('keeps history-only status rows out of Watch Next when the show is not watchlisted', async () => {
+    const { svc, prisma } = makeSvc();
+    (prisma as any).watchHistory = { findMany: jest.fn().mockResolvedValue([]) };
+    (prisma as any).userEpisodeStatus = { findMany: jest.fn().mockResolvedValue([]) };
+    prisma.userShowStatus.findMany.mockResolvedValue([
+      {
+        id: 'status1',
+        userId: 'u1',
+        mediaId: 'historyOnly',
+        dropped: false,
+        pausedAt: null,
+        watchedCount: 3,
+        totalCount: 10,
+        lastWatchedAt: new Date(),
+        media: { id: 'historyOnly', title: 'History Only', show: {} },
+      },
+    ]);
+    // Both the membership lookup and the never-watched lookup return no rows.
+    prisma.watchlistItem.findMany.mockResolvedValue([]);
+
+    const result = await svc.watchNext('u1');
+
+    expect(result.items).toEqual([]);
+    expect(result.bucketTotals).toEqual({ watchNext: 0, notRecently: 0, startWatching: 0 });
+    // No episode-status aggregation should run for a user with no eligible shows.
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
 });
 
 describe('LibraryService bounded large-library paths', () => {
@@ -187,9 +215,8 @@ describe('LibraryService bounded large-library paths', () => {
   });
 
   it('uses one extra past row for Upcoming hasMore instead of a full historical count', async () => {
-    const { svc, prisma } = makeSvc();
-    prisma.userShowStatus.findMany.mockResolvedValue([{ mediaId: 'show1' }]);
-    prisma.watchlistItem.findMany.mockResolvedValue([]);
+    const { svc, prisma, redis } = makeSvc();
+    prisma.watchlistItem.findMany.mockResolvedValue([{ mediaId: 'show1' }]);
     const media = { id: 'show1', title: 'Show', posterUrl: null, show: { network: null } };
     const past = Array.from({ length: 11 }, (_, index) => ({
       id: `ep${index}`,
@@ -210,6 +237,7 @@ describe('LibraryService bounded large-library paths', () => {
     expect(result.past.hasMore).toBe(true);
     expect(result.groups.flatMap((group: any) => group.items)).toHaveLength(10);
     expect((prisma.episode as any).count).toBeUndefined();
+    expect(redis.set.mock.calls[0]?.[0]).toEqual(expect.stringMatching(/^upcoming:u1:/));
   });
 });
 

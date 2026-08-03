@@ -462,6 +462,37 @@ describe('ImportMatcher — TMDB /find translation (matchByTvdbId)', () => {
     expect(res).toEqual({ mediaId: 'm-find', confidence: 0.95, matchedTitle: 'Game of Thrones' });
   });
 
+  it('canonicalizes a spreadsheet-formatted TVDB id before provider lookup', async () => {
+    const { prisma } = fakePrismaFind();
+    const meta = {
+      lightUpsertShow: jest.fn(async () => 'm-find'),
+      lightUpsertMovie: jest.fn(),
+      lightUpsertShowTvdb: jest.fn(),
+    };
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => ({
+        movie: null,
+        show: { tmdbId: 1399, genreIds: [18], originCountries: ['US'] },
+        episode: null,
+      })),
+    };
+    const matcher = new ImportMatcher(prisma as any, meta as any, tmdb as any, fakeTvdb as any);
+
+    const res = await matcher.matchMedia(
+      'game of thrones',
+      'Game of Thrones',
+      'SHOW',
+      2011,
+      undefined,
+      null,
+      '00121361.0',
+    );
+
+    expect(tmdb.findByExternalId).toHaveBeenCalledWith('121361', 'tvdb_id');
+    expect(res.mediaId).toBe('m-find');
+  });
+
   it('movie: TVDB remote ids bridge to the canonical movie without TMDB tvdb_id /find', async () => {
     const { prisma } = fakePrismaFind();
     const meta = {

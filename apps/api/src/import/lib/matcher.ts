@@ -10,7 +10,7 @@ import { runInLanguage, currentLanguage } from '../../common/language.context';
 import { MediaMetadataService } from '../../media-metadata/media-metadata.service';
 import { TmdbProvider } from '../../media-metadata/providers/tmdb.provider';
 import { TvdbProvider } from '../../media-metadata/providers/tvdb.provider';
-import { normTitle } from './inference';
+import { normTitle, normalizeNumericExternalId } from './inference';
 import { isAnimeSignal } from '../../media-metadata/classification/anime-signal';
 import { isProviderError } from '../../media-metadata/providers/shared/provider-errors';
 import type { TraktIds } from './trakt/types';
@@ -112,11 +112,16 @@ export class ImportMatcher {
      */
     allowTitleFallback = true,
   ): Promise<{ mediaId: string | null; confidence: number; matchedTitle: string | null }> {
-    const ids = rawTvdbSeriesIds?.length
+    const rawIds = rawTvdbSeriesIds?.length
       ? rawTvdbSeriesIds
       : rawTvdbSeriesId
         ? [rawTvdbSeriesId]
         : [];
+    const ids = [
+      ...new Set(
+        rawIds.map((id) => normalizeNumericExternalId(id)).filter((id): id is string => id != null),
+      ),
+    ];
     const key = `${type}:${norm}:${ids.join(',')}`;
     const cached = this.mediaCache.get(key);
     if (cached)
@@ -761,7 +766,7 @@ export class ImportMatcher {
     year: number | null,
     rawTvdbEpisodeId: string | number | null | undefined,
   ): Promise<MediaMatch> {
-    const raw = rawTvdbEpisodeId == null ? '' : String(rawTvdbEpisodeId).trim();
+    const raw = normalizeNumericExternalId(rawTvdbEpisodeId) ?? '';
     if (!raw) return { mediaId: null, confidence: 0, matchedTitle: null };
     // 1) Local mapping: the episode is already hydrated somewhere — free, no provider call.
     const local = await this.prisma.episodeExternalId.findFirst({
@@ -860,7 +865,8 @@ export class ImportMatcher {
     year?: number | null,
     archiveLanguage?: SupportedLocale | null,
   ): Promise<MediaMatch> {
-    const key = `ext:${type}:${ids.tmdb ?? ''}:${ids.tvdb ?? ''}:${ids.imdb ?? ''}:${norm}`;
+    const tvdbId = normalizeNumericExternalId(ids.tvdb);
+    const key = `ext:${type}:${ids.tmdb ?? ''}:${tvdbId ?? ''}:${ids.imdb ?? ''}:${norm}`;
     const cached = this.mediaCache.get(key);
     if (cached)
       return { mediaId: cached.mediaId, confidence: cached.confidence, matchedTitle: cached.title };
@@ -1028,8 +1034,8 @@ export class ImportMatcher {
 
     // 3) TVDB id — authority gate (no title fallback inside). This intentionally runs after
     //    IMDB so a malformed movie row's TVDB SERIES id cannot preempt its valid IMDB id.
-    if (ids.tvdb) {
-      const r = await this.matchByTvdbId(String(ids.tvdb), title, type, year ?? null);
+    if (tvdbId) {
+      const r = await this.matchByTvdbId(tvdbId, title, type, year ?? null);
       if (r.mediaId) return done(r);
     }
 
@@ -1048,7 +1054,8 @@ export class ImportMatcher {
   async resolveEpisodeByExternalIds(mediaId: string, ids: TraktIds): Promise<string | null> {
     const candidates: { provider: ExternalProvider; value: string }[] = [];
     if (ids.tmdb) candidates.push({ provider: ExternalProvider.TMDB, value: String(ids.tmdb) });
-    if (ids.tvdb) candidates.push({ provider: ExternalProvider.THE_TVDB, value: String(ids.tvdb) });
+    const tvdbId = normalizeNumericExternalId(ids.tvdb);
+    if (tvdbId) candidates.push({ provider: ExternalProvider.THE_TVDB, value: tvdbId });
     for (const c of candidates) {
       const cacheKey = `ext-ep:${mediaId}:${c.provider}:${c.value}`;
       if (this.episodeCache.has(cacheKey)) return this.episodeCache.get(cacheKey)!;
@@ -1081,7 +1088,7 @@ export class ImportMatcher {
     mediaId: string,
     rawTvdbEpisodeId: string | number | null | undefined,
   ): Promise<string | null> {
-    const raw = rawTvdbEpisodeId == null ? '' : String(rawTvdbEpisodeId).trim();
+    const raw = normalizeNumericExternalId(rawTvdbEpisodeId) ?? '';
     if (!raw || !this.tmdb.enabled) return null;
     const found = await this.tmdb.findByExternalId(raw, 'tvdb_id');
     const ep = found?.episode;

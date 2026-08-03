@@ -42,7 +42,7 @@ Read this file BEFORE touching anything under `apps/api/src/import/**`.
 
 ## CSV compatibility rules
 
-- CSV compatibility: header-based mapping only (never positional); `<nil>`/empty → null; reordered/extra columns tolerated; unknown files skipped.
+- CSV compatibility: header-based mapping only (never positional); `<nil>`/empty → null; reordered/extra columns tolerated; unknown files skipped. Numeric TVDB series and episode IDs serialized by spreadsheet tooling as floats or safe scientific notation (for example `451834.0` or `4.51834e5`) are canonicalized to positive integer strings before matching. Fractional and unsafe numeric values are not guessed: they remain untrusted identity signals so the authority gate blocks unsafe title fallback.
 - Profile detection matches on the entry BASENAME only (`detectProfile`) — zips created from a folder prefix every entry (e.g. `gdpr-data/…`), and a prefix containing a skip-list word must never classify the whole archive as unknown.
 
 ## Trakt GDPR export (JSON zip)
@@ -81,7 +81,7 @@ Read this file BEFORE touching anything under `apps/api/src/import/**`.
 ## Batched apply
 
 - Review UI item queries use a single stable page of up to 500 rows (the API cap matches the mobile request), because offset pages drift while manual resolutions move rows between statuses. The mobile review deliberately hides terminal `UNMATCHED` audit rows from its summary, filters, and all-items query; the rows remain persisted for backend diagnostics and confirmation skips them silently. Import-item queries bypass the app-wide five-minute stale window and always refetch on mount/filter return; a transient request failure is shown as retryable instead of masquerading as an empty filtered view.
-- Batched apply: `createMany` in 5000-row chunks, **one raised-timeout `$transaction` per section** (episodes/movies/watchlist/favorites/lists), not one giant transaction — each section marks its items `APPLIED` so BullMQ/manual retries are idempotent. Apply timeouts via `IMPORT_TX_TIMEOUT_MS` (default 60s).
+- Batched apply: bulk `IN` reads and `updateMany` writes are capped at 5000 IDs per statement; `createMany` chunks are additionally reduced by row width to stay below PostgreSQL's 32,767 bind-variable limit. Apply uses **one raised-timeout `$transaction` per section** (episodes/movies/watchlist/favorites/lists), not one giant transaction — each section marks its items `APPLIED` so BullMQ/manual retries are idempotent. Apply timeouts via `IMPORT_TX_TIMEOUT_MS` (default 60s).
 - Episode matches are revalidated immediately before apply. If metadata replacement removed a staged episode row, regular episodes are remapped strictly within the already-matched show by S/E; embedded specials never use S/E fallback. Irrecoverable stale rows silently become `SKIPPED` instead of aborting confirmation; confirmation remains terminal and completes all other valid sections. A `FAILED` apply can be confirmed again: already-`APPLIED` sections remain untouched and all affected show-progress rows are rebuilt after success.
 - `<nil>` values are normalized to null (not 0).
 - After import confirm: `rebuildShowStatuses` recalculates watched/total counts.
