@@ -42,6 +42,7 @@
   "searchToAddShort": "추가할 콘텐츠 검색…",
   "recentlyWatched": "최근 시청한 항목",
   "failedToSave": "저장 실패",
+  "failedToDelete": "목록을 삭제하지 못했습니다. 다시 시도하세요.",
   "deleteListQuestion": "목록을 삭제할까요?",
   "deleteCannotUndo": "이 작업은 되돌릴 수 없습니다.",
   "editList": "목록 편집",

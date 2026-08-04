@@ -42,6 +42,7 @@
   "searchToAddShort": "Eklemek için ara…",
   "recentlyWatched": "Son izlenenler",
   "failedToSave": "Kaydetme başarısız",
+  "failedToDelete": "Liste silinemedi. Tekrar deneyin.",
   "deleteListQuestion": "Liste silinsin mi?",
   "deleteCannotUndo": "Bu işlem geri alınamaz.",
   "editList": "Listeyi düzenle",

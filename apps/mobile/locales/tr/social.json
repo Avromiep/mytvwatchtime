@@ -37,5 +37,18 @@
   "searchUsersHint": "Kullanıcı adına göre kullanıcı ara",
   "noFollowersYet": "Henüz {{type}} yok",
   "followButton": "Takip et",
-  "followingButton": "Takip ediliyor"
+  "followingButton": "Takip ediliyor",
+  "profileTaste": {
+    "timeline": "Etkinlik",
+    "taste": "Zevkler",
+    "privateTitle": "Gizli profil",
+    "privateSubtitle": "Etkinliklerini ve zevklerini görmek için bu kişiyi takip et.",
+    "topMovieGenres": "Favori film türleri",
+    "topShowGenres": "Favori dizi türleri",
+    "inCommon": "Ortak zevkleriniz",
+    "commonGenres": "İkiniz de {{genres}} seviyorsunuz.",
+    "forYou": "Onun arşivinden sana",
+    "favoriteMovies": "Favori filmler",
+    "favoriteShows": "Favori diziler"
+  }
 }

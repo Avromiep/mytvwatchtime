@@ -1,6 +1,15 @@
 import { AuthProvider } from './enums';
 import type { ThemePreference, LanguagePreference } from './theme-locale';
 
+export interface ExploreDefaultFilters {
+  genre: string | null;
+  excludeGenres: string[];
+  order: 'popularity' | 'releaseDate';
+  mediaType: 'both' | 'movies' | 'shows';
+  country: string | null;
+  hideAnime: boolean;
+}
+
 export interface AuthSessionDto {
   accessToken: string;
   refreshToken: string;
@@ -103,6 +112,7 @@ export interface CurrentUserDto extends PublicUserDto {
   authProviders: AuthProvider[];
   isPrivate: boolean;
   hideAnimeInExplore: boolean;
+  exploreDefaultFilters?: ExploreDefaultFilters | null;
   mustChangePassword?: boolean;
   onboardingStatus?: import('./onboarding').OnboardingStatus;
   onboardingVersion?: number | null;
@@ -119,6 +129,7 @@ export interface UpdateProfileDto {
   coverUrl?: string | null;
   isPrivate?: boolean;
   hideAnimeInExplore?: boolean;
+  exploreDefaultFilters?: ExploreDefaultFilters | null;
   themePreference?: ThemePreference;
   languagePreference?: LanguagePreference;
 }

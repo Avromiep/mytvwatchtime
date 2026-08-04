@@ -1,6 +1,41 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { MediaType } from '@prisma/client';
-import { IsBoolean, IsEnum, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  ArrayUnique,
+  IsArray,
+  IsBoolean,
+  IsEnum,
+  IsIn,
+  IsOptional,
+  IsString,
+  ValidateIf,
+  ValidateNested,
+} from 'class-validator';
+
+export class ExploreDefaultFiltersDto {
+  @IsOptional()
+  @IsString()
+  genre!: string | null;
+
+  @IsArray()
+  @ArrayUnique()
+  @IsString({ each: true })
+  excludeGenres!: string[];
+
+  @IsIn(['popularity', 'releaseDate'])
+  order!: 'popularity' | 'releaseDate';
+
+  @IsIn(['both', 'movies', 'shows'])
+  mediaType!: 'both' | 'movies' | 'shows';
+
+  @IsOptional()
+  @IsString()
+  country!: string | null;
+
+  @IsBoolean()
+  hideAnime!: boolean;
+}
 
 export class UpdateProfileDto {
   @ApiPropertyOptional()
@@ -38,13 +73,34 @@ export class UpdateProfileDto {
   @IsBoolean()
   hideAnimeInExplore?: boolean;
 
+  @ApiPropertyOptional({ type: ExploreDefaultFiltersDto, nullable: true })
+  @ValidateIf((_, value) => value !== undefined && value !== null)
+  @ValidateNested()
+  @Type(() => ExploreDefaultFiltersDto)
+  exploreDefaultFilters?: ExploreDefaultFiltersDto | null;
+
   @ApiPropertyOptional({ enum: ['system', 'light', 'dark'] })
   @IsOptional()
   @IsString()
   themePreference?: string;
 
   @ApiPropertyOptional({
-    enum: ['system', 'en', 'fr', 'es', 'pt-BR', 'de', 'it', 'ar', 'tr', 'hi', 'id', 'ja', 'ko', 'zh-CN'],
+    enum: [
+      'system',
+      'en',
+      'fr',
+      'es',
+      'pt-BR',
+      'de',
+      'it',
+      'ar',
+      'tr',
+      'hi',
+      'id',
+      'ja',
+      'ko',
+      'zh-CN',
+    ],
   })
   @IsOptional()
   @IsString()

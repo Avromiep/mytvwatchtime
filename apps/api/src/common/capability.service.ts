@@ -12,6 +12,7 @@ export interface CapabilityFlags {
   tmdb: boolean;
   tvdb: boolean;
   tvmaze: boolean;
+  commentTranslation: boolean;
 }
 
 @Injectable()
@@ -27,6 +28,7 @@ export class CapabilityService implements OnModuleInit {
     tmdb: false,
     tvdb: false,
     tvmaze: false,
+    commentTranslation: false,
   };
 
   constructor(private readonly config: ConfigService) {}
@@ -61,6 +63,8 @@ export class CapabilityService implements OnModuleInit {
     const tvdbKey = this.config.get<string>('metadata.tvdbApiKey');
     const tvmazeEnabled = this.config.get<boolean>('metadata.tvmazeEnabled') !== false;
     const tvmazeKey = this.config.get<string>('metadata.tvmazeApiKey');
+    const azureTranslatorKey = this.config.get<string>('translations.azureKey');
+    const azureTranslatorRegion = this.config.get<string>('translations.azureRegion');
 
     this.flags = {
       commentImages: s3Configured,
@@ -73,6 +77,7 @@ export class CapabilityService implements OnModuleInit {
       tmdb: !!tmdbKey,
       tvdb: !!tvdbKey,
       tvmaze: tvmazeEnabled && !!tvmazeKey,
+      commentTranslation: !!(azureTranslatorKey && azureTranslatorRegion),
     };
   }
 
@@ -90,5 +95,9 @@ export class CapabilityService implements OnModuleInit {
 
   get moderation(): boolean {
     return this.flags.moderation;
+  }
+
+  get commentTranslation(): boolean {
+    return this.flags.commentTranslation;
   }
 }

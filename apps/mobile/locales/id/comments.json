@@ -78,5 +78,15 @@
   "spoilerReported": "Spoiler dilaporkan",
   "markAsSpoiler": "Tandai sebagai spoiler",
   "replyingToReview": "Membalas ulasan TMDB {{author}}",
-  "hideReplies": "Sembunyikan balasan"
+  "hideReplies": "Sembunyikan balasan",
+  "translate": "Terjemahkan",
+  "translating": "Menerjemahkan…",
+  "showOriginal": "Tampilkan asli",
+  "translatedFrom": "Diterjemahkan dari {{language}}",
+  "chooseTranslationLanguage": "Pilih bahasa terjemahan",
+  "translationNotNeeded": "Terjemahan tidak diperlukan",
+  "alreadyInSelectedLanguage": "Teks ini sudah dalam {{language}}.",
+  "translationFailed": "Terjemahan gagal",
+  "translationFailedDescription": "Terjemahan tidak dapat dimuat. Coba lagi.",
+  "close": "Tutup"
 }

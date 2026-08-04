@@ -189,6 +189,8 @@ export interface ShowStatsDto {
   }[];
   addedShows: number;
   topGenres: { name: string; count: number }[];
+  /** Genre counts represent distinct titles, never episodes or rewatches. */
+  genreCountUnit?: 'titles';
   topNetworks: { name: string; count: number }[];
   votedRatings: { ratings: number; showsRated: number };
   mostVotedRatings: { showTitle: string; rating: number }[];
@@ -214,6 +216,8 @@ export interface MovieStatsDto {
   moviesWatchedChart: ChartPointDto[];
   addedMovies: number;
   topGenres: { name: string; count: number }[];
+  /** Genre counts represent distinct titles, never rewatches. */
+  genreCountUnit?: 'titles';
   votedRatings: { ratings: number; moviesRated: number };
   characterVotes: { votes: number; movies: number };
   comments: { count: number; movies: number };

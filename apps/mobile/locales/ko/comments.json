@@ -78,5 +78,15 @@
   "spoilerReported": "스포일러가 신고됨",
   "markAsSpoiler": "스포일러로 표시",
   "replyingToReview": "{{author}}님의 TMDB 리뷰에 답글",
-  "hideReplies": "답글 숨기기"
+  "hideReplies": "답글 숨기기",
+  "translate": "번역",
+  "translating": "번역 중…",
+  "showOriginal": "원문 보기",
+  "translatedFrom": "{{language}}에서 번역됨",
+  "chooseTranslationLanguage": "번역 언어 선택",
+  "translationNotNeeded": "번역이 필요하지 않습니다",
+  "alreadyInSelectedLanguage": "이 텍스트는 이미 {{language}}로 되어 있습니다.",
+  "translationFailed": "번역 실패",
+  "translationFailedDescription": "번역을 불러오지 못했습니다. 다시 시도하세요.",
+  "close": "닫기"
 }

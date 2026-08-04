@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { dismissAllDialogs, showDialog } from '../lib/dialog';
@@ -54,9 +54,7 @@ interface MultiSelectContentProps {
 function MultiSelectContent({ options, initial, onPending }: MultiSelectContentProps) {
   const [pending, setPending] = useState<string[]>(initial);
   const toggle = (value: string) => {
-    const next = pending.includes(value)
-      ? pending.filter((v) => v !== value)
-      : [...pending, value];
+    const next = pending.includes(value) ? pending.filter((v) => v !== value) : [...pending, value];
     setPending(next);
     onPending(next);
   };
@@ -91,6 +89,11 @@ interface FilterPickerProps {
   /** Ghost "clear" button inside the dialog (first button) — resets the selection. */
   onClear?: () => void;
   clearLabel?: string;
+  /** Hide the "Label:" prefix and render only the current/default selection. */
+  showLabelPrefix?: boolean;
+  /** Optional media/filter icons rendered before the compact label. */
+  icons?: React.ComponentProps<typeof Ionicons>['name'][];
+  style?: StyleProp<ViewStyle>;
 }
 
 /**
@@ -108,9 +111,16 @@ export function FilterPicker({
   onChange,
   onClear,
   clearLabel,
+  showLabelPrefix = true,
+  icons = [],
+  style,
 }: FilterPickerProps) {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['common']);
+  const selectedLabel = selected
+    .map((value) => options.find((option) => option.value === value)?.label)
+    .filter(Boolean)
+    .join(', ');
 
   const open = () => {
     if (multi) {
@@ -164,7 +174,13 @@ export function FilterPicker({
       ),
       buttons: [
         ...(onClear
-          ? [{ label: clearLabel ?? t('common:clear'), variant: 'ghost' as const, onPress: onClear }]
+          ? [
+              {
+                label: clearLabel ?? t('common:clear'),
+                variant: 'ghost' as const,
+                onPress: onClear,
+              },
+            ]
           : []),
         { label: t('common:cancel'), variant: 'ghost' },
       ],
@@ -177,10 +193,20 @@ export function FilterPicker({
       style={({ pressed }) => [
         styles.picker,
         { backgroundColor: active ? tokens.primary : tokens.chip, opacity: pressed ? 0.85 : 1 },
+        style,
       ]}
       accessibilityRole="button"
-      accessibilityLabel={`${label}: ${valueLabel}`}
+      accessibilityLabel={`${label}: ${valueLabel || selectedLabel}`}
     >
+      {icons.map((icon, index) => (
+        <Ionicons
+          key={`${icon}-${index}`}
+          name={icon}
+          size={15}
+          color={active ? tokens.primaryForeground : tokens.textMuted}
+          style={index < icons.length - 1 || valueLabel ? styles.leadingIcon : undefined}
+        />
+      ))}
       <T
         variant="caption"
         style={[
@@ -189,7 +215,7 @@ export function FilterPicker({
         ]}
         numberOfLines={1}
       >
-        {label}: {valueLabel}
+        {showLabelPrefix ? `${label}: ${valueLabel}` : valueLabel}
       </T>
       <Ionicons
         name="chevron-forward"
@@ -205,10 +231,11 @@ interface FilterToggleProps {
   label: string;
   value: boolean;
   onChange: (value: boolean) => void;
+  style?: StyleProp<ViewStyle>;
 }
 
 /** Pill-style on/off filter (no dialog) — e.g. the Hide anime toggle. */
-export function FilterToggle({ label, value, onChange }: FilterToggleProps) {
+export function FilterToggle({ label, value, onChange, style }: FilterToggleProps) {
   const { tokens } = useAppearance();
   return (
     <Pressable
@@ -216,6 +243,7 @@ export function FilterToggle({ label, value, onChange }: FilterToggleProps) {
       style={({ pressed }) => [
         styles.picker,
         { backgroundColor: value ? tokens.primary : tokens.chip, opacity: pressed ? 0.85 : 1 },
+        style,
       ]}
       accessibilityRole="button"
       accessibilityLabel={label}
@@ -223,10 +251,7 @@ export function FilterToggle({ label, value, onChange }: FilterToggleProps) {
     >
       <T
         variant="caption"
-        style={[
-          styles.pickerLabel,
-          { color: value ? tokens.primaryForeground : tokens.textMuted },
-        ]}
+        style={[styles.pickerLabel, { color: value ? tokens.primaryForeground : tokens.textMuted }]}
         numberOfLines={1}
       >
         {label}
@@ -244,10 +269,19 @@ export function FilterToggle({ label, value, onChange }: FilterToggleProps) {
 interface FilterResetProps {
   label: string;
   onPress: () => void;
+  icon?: React.ComponentProps<typeof Ionicons>['name'];
+  iconActive?: boolean;
+  style?: StyleProp<ViewStyle>;
 }
 
 /** Pill-style "reset everything" action rendered after the filter toggles. */
-export function FilterReset({ label, onPress }: FilterResetProps) {
+export function FilterReset({
+  label,
+  onPress,
+  icon = 'refresh-outline',
+  iconActive = false,
+  style,
+}: FilterResetProps) {
   const { tokens } = useAppearance();
   return (
     <Pressable
@@ -255,11 +289,18 @@ export function FilterReset({ label, onPress }: FilterResetProps) {
       style={({ pressed }) => [
         styles.picker,
         { backgroundColor: tokens.chip, opacity: pressed ? 0.85 : 1 },
+        style,
       ]}
       accessibilityRole="button"
       accessibilityLabel={label}
+      accessibilityState={{ selected: iconActive }}
     >
-      <Ionicons name="refresh-outline" size={14} color={tokens.textMuted} style={styles.resetIcon} />
+      <Ionicons
+        name={icon}
+        size={14}
+        color={iconActive ? tokens.primary : tokens.textMuted}
+        style={styles.resetIcon}
+      />
       <T
         variant="caption"
         style={[styles.pickerLabel, { color: tokens.textMuted }]}
@@ -277,11 +318,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRadius: radius.pill,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    marginRight: spacing.sm,
+    paddingVertical: 6,
+    justifyContent: 'center',
   },
   chevron: { marginLeft: spacing.xs, alignSelf: 'center' },
   resetIcon: { marginRight: spacing.xs, alignSelf: 'center' },
+  leadingIcon: { marginRight: spacing.xs },
   pickerLabel: { flexShrink: 1, lineHeight: 16 },
   rows: { gap: spacing.sm },
   row: {

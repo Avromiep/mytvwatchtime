@@ -42,6 +42,7 @@
   "searchToAddShort": "Search to add...",
   "recentlyWatched": "Recently watched",
   "failedToSave": "Failed to save",
+  "failedToDelete": "The list could not be deleted. Please try again.",
   "deleteListQuestion": "Delete list?",
   "deleteCannotUndo": "This cannot be undone.",
   "editList": "Edit list",

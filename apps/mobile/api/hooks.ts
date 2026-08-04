@@ -55,6 +55,10 @@ import type {
   WatchNextBucketPageDto,
   ExternalReviewDto,
   FeedPageDto,
+  ProfileTasteDto,
+  TasteRecommendationDto,
+  TranslatableTextDto,
+  TranslationResultDto,
   OnboardingApplyDto,
   OnboardingApplyResultDto,
   OnboardingStateDto,
@@ -387,6 +391,7 @@ export const useDiscoverSections = (
   userId?: string,
   genre?: string | null,
   filters?: ExploreFilters,
+  enabled = true,
 ) =>
   // User-scoped key: the server's anonymous fallback (topForYou = trending) must NEVER
   // share a cache entry with the personalized sections — otherwise a token-less early
@@ -399,14 +404,25 @@ export const useDiscoverSections = (
         genre: genre || undefined,
         ...filterParams(filters),
       }),
+    enabled,
   });
 // Activity feed (explore "Feed" tab): self + followings, cursor-paginated newest first.
-export const useFeed = () =>
+export const useFeed = (enabled = true) =>
   useInfiniteQuery({
     queryKey: qk.feed,
     queryFn: ({ pageParam }) => api.get<FeedPageDto>('/feed', { cursor: pageParam, limit: 20 }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
+    enabled,
+  });
+export const useUserFeed = (username: string, enabled = true) =>
+  useInfiniteQuery({
+    queryKey: ['userFeed', username] as const,
+    queryFn: ({ pageParam }) =>
+      api.get<FeedPageDto>(`/users/${username}/activity`, { cursor: pageParam, limit: 20 }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    enabled: !!username && enabled,
   });
 // Catalog genres for filter chips (explore/search/see-all) — rarely changes.
 export const useGenres = () =>
@@ -845,7 +861,20 @@ function patchCommentInCaches(
 
   qc.setQueriesData({ queryKey: ['comments'] }, mapInfinite);
   qc.setQueriesData({ queryKey: ['commentReplies'] }, mapInfinite);
-  qc.setQueriesData({ queryKey: ['comment'] }, (old: any) => (old && old.id ? patch(old) : old));
+  qc.setQueriesData({ queryKey: ['myComments'] }, mapInfinite);
+  qc.setQueriesData({ queryKey: ['externalReviewReplies'] }, (old: any) =>
+    Array.isArray(old) ? old.map((c) => (c.id === commentId ? patch(c) : c)) : old,
+  );
+  qc.setQueriesData({ queryKey: ['comment'] }, (old: any) => {
+    if (!old) return old;
+    return {
+      ...old,
+      ...(old.id === commentId ? patch(old) : {}),
+      ancestors: Array.isArray(old.ancestors)
+        ? old.ancestors.map((c: CommentDto) => (c.id === commentId ? patch(c) : c))
+        : old.ancestors,
+    };
+  });
 }
 
 export const useCreateComment = () => {
@@ -2400,7 +2429,7 @@ export const useFollows = (username: string, type: 'followers' | 'following') =>
     enabled: !!username,
   });
 
-export const useUserLists = (username: string) =>
+export const useUserLists = (username: string, enabled = true) =>
   useQuery({
     queryKey: ['userLists', username],
     queryFn: () =>
@@ -2416,8 +2445,133 @@ export const useUserLists = (username: string) =>
           subscriberCount: number;
         }[]
       >(`/users/${username}/lists`),
-    enabled: !!username,
+    enabled: !!username && enabled,
   });
+
+export const useProfileTaste = (username: string, enabled = true) =>
+  useQuery({
+    queryKey: ['profileTaste', username] as const,
+    queryFn: () => api.get<ProfileTasteDto>(`/users/${username}/taste`),
+    enabled: !!username && enabled,
+  });
+
+export const useTasteRecommendations = (username: string, type?: MediaType, enabled = true) =>
+  useInfiniteQuery({
+    queryKey: ['profileTasteRecommendations', username, type ?? 'all'] as const,
+    queryFn: ({ pageParam = 1 }) =>
+      api.get<Paginated<TasteRecommendationDto>>(`/users/${username}/taste/recommendations`, {
+        page: pageParam,
+        pageSize: 30,
+        type,
+      }),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
+    enabled: !!username && enabled,
+  });
+
+export const usePublicFavorites = (username: string, type: MediaType, enabled = true) =>
+  useInfiniteQuery({
+    queryKey: ['publicFavorites', username, type] as const,
+    queryFn: ({ pageParam = 1 }) =>
+      api.get<Paginated<MediaCardLiteDto>>(`/users/${username}/favorites`, {
+        type,
+        page: pageParam,
+        pageSize: 30,
+      }),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
+    enabled: !!username && enabled,
+  });
+
+function translatedContent(
+  current: TranslatableTextDto | null | undefined,
+  original: string,
+  format: 'plain' | 'html',
+  result: TranslationResultDto,
+): TranslatableTextDto {
+  return {
+    ...(current ?? { original, format }),
+    sourceLanguage: result.sourceLanguage,
+    eligible: !result.sameLanguage,
+    translation: result.sameLanguage
+      ? null
+      : {
+          targetLanguage: result.targetLanguage,
+          sourceLanguage: result.sourceLanguage,
+          text: result.text,
+          html: result.html ?? null,
+          format: result.format,
+          translatedAt: result.translatedAt,
+        },
+  };
+}
+
+export const useTranslateContent = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      kind,
+      id,
+      targetLanguage,
+    }: {
+      kind: 'comment' | 'review';
+      id: string;
+      targetLanguage: string;
+    }) =>
+      api.post<TranslationResultDto>(
+        kind === 'comment' ? `/comments/${id}/translate` : `/external-reviews/${id}/translate`,
+        { targetLanguage },
+      ),
+    onSuccess: (result, { kind, id }) => {
+      if (kind === 'comment') {
+        patchCommentInCaches(qc, id, (comment) => ({
+          ...comment,
+          content: translatedContent(comment.content, comment.body, 'plain', result),
+        }));
+        return;
+      }
+
+      const patchReview = (review: ExternalReviewDto): ExternalReviewDto => ({
+        ...review,
+        translatableContent: translatedContent(
+          review.translatableContent,
+          review.content,
+          'html',
+          result,
+        ),
+      });
+      qc.setQueryData<ExternalReviewDto>(['externalReview', id], (old) =>
+        old ? patchReview(old) : old,
+      );
+      qc.setQueriesData({ queryKey: ['comments'] }, (old: any) =>
+        old && Array.isArray(old.pages)
+          ? {
+              ...old,
+              pages: old.pages.map((page: any) => ({
+                ...page,
+                externalReviews: Array.isArray(page.externalReviews)
+                  ? page.externalReviews.map((review: ExternalReviewDto) =>
+                      review.id === id ? patchReview(review) : review,
+                    )
+                  : page.externalReviews,
+              })),
+            }
+          : old,
+      );
+      qc.setQueriesData({ queryKey: ['comment'] }, (old: CommentThreadDto | undefined) =>
+        old?.review?.reviewId === id
+          ? {
+              ...old,
+              review: {
+                ...old.review,
+                content: translatedContent(old.review.content, old.review.body, 'html', result),
+              },
+            }
+          : old,
+      );
+    },
+  });
+};
 
 const patchFollow = (qc: ReturnType<typeof useQueryClient>, userId: string, following: boolean) => {
   // Public profile pages are keyed by username — match by the user's id inside.

@@ -37,5 +37,18 @@
   "searchUsersHint": "ユーザー名でユーザーを検索",
   "noFollowersYet": "まだ{{type}}はいません",
   "followButton": "フォロー",
-  "followingButton": "フォロー中"
+  "followingButton": "フォロー中",
+  "profileTaste": {
+    "timeline": "アクティビティ",
+    "taste": "好み",
+    "privateTitle": "非公開プロフィール",
+    "privateSubtitle": "フォローするとアクティビティと好みを見られます。",
+    "topMovieGenres": "好きな映画ジャンル",
+    "topShowGenres": "好きな番組ジャンル",
+    "inCommon": "共通の好み",
+    "commonGenres": "二人とも{{genres}}が好きです。",
+    "forYou": "この人のライブラリからおすすめ",
+    "favoriteMovies": "お気に入り映画",
+    "favoriteShows": "お気に入り番組"
+  }
 }

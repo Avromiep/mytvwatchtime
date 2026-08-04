@@ -42,6 +42,7 @@
   "searchToAddShort": "जोड़ने के लिए खोजें…",
   "recentlyWatched": "हाल ही में देखे गए",
   "failedToSave": "सहेजना विफल",
+  "failedToDelete": "सूची हटाई नहीं जा सकी। फिर कोशिश करें।",
   "deleteListQuestion": "सूची हटाएँ?",
   "deleteCannotUndo": "इसे वापस नहीं किया जा सकता।",
   "editList": "सूची संपादित करें",

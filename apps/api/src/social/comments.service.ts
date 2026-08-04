@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { CommentThreadType, ListVisibility, NotificationCategory, Prisma } from '@prisma/client';
@@ -23,6 +24,7 @@ import {
   isAllowedGiphyUrl,
   type CommentSort,
 } from './dto/comment.dto';
+import { TranslationService } from './translation.service';
 
 /** Hard cap on reply nesting depth (top-level = 0) to prevent pathological threads. */
 export const MAX_COMMENT_DEPTH = 25;
@@ -38,6 +40,7 @@ export class CommentsService {
     private readonly notifications: NotificationService,
     private readonly commentImages: CommentImageService,
     private readonly externalReviews?: ExternalReviewsService,
+    @Optional() private readonly translations?: TranslationService,
   ) {}
 
   async list(userId: string, q: CommentQueryDto) {
@@ -631,6 +634,8 @@ export class CommentsService {
 
     if (dto.body !== undefined) {
       data.body = dto.body;
+      data.language = null;
+      data.translations = {};
     }
 
     // GIF handling: undefined = leave as-is, null = clear, string = replace.
@@ -834,6 +839,7 @@ export class CommentsService {
         _commentsCount: 0,
       },
       body: r.content,
+      content: this.translatable(r.content, r.translations, r.language, 'html'),
       imageUrl: null,
       gifUrl: null,
       image: null,
@@ -890,6 +896,7 @@ export class CommentsService {
       avatarUrl: r.avatarUrl,
       rating: r.rating,
       content: r.content,
+      translatableContent: this.translatable(r.content, r.translations, r.language, 'html'),
       url: r.url,
       createdAt: r.reviewCreatedAt,
       repliesCount,
@@ -950,6 +957,11 @@ export class CommentsService {
       threadId: r.threadId,
       author: mapPublicUser({ ...r.user, ...counts }),
       body: tombstone ? '' : r.body,
+      content: this.translatable(
+        tombstone ? '' : r.body,
+        tombstone ? {} : r.translations,
+        tombstone ? null : r.language,
+      ),
       imageUrl: tombstone ? null : r.imageUrl,
       gifUrl: tombstone ? null : r.gifUrl,
       image: tombstone ? null : image,
@@ -967,6 +979,23 @@ export class CommentsService {
       editedAt: r.editedAt ? r.editedAt.toISOString() : null,
       createdAt: r.createdAt.toISOString(),
     };
+  }
+
+  private translatable(
+    original: string,
+    translations: unknown,
+    language?: string | null,
+    format: 'plain' | 'html' = 'plain',
+  ) {
+    return (
+      this.translations?.content(original, translations, language, format) ?? {
+        original,
+        format,
+        sourceLanguage: language ?? null,
+        eligible: false,
+        translation: null,
+      }
+    );
   }
 
   /** Resolve media_items rows into the card shape shown inside comments (localized title). */

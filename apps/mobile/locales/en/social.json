@@ -37,5 +37,18 @@
   "searchUsersHint": "Search for users by username",
   "noFollowersYet": "No {{type}} yet",
   "followButton": "Follow",
-  "followingButton": "Following"
+  "followingButton": "Following",
+  "profileTaste": {
+    "timeline": "Timeline",
+    "taste": "Taste",
+    "privateTitle": "Private profile",
+    "privateSubtitle": "Follow this user to see their timeline and taste.",
+    "topMovieGenres": "Top movie genres",
+    "topShowGenres": "Top show genres",
+    "inCommon": "What you have in common",
+    "commonGenres": "You both enjoy {{genres}}.",
+    "forYou": "From their library, for you",
+    "favoriteMovies": "Favorite movies",
+    "favoriteShows": "Favorite shows"
+  }
 }

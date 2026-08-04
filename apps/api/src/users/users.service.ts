@@ -1,4 +1,11 @@
-import { ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -93,6 +100,12 @@ export class UsersService {
         coverUrl: dto.coverUrl ?? null,
         isPrivate: dto.isPrivate ?? false,
         hideAnimeInExplore: dto.hideAnimeInExplore ?? false,
+        exploreDefaultFilters:
+          dto.exploreDefaultFilters === null
+            ? Prisma.DbNull
+            : dto.exploreDefaultFilters
+              ? this.normalizeExploreDefaults(dto.exploreDefaultFilters)
+              : undefined,
         ...(dto.themePreference
           ? { themePreference: dtoThemeToDb(dto.themePreference) as any }
           : {}),
@@ -107,6 +120,14 @@ export class UsersService {
         coverUrl: dto.coverUrl,
         isPrivate: dto.isPrivate,
         hideAnimeInExplore: dto.hideAnimeInExplore,
+        ...(dto.exploreDefaultFilters !== undefined
+          ? {
+              exploreDefaultFilters:
+                dto.exploreDefaultFilters === null
+                  ? Prisma.DbNull
+                  : this.normalizeExploreDefaults(dto.exploreDefaultFilters),
+            }
+          : {}),
         ...(dto.themePreference
           ? { themePreference: dtoThemeToDb(dto.themePreference) as any }
           : {}),
@@ -116,6 +137,22 @@ export class UsersService {
       },
     });
     return this.getMe(userId);
+  }
+
+  private normalizeExploreDefaults(value: NonNullable<UpdateProfileDto['exploreDefaultFilters']>) {
+    const genre = value.genre?.trim() || null;
+    const country = value.country?.trim().toUpperCase() || null;
+    const excludeGenres = [...new Set(value.excludeGenres.map((v) => v.trim()).filter(Boolean))]
+      .filter((v) => v !== genre)
+      .sort();
+    return {
+      genre,
+      excludeGenres,
+      order: value.order,
+      mediaType: value.mediaType,
+      country,
+      hideAnime: value.hideAnime,
+    };
   }
 
   async deleteMe(userId: string) {
@@ -321,7 +358,19 @@ export class UsersService {
             where: { followerId_targetId: { followerId: viewerId, targetId: user.id } },
           })
         : null;
-      if (!following) return [];
+      if (!following) throw new ForbiddenException('This profile is private');
+    }
+    if (viewerId) {
+      const blocked = await this.prisma.block.findFirst({
+        where: {
+          OR: [
+            { blockerId: viewerId, blockedId: user.id },
+            { blockerId: user.id, blockedId: viewerId },
+          ],
+        },
+        select: { id: true },
+      });
+      if (blocked) throw new ForbiddenException('Profile unavailable');
     }
     const lists = await this.prisma.customList.findMany({
       where: { userId: user.id, visibility: 'PUBLIC' },

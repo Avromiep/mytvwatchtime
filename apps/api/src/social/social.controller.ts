@@ -25,6 +25,9 @@ import {
   UpdateCommentDto,
 } from './dto/comment.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
+import { Throttle } from '@nestjs/throttler';
+import { TranslateContentDto } from './dto/comment.dto';
+import { TranslationService } from './translation.service';
 
 @ApiTags('social')
 @ApiBearerAuth()
@@ -36,6 +39,7 @@ export class SocialController {
     private readonly social: SocialService,
     private readonly moderation: ModerationService,
     private readonly flags: FeatureFlagService,
+    private readonly translations: TranslationService,
   ) {}
 
   @Get('feed')
@@ -45,6 +49,16 @@ export class SocialController {
     @Query('limit') limit?: string,
   ) {
     return this.social.getFeed(userId, cursor, limit ? Number(limit) : undefined);
+  }
+
+  @Get('users/:username/activity')
+  userFeed(
+    @CurrentUser('id') viewerId: string,
+    @Param('username') username: string,
+    @Query('cursor') cursor?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.social.getUserFeed(viewerId, username, cursor, limit ? Number(limit) : undefined);
   }
 
   @Get('comments')
@@ -60,6 +74,12 @@ export class SocialController {
   @Get('comments/:id')
   getComment(@CurrentUser('id') userId: string, @Param('id') id: string) {
     return this.comments.findOne(userId, id);
+  }
+
+  @Post('comments/:id/translate')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  translateComment(@Param('id') id: string, @Body() dto: TranslateContentDto) {
+    return this.translations.translateComment(id, dto.targetLanguage);
   }
 
   @Get('comments/:id/replies')
@@ -126,6 +146,12 @@ export class SocialController {
     return this.comments.getExternalReview(userId, id);
   }
 
+  @Post('external-reviews/:id/translate')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  translateReview(@Param('id') id: string, @Body() dto: TranslateContentDto) {
+    return this.translations.translateReview(id, dto.targetLanguage);
+  }
+
   @Post('external-reviews/:id/like')
   likeExternalReview(@CurrentUser('id') userId: string, @Param('id') id: string) {
     return this.comments.likeExternalReview(userId, id);
@@ -184,10 +210,5 @@ export class SocialController {
   @Delete('users/:id/follow')
   unfollow(@CurrentUser('id') userId: string, @Param('id') targetId: string) {
     return this.social.unfollow(userId, targetId);
-  }
-
-  @Get('users/:id/activity')
-  activity(@Param('id') id: string) {
-    return this.social.activity(id);
   }
 }

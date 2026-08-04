@@ -5,7 +5,7 @@ import { router } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import type { FeedItemDto } from '@tvwatch/shared';
-import { useFeed } from '../api/hooks';
+import { useFeed, useUserFeed } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { APP_ICON, EmptyState, PosterImage, Spinner, T } from './primitives';
 import { formatRelativeShort } from './comments/thread-utils';
@@ -83,10 +83,15 @@ function FeedItemRow({
   resolvedLocale: string;
 }) {
   const { tokens } = useAppearance();
-  const openMedia = () =>
+  const openMedia = () => {
+    if (item.type === 'COMMENTED' && item.detail?.commentId) {
+      router.push(`/comment/${item.detail.commentId}` as any);
+      return;
+    }
     router.push(
       (item.media.type === 'SHOW' ? `/show/${item.media.id}` : `/movie/${item.media.id}`) as any,
     );
+  };
   return (
     // Sibling pressables (avatar → profile, content → media) — a Pressable inside a
     // Pressable renders invalid nested <button>s on react-native-web.
@@ -118,9 +123,14 @@ function FeedItemRow({
         accessibilityLabel={activityLine(item, t)}
       >
         <View style={styles.rowBody}>
-          <T variant="body" numberOfLines={2}>
-            {activityLine(item, t)}
-          </T>
+          <View style={styles.activityLine}>
+            {item.type === 'RATED' ? (
+              <Ionicons name="star" size={15} color={tokens.warning} style={{ marginRight: 5 }} />
+            ) : null}
+            <T variant="body" numberOfLines={2} style={{ flex: 1 }}>
+              {activityLine(item, t)}
+            </T>
+          </View>
           {/* Spoiler comments: the excerpt is masked server-side — show the same
               spoiler treatment as the comments feed instead. */}
           {item.spoiler ? (
@@ -150,30 +160,52 @@ function FeedItemRow({
 }
 
 /** Explore "Feed" tab: activity of the viewer + their followings, newest first. */
-export function ActivityFeed() {
+export function ActivityFeed({
+  username,
+  collapseRuns = true,
+  listHeader,
+}: {
+  username?: string;
+  collapseRuns?: boolean;
+  listHeader?: React.ReactElement | null;
+} = {}) {
   const { tokens, resolvedLocale } = useAppearance();
   const { t } = useTranslation(['feed', 'comments', 'common']);
-  const feed = useFeed();
+  const exploreFeed = useFeed(!username);
+  const profileFeed = useUserFeed(username ?? '', !!username);
+  const feed = username ? profileFeed : exploreFeed;
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const rows = useMemo(
-    () => (feed.data?.pages ?? []).flatMap((p) => buildRows(p.items ?? [])),
-    [feed.data],
+    () =>
+      (feed.data?.pages ?? []).flatMap((p) =>
+        collapseRuns
+          ? buildRows(p.items ?? [])
+          : (p.items ?? []).map((item) => ({ kind: 'item', key: item.id, item }) as FeedRow),
+      ),
+    [collapseRuns, feed.data],
   );
-
-  if (feed.isLoading) return <Spinner />;
 
   return (
     <FlatList
       data={rows}
       keyExtractor={(r) => r.key}
-      contentContainerStyle={{ paddingHorizontal: spacing.sm, paddingBottom: spacing.xl }}
+      contentContainerStyle={{
+        paddingHorizontal: listHeader ? 0 : spacing.sm,
+        paddingBottom: spacing.xl,
+      }}
+      ListHeaderComponent={listHeader ?? null}
+      ListHeaderComponentStyle={listHeader ? { marginBottom: spacing.lg } : undefined}
       ListEmptyComponent={
-        <EmptyState
-          icon="people-outline"
-          title={t('feed:emptyTitle')}
-          subtitle={t('feed:emptySubtitle')}
-        />
+        feed.isLoading ? (
+          <Spinner />
+        ) : (
+          <EmptyState
+            icon="people-outline"
+            title={t('feed:emptyTitle')}
+            subtitle={t('feed:emptySubtitle')}
+          />
+        )
       }
       onEndReached={() => {
         if (feed.hasNextPage && !feed.isFetchingNextPage) feed.fetchNextPage();
@@ -207,7 +239,12 @@ export function ActivityFeed() {
             <T variant="caption" style={{ color: tokens.primary, fontWeight: '700' }}>
               {t('feed:seeMoreFrom', { name: row.user.displayName ?? row.user.username })}
             </T>
-            <Ionicons name="chevron-down" size={14} color={tokens.primary} style={{ marginLeft: 4 }} />
+            <Ionicons
+              name="chevron-down"
+              size={14}
+              color={tokens.primary}
+              style={{ marginLeft: 4 }}
+            />
           </Pressable>
         );
       }}
@@ -229,6 +266,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
   },
   rowBody: { flex: 1, marginHorizontal: spacing.sm },
+  activityLine: { flexDirection: 'row', alignItems: 'center' },
   spoilerRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   moreBtn: {
     flexDirection: 'row',

@@ -97,6 +97,12 @@ export default () => ({
     uploadsPerUserPerDay: Number(process.env.COMMENT_IMAGE_UPLOADS_PER_USER_PER_DAY || 20),
     workerConcurrency: Number(process.env.COMMENT_IMAGE_WORKER_CONCURRENCY || 2),
   },
+  translations: {
+    azureKey: process.env.AZURE_TRANSLATOR_KEY,
+    azureRegion: process.env.AZURE_TRANSLATOR_REGION,
+    azureEndpoint:
+      process.env.AZURE_TRANSLATOR_ENDPOINT || 'https://api.cognitive.microsofttranslator.com',
+  },
   notifications: {
     maxPushPerUserPerDay: Number(process.env.MAX_PUSH_NOTIFICATIONS_PER_USER_PER_DAY || 3),
     spreadStartHour: Number(process.env.NOTIFICATION_SPREAD_START_HOUR || 12),

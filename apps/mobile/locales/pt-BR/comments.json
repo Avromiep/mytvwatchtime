@@ -78,5 +78,15 @@
   "spoilerReported": "Spoiler denunciado",
   "markAsSpoiler": "Marcar como spoiler",
   "replyingToReview": "Respondendo à avaliação do TMDB de {{author}}",
-  "hideReplies": "Ocultar respostas"
+  "hideReplies": "Ocultar respostas",
+  "translate": "Traduzir",
+  "translating": "Traduzindo…",
+  "showOriginal": "Mostrar original",
+  "translatedFrom": "Traduzido de {{language}}",
+  "chooseTranslationLanguage": "Escolher idioma da tradução",
+  "translationNotNeeded": "Tradução desnecessária",
+  "alreadyInSelectedLanguage": "Este texto já está em {{language}}.",
+  "translationFailed": "Falha na tradução",
+  "translationFailedDescription": "Não foi possível carregar a tradução. Tente novamente.",
+  "close": "Fechar"
 }

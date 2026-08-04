@@ -37,5 +37,18 @@
   "searchUsersHint": "उपयोगकर्ता नाम से उपयोगकर्ता खोजें",
   "noFollowersYet": "अभी कोई {{type}} नहीं",
   "followButton": "फ़ॉलो करें",
-  "followingButton": "फ़ॉलो कर रहे हैं"
+  "followingButton": "फ़ॉलो कर रहे हैं",
+  "profileTaste": {
+    "timeline": "गतिविधि",
+    "taste": "पसंद",
+    "privateTitle": "निजी प्रोफ़ाइल",
+    "privateSubtitle": "उनकी गतिविधि और पसंद देखने के लिए फ़ॉलो करें।",
+    "topMovieGenres": "पसंदीदा फ़िल्म शैलियाँ",
+    "topShowGenres": "पसंदीदा शो शैलियाँ",
+    "inCommon": "आप दोनों की समान पसंद",
+    "commonGenres": "आप दोनों को {{genres}} पसंद हैं।",
+    "forYou": "उनकी लाइब्रेरी से आपके लिए",
+    "favoriteMovies": "पसंदीदा फ़िल्में",
+    "favoriteShows": "पसंदीदा शो"
+  }
 }

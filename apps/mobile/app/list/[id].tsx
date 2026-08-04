@@ -5,6 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useTranslation } from 'react-i18next';
+import { useQueryClient } from '@tanstack/react-query';
 import { Header } from '../../components/Header';
 import { cardYear } from '../../components/cards';
 import { Button, Card, EmptyState, PosterImage, Screen, Spinner, T } from '../../components/primitives';
@@ -286,10 +287,12 @@ function AddItemSearch({ listId, existingIds, onAdd }: { listId: string; existin
 function EditListModal({ listId, title, description, visibility, onClose }: { listId: string; title: string; description?: string; visibility: string; onClose: () => void }) {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['lists', 'common']);
+  const queryClient = useQueryClient();
   const [editTitle, setEditTitle] = useState(title);
   const [editDesc, setEditDesc] = useState(description || '');
   const [editPublic, setEditPublic] = useState(visibility === 'PUBLIC');
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const save = async () => {
     setSaving(true);
@@ -298,12 +301,30 @@ function EditListModal({ listId, title, description, visibility, onClose }: { li
   };
 
   const del = () => {
+    if (deleting) return;
     showConfirm({
       title: t('lists:deleteListQuestion'),
       description: t('lists:deleteCannotUndo'),
       confirmLabel: t('common:delete'),
       destructive: true,
-      onConfirm: async () => { await api.delete(`/lists/${listId}`); router.back(); },
+      onConfirm: async () => {
+        setDeleting(true);
+        try {
+          await api.del(`/lists/${listId}`);
+          queryClient.removeQueries({ queryKey: ['list', listId] });
+          queryClient.removeQueries({ queryKey: ['listItems', listId] });
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ['lists'] }),
+            queryClient.invalidateQueries({ queryKey: ['userLists'] }),
+            queryClient.invalidateQueries({ queryKey: ['followedLists'] }),
+          ]);
+          onClose();
+          router.back();
+        } catch {
+          setDeleting(false);
+          showError({ description: t('lists:failedToDelete') });
+        }
+      },
     });
   };
 
@@ -327,7 +348,16 @@ function EditListModal({ listId, title, description, visibility, onClose }: { li
             </View>
           </Pressable>
           <Button title={t('lists:updateList')} onPress={save} loading={saving} icon="checkmark-outline" />
-          <Pressable onPress={del} style={{ alignItems: 'center', marginTop: spacing.lg, paddingVertical: spacing.md }}>
+          <Pressable
+            onPress={del}
+            disabled={deleting}
+            style={{
+              alignItems: 'center',
+              marginTop: spacing.lg,
+              paddingVertical: spacing.md,
+              opacity: deleting ? 0.6 : 1,
+            }}
+          >
             <T variant="caption" style={{ color: tokens.danger }}>{t('lists:deleteList')}</T>
           </Pressable>
         </View>

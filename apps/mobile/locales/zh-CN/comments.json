@@ -78,5 +78,15 @@
   "spoilerReported": "已举报剧透",
   "markAsSpoiler": "标记为剧透",
   "replyingToReview": "回复 {{author}} 的 TMDB 评论",
-  "hideReplies": "隐藏回复"
+  "hideReplies": "隐藏回复",
+  "translate": "翻译",
+  "translating": "正在翻译…",
+  "showOriginal": "显示原文",
+  "translatedFrom": "译自{{language}}",
+  "chooseTranslationLanguage": "选择翻译语言",
+  "translationNotNeeded": "无需翻译",
+  "alreadyInSelectedLanguage": "此文本已经是{{language}}。",
+  "translationFailed": "翻译失败",
+  "translationFailedDescription": "无法加载翻译，请重试。",
+  "close": "关闭"
 }

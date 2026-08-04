@@ -37,5 +37,18 @@
   "searchUsersHint": "Cari pengguna berdasarkan nama pengguna",
   "noFollowersYet": "Belum ada {{type}}",
   "followButton": "Ikuti",
-  "followingButton": "Mengikuti"
+  "followingButton": "Mengikuti",
+  "profileTaste": {
+    "timeline": "Aktivitas",
+    "taste": "Selera",
+    "privateTitle": "Profil privat",
+    "privateSubtitle": "Ikuti pengguna ini untuk melihat aktivitas dan seleranya.",
+    "topMovieGenres": "Genre film teratas",
+    "topShowGenres": "Genre serial teratas",
+    "inCommon": "Kesamaan kalian",
+    "commonGenres": "Kalian berdua menyukai {{genres}}.",
+    "forYou": "Dari koleksinya, untukmu",
+    "favoriteMovies": "Film favorit",
+    "favoriteShows": "Serial favorit"
+  }
 }

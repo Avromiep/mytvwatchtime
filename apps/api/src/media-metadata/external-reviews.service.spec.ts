@@ -16,7 +16,7 @@ function makePrisma(opts: { media?: any; episode?: any } = {}) {
   const tx: any = {
     externalReview: {
       deleteMany: jest.fn(async () => ({})),
-      createMany: jest.fn(async () => ({})),
+      upsert: jest.fn(async () => ({})),
     },
   };
   const prisma: any = {
@@ -37,19 +37,20 @@ function makePrisma(opts: { media?: any; episode?: any } = {}) {
 }
 
 describe('ExternalReviewsService', () => {
-  it('syncMediaReviews replaces the page-1 set and marks the media synced', async () => {
+  it('syncMediaReviews upserts stable review ids, prunes vanished rows and marks synced', async () => {
     const { prisma, tx } = makePrisma();
     const svc = new ExternalReviewsService(prisma, { enabled: true } as any);
 
     await svc.syncMediaReviews('m1', [review('r1'), review('r2')]);
 
-    expect(tx.externalReview.deleteMany).toHaveBeenCalledWith({ where: { mediaId: 'm1' } });
-    expect(tx.externalReview.createMany).toHaveBeenCalledWith({
-      data: expect.arrayContaining([
-        expect.objectContaining({ externalId: 'r1', mediaId: 'm1', episodeId: null }),
-        expect.objectContaining({ externalId: 'r2', mediaId: 'm1', episodeId: null }),
-      ]),
-      skipDuplicates: true,
+    expect(tx.externalReview.upsert).toHaveBeenCalledTimes(2);
+    expect(tx.externalReview.upsert).toHaveBeenCalledWith({
+      where: { provider_externalId: { provider: 'TMDB', externalId: 'r1' } },
+      create: expect.objectContaining({ externalId: 'r1', mediaId: 'm1', episodeId: null }),
+      update: expect.objectContaining({ externalId: 'r1', mediaId: 'm1', episodeId: null }),
+    });
+    expect(tx.externalReview.deleteMany).toHaveBeenCalledWith({
+      where: { mediaId: 'm1', externalId: { notIn: ['r1', 'r2'] } },
     });
     expect(prisma.mediaItem.update).toHaveBeenCalledWith({
       where: { id: 'm1' },
@@ -73,6 +74,17 @@ describe('ExternalReviewsService', () => {
     expect(tmdb.getMovieReviews).toHaveBeenCalledWith(1368337);
     expect(prisma.$transaction).toHaveBeenCalled();
     expect(prisma.mediaItem.update).toHaveBeenCalled();
+  });
+
+  it('keeps cached translations when provider content is unchanged', async () => {
+    const { prisma, tx } = makePrisma();
+    prisma.externalReview.findMany.mockResolvedValue([{ externalId: 'r1', content: 'great' }]);
+    const svc = new ExternalReviewsService(prisma, { enabled: true } as any);
+
+    await svc.syncMediaReviews('m1', [review('r1')]);
+
+    expect(tx.externalReview.upsert.mock.calls[0][0].update).not.toHaveProperty('translations');
+    expect(tx.externalReview.upsert.mock.calls[0][0].update).not.toHaveProperty('language');
   });
 
   it('ensureFreshForThread: fresh media does NOT refetch', async () => {
@@ -125,8 +137,10 @@ describe('ExternalReviewsService', () => {
 
     await svc.ensureFreshForThread('MOVIE' as any, 'm1');
 
-    expect(tx.externalReview.deleteMany).toHaveBeenCalledWith({ where: { mediaId: 'm1' } });
-    expect(tx.externalReview.createMany).not.toHaveBeenCalled();
+    expect(tx.externalReview.deleteMany).toHaveBeenCalledWith({
+      where: { mediaId: 'm1', externalId: { notIn: [] } },
+    });
+    expect(tx.externalReview.upsert).not.toHaveBeenCalled();
     expect(prisma.mediaItem.update).toHaveBeenCalled(); // marked synced
   });
 

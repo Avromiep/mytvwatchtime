@@ -78,5 +78,15 @@
   "spoilerReported": "स्पॉइलर रिपोर्ट किया गया",
   "markAsSpoiler": "स्पॉइलर के रूप में चिह्नित करें",
   "replyingToReview": "{{author}} की TMDB समीक्षा का उत्तर",
-  "hideReplies": "उत्तर छिपाएँ"
+  "hideReplies": "उत्तर छिपाएँ",
+  "translate": "अनुवाद करें",
+  "translating": "अनुवाद हो रहा है…",
+  "showOriginal": "मूल दिखाएँ",
+  "translatedFrom": "{{language}} से अनुवादित",
+  "chooseTranslationLanguage": "अनुवाद भाषा चुनें",
+  "translationNotNeeded": "अनुवाद की आवश्यकता नहीं है",
+  "alreadyInSelectedLanguage": "यह टेक्स्ट पहले से {{language}} में है।",
+  "translationFailed": "अनुवाद विफल",
+  "translationFailedDescription": "अनुवाद लोड नहीं हो सका। फिर कोशिश करें।",
+  "close": "बंद करें"
 }

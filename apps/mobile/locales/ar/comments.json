@@ -78,5 +78,15 @@
   "spoilerReported": "تم الإبلاغ عن الحرق",
   "markAsSpoiler": "وضع علامة كحرق",
   "replyingToReview": "الرد على مراجعة {{author}} على TMDB",
-  "hideReplies": "إخفاء الردود"
+  "hideReplies": "إخفاء الردود",
+  "translate": "ترجمة",
+  "translating": "جارٍ الترجمة…",
+  "showOriginal": "عرض الأصل",
+  "translatedFrom": "مترجم من {{language}}",
+  "chooseTranslationLanguage": "اختر لغة الترجمة",
+  "translationNotNeeded": "لا حاجة إلى الترجمة",
+  "alreadyInSelectedLanguage": "هذا النص مكتوب بالفعل باللغة {{language}}.",
+  "translationFailed": "فشلت الترجمة",
+  "translationFailedDescription": "تعذر تحميل الترجمة. حاول مرة أخرى.",
+  "close": "إغلاق"
 }

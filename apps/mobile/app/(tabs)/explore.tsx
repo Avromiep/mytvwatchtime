@@ -11,29 +11,210 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { MediaType } from '@tvwatch/shared';
+import { MediaType, type ExploreDefaultFilters } from '@tvwatch/shared';
 import { Header } from '../../components/Header';
 import { ActivityFeed } from '../../components/ActivityFeed';
 import { cardYear, Carousel, PosterCard } from '../../components/cards';
 import { Chip, Screen, Spinner, T } from '../../components/primitives';
-import { FilterPicker, FilterReset, FilterToggle } from '../../components/FilterPicker';
-import { ExploreFilters, useDiscoverSections, useGenres, useSearch } from '../../api/hooks';
+import {
+  FilterPicker,
+  FilterReset,
+  FilterToggle,
+  type FilterPickerOption,
+} from '../../components/FilterPicker';
+import {
+  ExploreFilters,
+  useDiscoverSections,
+  useGenres,
+  useSearch,
+  useUpdateProfile,
+} from '../../api/hooks';
 import { useAuth } from '../../context/AuthContext';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing, typography } from '../../theme/theme';
 import { useTranslation } from 'react-i18next';
+import { showToast } from '../../lib/toast';
 
 /** Curated ISO 3166-1 country filter list (display names are localized via i18n). */
-const COUNTRY_CODES = ['US', 'GB', 'FR', 'DE', 'ES', 'IT', 'JP', 'KR', 'CN', 'IN', 'TR', 'BR', 'MX', 'CA', 'AU'];
+const COUNTRY_CODES = [
+  'US',
+  'GB',
+  'FR',
+  'DE',
+  'ES',
+  'IT',
+  'JP',
+  'KR',
+  'CN',
+  'IN',
+  'TR',
+  'BR',
+  'MX',
+  'CA',
+  'AU',
+];
 
 type ExploreType = 'both' | 'movies' | 'shows';
 type ExploreOrder = 'popularity' | 'releaseDate';
+
+function ExploreFilterBar({
+  genreLabel,
+  genre,
+  genreOptions,
+  onGenreChange,
+  orderLabel,
+  order,
+  onOrderChange,
+  typeIcons,
+  mediaType,
+  onMediaTypeChange,
+  excludedLabel,
+  excludeGenres,
+  onExcludeChange,
+  countryLabel,
+  country,
+  countryOptions,
+  onCountryChange,
+  hideAnime,
+  onHideAnimeChange,
+  onReset,
+  onSave,
+  hasSavedDefault,
+}: {
+  genreLabel: string;
+  genre: string | null;
+  genreOptions: FilterPickerOption[];
+  onGenreChange: (value: string | null) => void;
+  orderLabel: string;
+  order: ExploreOrder;
+  onOrderChange: (value: ExploreOrder) => void;
+  typeIcons: React.ComponentProps<typeof Ionicons>['name'][];
+  mediaType: ExploreType;
+  onMediaTypeChange: (value: ExploreType) => void;
+  excludedLabel: string;
+  excludeGenres: string[];
+  onExcludeChange: (values: string[]) => void;
+  countryLabel: string;
+  country: string | null;
+  countryOptions: FilterPickerOption[];
+  onCountryChange: (value: string | null) => void;
+  hideAnime: boolean;
+  onHideAnimeChange: (value: boolean) => void;
+  onReset: () => void;
+  onSave: () => void;
+  hasSavedDefault: boolean;
+}) {
+  const { t } = useTranslation(['explore', 'common']);
+  const [open, setOpen] = useState(false);
+
+  return (
+    <View style={styles.filterStack}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.inlineFilterScroll}
+        contentContainerStyle={styles.inlineFilters}
+      >
+        <FilterPicker
+          label={t('explore:filters.genre')}
+          valueLabel={genreLabel}
+          showLabelPrefix={false}
+          active={!!genre}
+          dialogTitle={t('explore:filters.genre')}
+          options={[{ value: '', label: t('common:all') }, ...genreOptions]}
+          selected={[genre ?? '']}
+          onChange={(values) => onGenreChange(values[0] || null)}
+          onClear={() => onGenreChange(null)}
+        />
+        <FilterPicker
+          label={t('explore:filters.order')}
+          valueLabel={orderLabel}
+          showLabelPrefix={false}
+          active={order !== 'popularity'}
+          dialogTitle={t('explore:filters.order')}
+          options={[
+            { value: 'popularity', label: t('explore:filters.orderPopularity') },
+            { value: 'releaseDate', label: t('explore:filters.orderReleaseDate') },
+          ]}
+          selected={[order]}
+          onChange={(values) => onOrderChange((values[0] as ExploreOrder) ?? 'popularity')}
+        />
+        <FilterPicker
+          label={t('explore:filters.type')}
+          valueLabel=""
+          showLabelPrefix={false}
+          icons={typeIcons}
+          active={mediaType !== 'both'}
+          dialogTitle={t('explore:filters.type')}
+          options={[
+            { value: 'both', label: t('explore:filters.typeBoth') },
+            { value: 'movies', label: t('explore:filters.typeMovies') },
+            { value: 'shows', label: t('explore:filters.typeShows') },
+          ]}
+          selected={[mediaType]}
+          onChange={(values) => onMediaTypeChange((values[0] as ExploreType) ?? 'both')}
+        />
+        <FilterPicker
+          label={t('explore:filters.exclude')}
+          valueLabel={excludedLabel}
+          showLabelPrefix={false}
+          active={excludeGenres.length > 0}
+          dialogTitle={t('explore:filters.exclude')}
+          options={genreOptions}
+          selected={excludeGenres}
+          multi
+          onChange={onExcludeChange}
+          onClear={() => onExcludeChange([])}
+        />
+        <FilterPicker
+          label={t('explore:filters.country')}
+          valueLabel={countryLabel}
+          showLabelPrefix={false}
+          active={!!country}
+          dialogTitle={t('explore:filters.country')}
+          options={countryOptions}
+          selected={[country ?? '']}
+          onChange={(values) => onCountryChange(values[0] || null)}
+          onClear={() => onCountryChange(null)}
+        />
+        <FilterReset
+          label={t('explore:filters.advanced')}
+          onPress={() => setOpen((value) => !value)}
+          icon={open ? 'chevron-up-outline' : 'options-outline'}
+        />
+      </ScrollView>
+      {open ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.inlineFilterScroll}
+          contentContainerStyle={styles.inlineFilters}
+        >
+          <FilterToggle
+            label={t('explore:filters.hideAnime')}
+            value={hideAnime}
+            onChange={onHideAnimeChange}
+          />
+          <FilterReset label={t('explore:filters.resetAll')} onPress={onReset} />
+          <FilterReset
+            label={t('explore:filters.saveDefault')}
+            onPress={onSave}
+            icon="bookmark-outline"
+            iconActive={hasSavedDefault}
+          />
+        </ScrollView>
+      ) : null}
+    </View>
+  );
+}
 
 export default function ExploreScreen() {
   const { tokens } = useAppearance();
   const { width } = useWindowDimensions();
   const { t, i18n } = useTranslation(['explore', 'common']);
+  const { user, refreshUser } = useAuth();
+  const updateProfile = useUpdateProfile();
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [category, setCategory] = useState<'feed' | 'discover'>('discover');
@@ -53,6 +234,19 @@ export default function ExploreScreen() {
   const [mediaType, setMediaType] = useState<ExploreType>('both');
   const [country, setCountry] = useState<string | null>(null);
   const [hideAnime, setHideAnime] = useState(false);
+  const [defaultsHydrated, setDefaultsHydrated] = useState(false);
+  const applyDefaults = useCallback((value?: ExploreDefaultFilters | null) => {
+    setGenre(value?.genre ?? null);
+    setExcludeGenres(value?.excludeGenres ?? []);
+    setOrder(value?.order ?? 'popularity');
+    setMediaType(value?.mediaType ?? 'both');
+    setCountry(value?.country ?? null);
+    setHideAnime(value?.hideAnime ?? false);
+  }, []);
+  useEffect(() => {
+    applyDefaults(user?.exploreDefaultFilters);
+    setDefaultsHydrated(true);
+  }, [applyDefaults, user?.exploreDefaultFilters, user?.id]);
   const resetFilters = useCallback(() => {
     setGenre(null);
     setExcludeGenres([]);
@@ -61,13 +255,6 @@ export default function ExploreScreen() {
     setCountry(null);
     setHideAnime(false);
   }, []);
-  const hasActiveFilters =
-    !!genre ||
-    excludeGenres.length > 0 ||
-    order !== 'popularity' ||
-    mediaType !== 'both' ||
-    !!country ||
-    hideAnime;
   const filters = useMemo<ExploreFilters>(
     () => ({ excludeGenres, sort: order, country, hideAnime }),
     [excludeGenres, order, country, hideAnime],
@@ -76,8 +263,7 @@ export default function ExploreScreen() {
   const searchType =
     mediaType === 'movies' ? MediaType.MOVIE : mediaType === 'shows' ? MediaType.SHOW : undefined;
   const search = useSearch(debouncedQ, searchType, genre, filters);
-  const { user } = useAuth();
-  const sections = useDiscoverSections(user?.id, genre, filters);
+  const sections = useDiscoverSections(user?.id, genre, filters, defaultsHydrated);
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -103,14 +289,34 @@ export default function ExploreScreen() {
   useTabPressReset(() => {
     setQ('');
     setDebouncedQ('');
-    setGenre(null);
-    setExcludeGenres([]);
-    setOrder('popularity');
-    setMediaType('both');
-    setCountry(null);
-    setHideAnime(false);
+    applyDefaults(user?.exploreDefaultFilters);
     discoverRef.current?.scrollTo({ y: 0, animated: true });
   });
+
+  const saveDefaults = useCallback(async () => {
+    const value: ExploreDefaultFilters = {
+      genre,
+      excludeGenres,
+      order,
+      mediaType,
+      country,
+      hideAnime,
+    };
+    const empty =
+      !genre &&
+      !excludeGenres.length &&
+      order === 'popularity' &&
+      mediaType === 'both' &&
+      !country &&
+      !hideAnime;
+    try {
+      await updateProfile.mutateAsync({ exploreDefaultFilters: empty ? null : value });
+      await refreshUser();
+      showToast(t(empty ? 'explore:filters.defaultCleared' : 'explore:filters.defaultSaved'));
+    } catch {
+      showToast(t('explore:filters.defaultSaveFailed'));
+    }
+  }, [country, excludeGenres, genre, hideAnime, mediaType, order, refreshUser, t, updateProfile]);
 
   // Localized country names: Intl.DisplayNames when the runtime supports it
   // (Hermes doesn't), else the i18n name map shipped in every locale.
@@ -134,9 +340,30 @@ export default function ExploreScreen() {
     () => (genres.data ?? []).map((g) => ({ value: g.slug, label: g.name })),
     [genres.data],
   );
-  const genreLabel = genre
-    ? (genres.data ?? []).find((g) => g.slug === genre)?.name ?? genre
-    : t('common:all');
+  const genreName = (slug: string) =>
+    (genres.data ?? []).find((item) => item.slug === slug)?.name ?? slug;
+  const genreLabel = genre ? genreName(genre) : t('explore:filters.genre');
+  const excludedLabel = excludeGenres.length
+    ? excludeGenres.length === 1
+      ? genreName(excludeGenres[0])
+      : `${genreName(excludeGenres[0])} +${excludeGenres.length - 1}`
+    : t('explore:filters.exclude');
+  const orderLabel =
+    order === 'releaseDate' ? t('explore:filters.orderReleaseDate') : t('explore:filters.order');
+  const countryLabel = country ? (countryNames[country] ?? country) : t('explore:filters.country');
+  const typeIcons: React.ComponentProps<typeof Ionicons>['name'][] =
+    mediaType === 'movies'
+      ? ['film-outline']
+      : mediaType === 'shows'
+        ? ['tv-outline']
+        : ['film-outline', 'tv-outline'];
+  const countryOptions: FilterPickerOption[] = [
+    { value: '', label: t('common:all') },
+    ...COUNTRY_CODES.map((code) => ({
+      value: code,
+      label: countryNames[code] ?? code,
+    })),
+  ];
 
   // Active filters ride along into see-all screens so they survive navigation.
   const moreHref = (key: string) => {
@@ -195,90 +422,30 @@ export default function ExploreScreen() {
         </View>
         {/* Discovery filters don't apply to the activity feed — hide them there. */}
         {category === 'discover' ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={{ marginTop: spacing.sm, flexGrow: 0, flexShrink: 0 }}
-        >
-          <FilterPicker
-            label={t('explore:filters.genre')}
-            valueLabel={genreLabel}
-            active={!!genre}
-            dialogTitle={t('explore:filters.genre')}
-            options={[{ value: '', label: t('common:all') }, ...genreOptions]}
-            selected={[genre ?? '']}
-            onChange={(v) => setGenre(v[0] || null)}
-            onClear={() => setGenre(null)}
+          <ExploreFilterBar
+            genreLabel={genreLabel}
+            genre={genre}
+            genreOptions={genreOptions}
+            onGenreChange={setGenre}
+            orderLabel={orderLabel}
+            order={order}
+            onOrderChange={setOrder}
+            typeIcons={typeIcons}
+            mediaType={mediaType}
+            onMediaTypeChange={setMediaType}
+            excludedLabel={excludedLabel}
+            excludeGenres={excludeGenres}
+            onExcludeChange={setExcludeGenres}
+            countryLabel={countryLabel}
+            country={country}
+            countryOptions={countryOptions}
+            onCountryChange={setCountry}
+            hideAnime={hideAnime}
+            onHideAnimeChange={setHideAnime}
+            onReset={resetFilters}
+            onSave={saveDefaults}
+            hasSavedDefault={!!user?.exploreDefaultFilters}
           />
-          <FilterPicker
-            label={t('explore:filters.exclude')}
-            valueLabel={excludeGenres.length ? String(excludeGenres.length) : t('common:all')}
-            active={excludeGenres.length > 0}
-            dialogTitle={t('explore:filters.exclude')}
-            options={genreOptions}
-            selected={excludeGenres}
-            multi
-            onChange={setExcludeGenres}
-            onClear={() => setExcludeGenres([])}
-          />
-          <FilterPicker
-            label={t('explore:filters.order')}
-            valueLabel={
-              order === 'releaseDate'
-                ? t('explore:filters.orderReleaseDate')
-                : t('explore:filters.orderPopularity')
-            }
-            active={order !== 'popularity'}
-            dialogTitle={t('explore:filters.order')}
-            options={[
-              { value: 'popularity', label: t('explore:filters.orderPopularity') },
-              { value: 'releaseDate', label: t('explore:filters.orderReleaseDate') },
-            ]}
-            selected={[order]}
-            onChange={(v) => setOrder((v[0] as ExploreOrder) ?? 'popularity')}
-          />
-          <FilterPicker
-            label={t('explore:filters.type')}
-            valueLabel={
-              mediaType === 'movies'
-                ? t('explore:filters.typeMovies')
-                : mediaType === 'shows'
-                  ? t('explore:filters.typeShows')
-                  : t('explore:filters.typeBoth')
-            }
-            active={mediaType !== 'both'}
-            dialogTitle={t('explore:filters.type')}
-            options={[
-              { value: 'both', label: t('explore:filters.typeBoth') },
-              { value: 'movies', label: t('explore:filters.typeMovies') },
-              { value: 'shows', label: t('explore:filters.typeShows') },
-            ]}
-            selected={[mediaType]}
-            onChange={(v) => setMediaType((v[0] as ExploreType) ?? 'both')}
-          />
-          <FilterPicker
-            label={t('explore:filters.country')}
-            valueLabel={country ? (countryNames[country] ?? country) : t('common:all')}
-            active={!!country}
-            dialogTitle={t('explore:filters.country')}
-            options={[
-              { value: '', label: t('common:all') },
-              ...COUNTRY_CODES.map((code) => ({ value: code, label: countryNames[code] ?? code })),
-            ]}
-            selected={[country ?? '']}
-            onChange={(v) => setCountry(v[0] || null)}
-            onClear={() => setCountry(null)}
-          />
-          {/* Additive with the profile setting — the server ORs both. */}
-          <FilterToggle
-            label={t('explore:filters.hideAnime')}
-            value={hideAnime}
-            onChange={setHideAnime}
-          />
-          {hasActiveFilters ? (
-            <FilterReset label={t('explore:filters.resetAll')} onPress={resetFilters} />
-          ) : null}
-        </ScrollView>
         ) : null}
       </View>
 
@@ -424,4 +591,7 @@ const styles = StyleSheet.create({
     height: 44,
   },
   input: { flex: 1, ...typography.body },
+  filterStack: { marginTop: spacing.sm, gap: spacing.sm },
+  inlineFilterScroll: { flexGrow: 0, flexShrink: 0 },
+  inlineFilters: { flexDirection: 'row', gap: spacing.sm, paddingRight: spacing.sm },
 });

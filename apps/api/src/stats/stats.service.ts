@@ -26,6 +26,28 @@ interface ComputedStats {
   stale: boolean;
 }
 
+type GenreMediaRow = {
+  mediaId: string;
+  media: { genres: { genre: { name: string | null } }[] };
+};
+
+/** Count each genre once per distinct title. Watch history contains one row per episode/rewatch. */
+export function topGenresByDistinctTitles(rows: GenreMediaRow[]) {
+  const titles = new Map<string, GenreMediaRow>();
+  for (const row of rows) {
+    if (!titles.has(row.mediaId)) titles.set(row.mediaId, row);
+  }
+  const counts = new Map<string, number>();
+  for (const row of titles.values()) {
+    const names = new Set(row.media.genres.map(({ genre }) => genre.name).filter(Boolean));
+    for (const name of names) counts.set(name!, (counts.get(name!) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+    .slice(0, 8);
+}
+
 @Injectable()
 export class StatsService implements OnModuleInit {
   private readonly logger = new Logger(StatsService.name);
@@ -93,7 +115,11 @@ export class StatsService implements OnModuleInit {
 
   private async loadOrComputeAll(userId: string): Promise<ComputedStats> {
     const row = await this.prisma.userStatsSummary.findUnique({ where: { userId } });
-    if (row && row.summary && row.showStats && row.movieStats) {
+    const showStats = row?.showStats as { genreCountUnit?: string } | null | undefined;
+    const movieStats = row?.movieStats as { genreCountUnit?: string } | null | undefined;
+    const currentGenreCounts =
+      showStats?.genreCountUnit === 'titles' && movieStats?.genreCountUnit === 'titles';
+    if (row && row.summary && row.showStats && row.movieStats && currentGenreCounts) {
       // SWR: complete cached JSON present → return immediately; refresh in background if stale.
       if (row.stale) this.scheduleBackgroundRecompute(userId);
       return {
@@ -213,7 +239,11 @@ export class StatsService implements OnModuleInit {
       .catch((e) => this.logger.error(`recompute lock acquire failed ${userId}: ${e.message}`));
   }
 
-  private async runBackgroundRecompute(userId: string, lockKey: string, token: string): Promise<void> {
+  private async runBackgroundRecompute(
+    userId: string,
+    lockKey: string,
+    token: string,
+  ): Promise<void> {
     let superseded = false;
     try {
       const row = await this.prisma.userStatsSummary.findUnique({ where: { userId } });
@@ -223,7 +253,9 @@ export class StatsService implements OnModuleInit {
       ({ superseded } = await this.storeAndCheckSuperseded(userId, payloads, startingVersion));
     } finally {
       // ownership-safe release: only delete if our token still owns the lock.
-      await this.redis.client.eval(StatsService.LOCK_RELEASE, 1, lockKey, token).catch(() => undefined);
+      await this.redis.client
+        .eval(StatsService.LOCK_RELEASE, 1, lockKey, token)
+        .catch(() => undefined);
     }
     if (superseded) this.scheduleBackgroundRecompute(userId); // re-arm AFTER releasing the lock
   }
@@ -244,12 +276,22 @@ export class StatsService implements OnModuleInit {
   }
 
   // ---------------- computations ----------------
-  private async computeSummary(userId: string, showRows: any[], movieRows: any[]): Promise<StatsSummaryDto> {
+  private async computeSummary(
+    userId: string,
+    showRows: any[],
+    movieRows: any[],
+  ): Promise<StatsSummaryDto> {
     const tvMinutes = showRows.reduce((a, r) => a + (r.runtimeMinutes ?? 0), 0);
-    const movieMinutes = movieRows.reduce((a, r) => a + (r.runtimeMinutes ?? r.media?.movie?.runtimeMinutes ?? 0), 0);
+    const movieMinutes = movieRows.reduce(
+      (a, r) => a + (r.runtimeMinutes ?? r.media?.movie?.runtimeMinutes ?? 0),
+      0,
+    );
 
     const statuses = await this.prisma.userShowStatus.findMany({ where: { userId } });
-    const remainingEpisodes = statuses.reduce((a, s) => a + Math.max(0, (s.totalCount ?? 0) - (s.watchedCount ?? 0)), 0);
+    const remainingEpisodes = statuses.reduce(
+      (a, s) => a + Math.max(0, (s.totalCount ?? 0) - (s.watchedCount ?? 0)),
+      0,
+    );
 
     // Remaining movies = watchlist movies that aren't watched yet
     const watchlistMovieIds = await this.prisma.watchlistItem.findMany({
@@ -257,10 +299,12 @@ export class StatsService implements OnModuleInit {
       select: { mediaId: true },
     });
     const watchedMovieIds = new Set(
-      (await this.prisma.userMovieStatus.findMany({
-        where: { userId, watched: true },
-        select: { mediaId: true },
-      })).map((m) => m.mediaId),
+      (
+        await this.prisma.userMovieStatus.findMany({
+          where: { userId, watched: true },
+          select: { mediaId: true },
+        })
+      ).map((m) => m.mediaId),
     );
     const remainingMovies = watchlistMovieIds.filter((w) => !watchedMovieIds.has(w.mediaId)).length;
 
@@ -277,7 +321,11 @@ export class StatsService implements OnModuleInit {
     };
   }
 
-  private weeklyChart(rows: { watchedAt: Date; runtimeMinutes?: number | null }[], weeks = 12, mode: 'count' | 'minutes' = 'count'): ChartPointDto[] {
+  private weeklyChart(
+    rows: { watchedAt: Date; runtimeMinutes?: number | null }[],
+    weeks = 12,
+    mode: 'count' | 'minutes' = 'count',
+  ): ChartPointDto[] {
     const now = new Date();
     const buckets: { label: string; value: number; start: Date }[] = [];
     for (let i = weeks - 1; i >= 0; i--) {
@@ -292,18 +340,23 @@ export class StatsService implements OnModuleInit {
         const end = i < buckets.length - 1 ? buckets[i + 1].start : new Date();
         return r.watchedAt >= b.start && r.watchedAt < end;
       });
-      if (idx >= 0) buckets[idx].value += mode === 'minutes' ? r.runtimeMinutes ?? 0 : 1;
+      if (idx >= 0) buckets[idx].value += mode === 'minutes' ? (r.runtimeMinutes ?? 0) : 1;
     }
     return buckets.map((b) => ({ label: b.label, value: b.value }));
   }
 
-  private async topCounts(items: { name: string | null }[]): Promise<{ name: string; count: number }[]> {
+  private async topCounts(
+    items: { name: string | null }[],
+  ): Promise<{ name: string; count: number }[]> {
     const map = new Map<string, number>();
     for (const it of items) {
       if (!it.name) continue;
       map.set(it.name, (map.get(it.name) || 0) + 1);
     }
-    return [...map.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 8);
+    return [...map.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
   }
 
   private async computeShowStats(userId: string, showRows: any[]): Promise<ShowStatsDto> {
@@ -325,13 +378,20 @@ export class StatsService implements OnModuleInit {
       .map(([key, v]) => {
         const mediaId = key.split('|')[0];
         const title = showRows.find((r) => r.mediaId === mediaId)?.media.title ?? 'Unknown';
-        return { showTitle: title, episodeCount: v.count, periodLabel: v.date.toISOString().slice(0, 10) };
+        return {
+          showTitle: title,
+          episodeCount: v.count,
+          periodLabel: v.date.toISOString().slice(0, 10),
+        };
       })
       .sort((a, b) => b.episodeCount - a.episodeCount)
       .slice(0, 5);
 
-    const genres = await this.topCounts(showRows.flatMap((r) => r.media.genres.map((g: any) => ({ name: g.genre.name }))));
-    const networks = await this.topCounts(showRows.map((r) => ({ name: r.media.show?.network ?? null })));
+    const distinctShows = [...new Map(showRows.map((row) => [row.mediaId, row])).values()] as any[];
+    const genres = topGenresByDistinctTitles(showRows);
+    const networks = await this.topCounts(
+      distinctShows.map((r) => ({ name: r.media.show?.network ?? null })),
+    );
 
     // Slim selects only (title path + rating) — the old 4-deep includes pulled full
     // episode/season/show/media rows for every rating the user ever cast.
@@ -389,18 +449,27 @@ export class StatsService implements OnModuleInit {
       where: { userId, threadType: 'EPISODE' },
       select: { threadId: true, createdAt: true },
     });
-    const earnedLikes = await this.prisma.commentLike.count({ where: { comment: { userId, threadType: 'EPISODE' } } });
+    const earnedLikes = await this.prisma.commentLike.count({
+      where: { comment: { userId, threadType: 'EPISODE' } },
+    });
 
     const statuses = await this.prisma.userShowStatus.findMany({ where: { userId } });
-    const remainingEpisodes = statuses.reduce((a, s) => a + Math.max(0, (s.totalCount ?? 0) - (s.watchedCount ?? 0)), 0);
+    const remainingEpisodes = statuses.reduce(
+      (a, s) => a + Math.max(0, (s.totalCount ?? 0) - (s.watchedCount ?? 0)),
+      0,
+    );
 
     const recent = showRows.filter((r) => r.watchedAt >= new Date(Date.now() - 28 * 86400000));
     const speed = recent.length / 4; // per week
     const avgRuntime = showRows.length ? tvMinutes / showRows.length : 45;
     const timeToWatch = toDuration(remainingEpisodes * avgRuntime);
-    const prediction = speed > 0 ? new Date(Date.now() + (remainingEpisodes / speed) * 7 * 86400000) : null;
+    const prediction =
+      speed > 0 ? new Date(Date.now() + (remainingEpisodes / speed) * 7 * 86400000) : null;
 
-    const futureChart: ChartPointDto[] = Array.from({ length: 8 }).map((_, i) => ({ label: `W+${i + 1}`, value: Math.round(speed * 7) }));
+    const futureChart: ChartPointDto[] = Array.from({ length: 8 }).map((_, i) => ({
+      label: `W+${i + 1}`,
+      value: Math.round(speed * 7),
+    }));
 
     return {
       tvTime: toDuration(tvMinutes),
@@ -410,14 +479,22 @@ export class StatsService implements OnModuleInit {
       biggestMarathons,
       addedShows: statuses.length,
       topGenres: genres,
+      genreCountUnit: 'titles',
       topNetworks: networks,
       votedRatings: { ratings: episodeRatings.length, showsRated: ratingByShow.size },
       mostVotedRatings,
       characterVotes: { votes: charVotes.length, shows: charByShow.size },
-      mostVotedCharacters: [...charByShow.entries()].map(([showTitle, character]) => ({ showTitle, character })),
+      mostVotedCharacters: [...charByShow.entries()].map(([showTitle, character]) => ({
+        showTitle,
+        character,
+      })),
       comments: { count: comments.length, shows: new Set(comments.map((c) => c.threadId)).size },
       earnedLikes,
-      episodeCommentsChart: this.weeklyChart(comments.map((c) => ({ watchedAt: c.createdAt, runtimeMinutes: 0 })), 12, 'count'),
+      episodeCommentsChart: this.weeklyChart(
+        comments.map((c) => ({ watchedAt: c.createdAt, runtimeMinutes: 0 })),
+        12,
+        'count',
+      ),
       remainingEpisodes,
       upcomingEpisodesChart: [],
       catchUpSpeedEpisodesPerWeek: Math.round(speed * 10) / 10,
@@ -429,10 +506,15 @@ export class StatsService implements OnModuleInit {
 
   private async computeMovieStats(userId: string, movieRows: any[]): Promise<MovieStatsDto> {
     // Use movie runtime from Movie table as fallback when watch history has null runtime
-    const movieMinutes = movieRows.reduce((a, r) => a + (r.runtimeMinutes ?? r.media?.movie?.runtimeMinutes ?? 0), 0);
+    const movieMinutes = movieRows.reduce(
+      (a, r) => a + (r.runtimeMinutes ?? r.media?.movie?.runtimeMinutes ?? 0),
+      0,
+    );
 
-    const genres = await this.topCounts(movieRows.flatMap((r) => r.media.genres.map((g: any) => ({ name: g.genre.name }))));
-    const mediaRatings = await this.prisma.rating.findMany({ where: { userId, mediaId: { not: null } } });
+    const genres = topGenresByDistinctTitles(movieRows);
+    const mediaRatings = await this.prisma.rating.findMany({
+      where: { userId, mediaId: { not: null } },
+    });
     // Remaining movies = watchlist movies not yet watched (same definition as the summary;
     // NOT userMovieStatus.watched=false, which misses movies that only exist in the watchlist).
     const watchlistMovieIds = await this.prisma.watchlistItem.findMany({
@@ -440,22 +522,27 @@ export class StatsService implements OnModuleInit {
       select: { mediaId: true },
     });
     const watchedMovieIds = new Set(
-      (await this.prisma.userMovieStatus.findMany({
-        where: { userId, watched: true },
-        select: { mediaId: true },
-      })).map((m) => m.mediaId),
+      (
+        await this.prisma.userMovieStatus.findMany({
+          where: { userId, watched: true },
+          select: { mediaId: true },
+        })
+      ).map((m) => m.mediaId),
     );
     const remainingMovies = watchlistMovieIds.filter((w) => !watchedMovieIds.has(w.mediaId)).length;
     const comments = await this.prisma.comment.findMany({
       where: { userId, threadType: 'MOVIE' },
       select: { threadId: true, createdAt: true },
     });
-    const earnedLikes = await this.prisma.commentLike.count({ where: { comment: { userId, threadType: 'MOVIE' } } });
+    const earnedLikes = await this.prisma.commentLike.count({
+      where: { comment: { userId, threadType: 'MOVIE' } },
+    });
     const recent = movieRows.filter((r) => r.watchedAt >= new Date(Date.now() - 28 * 86400000));
     const speed = recent.length / 4;
     const avgRuntime = movieRows.length ? movieMinutes / movieRows.length : 110;
     const timeToWatch = toDuration(remainingMovies * avgRuntime);
-    const prediction = speed > 0 ? new Date(Date.now() + (remainingMovies / speed) * 7 * 86400000) : null;
+    const prediction =
+      speed > 0 ? new Date(Date.now() + (remainingMovies / speed) * 7 * 86400000) : null;
 
     return {
       movieTime: toDuration(movieMinutes),
@@ -465,16 +552,27 @@ export class StatsService implements OnModuleInit {
       // Same set as watchlistMovieIds above — was a duplicate COUNT query.
       addedMovies: watchlistMovieIds.length,
       topGenres: genres,
-      votedRatings: { ratings: mediaRatings.length, moviesRated: new Set(mediaRatings.map((r) => r.mediaId)).size },
+      genreCountUnit: 'titles',
+      votedRatings: {
+        ratings: mediaRatings.length,
+        moviesRated: new Set(mediaRatings.map((r) => r.mediaId)).size,
+      },
       characterVotes: { votes: 0, movies: 0 },
       comments: { count: comments.length, movies: new Set(comments.map((c) => c.threadId)).size },
       earnedLikes,
-      movieCommentsChart: this.weeklyChart(comments.map((c) => ({ watchedAt: c.createdAt, runtimeMinutes: 0 })), 12, 'count'),
+      movieCommentsChart: this.weeklyChart(
+        comments.map((c) => ({ watchedAt: c.createdAt, runtimeMinutes: 0 })),
+        12,
+        'count',
+      ),
       remainingMovies,
       upcomingMoviesChart: [],
       catchUpSpeedMoviesPerWeek: Math.round(speed * 10) / 10,
       timeToWatch,
-      futureWatchTimeChart: Array.from({ length: 8 }).map((_, i) => ({ label: `W+${i + 1}`, value: Math.round(speed * 7) })),
+      futureWatchTimeChart: Array.from({ length: 8 }).map((_, i) => ({
+        label: `W+${i + 1}`,
+        value: Math.round(speed * 7),
+      })),
       catchUpPredictionDate: prediction ? prediction.toISOString() : null,
     };
   }
@@ -497,7 +595,9 @@ export class StatsService implements OnModuleInit {
     if (inFlight) return inFlight;
     const p = this.computeRankedLeaderboard(type)
       .catch(async (e) => {
-        const stale = await this.redis.get<LeaderboardEntryDto[]>(`lb:stale:${type}`).catch(() => null);
+        const stale = await this.redis
+          .get<LeaderboardEntryDto[]>(`lb:stale:${type}`)
+          .catch(() => null);
         if (stale) return stale;
         throw e;
       })
@@ -508,11 +608,12 @@ export class StatsService implements OnModuleInit {
 
   private async computeRankedLeaderboard(type: LeaderboardType): Promise<LeaderboardEntryDto[]> {
     const cacheKey = `lb:${type}`;
-    const where = type === 'shows'
-      ? { mediaType: MediaType.SHOW }
-      : type === 'movies'
-        ? { mediaType: MediaType.MOVIE }
-        : {};
+    const where =
+      type === 'shows'
+        ? { mediaType: MediaType.SHOW }
+        : type === 'movies'
+          ? { mediaType: MediaType.MOVIE }
+          : {};
 
     const groups = await this.prisma.watchHistory.groupBy({
       by: ['userId'],
@@ -522,7 +623,10 @@ export class StatsService implements OnModuleInit {
 
     const userIds = groups.map((g: any) => g.userId);
     const users = userIds.length
-      ? await this.prisma.user.findMany({ where: { id: { in: userIds } }, include: { profile: true } })
+      ? await this.prisma.user.findMany({
+          where: { id: { in: userIds } },
+          include: { profile: true },
+        })
       : [];
     const userMap = new Map(users.map((u) => [u.id, u]));
 
@@ -540,7 +644,7 @@ export class StatsService implements OnModuleInit {
       // Exclude suspended + private-profile users; keep 0-min out of the ranked list.
       .filter((e) => {
         const u = userMap.get(e.userId);
-        return !!u && !u.isSuspended && !(u.profile?.isPrivate) && e.totalMinutes > 0;
+        return !!u && !u.isSuspended && !u.profile?.isPrivate && e.totalMinutes > 0;
       })
       .sort((a, b) => b.totalMinutes - a.totalMinutes || a.username.localeCompare(b.username))
       .map((e, i) => ({ ...e, position: i + 1 }));
@@ -579,13 +683,17 @@ export class StatsService implements OnModuleInit {
         me = { ...mine };
       } else {
         // Viewer not in the ranked list (private / suspended / 0-min): compute their own.
-        const where = type === 'shows'
-          ? { userId, mediaType: MediaType.SHOW }
-          : type === 'movies'
-            ? { userId, mediaType: MediaType.MOVIE }
-            : { userId };
+        const where =
+          type === 'shows'
+            ? { userId, mediaType: MediaType.SHOW }
+            : type === 'movies'
+              ? { userId, mediaType: MediaType.MOVIE }
+              : { userId };
         const [agg, u] = await Promise.all([
-          this.prisma.watchHistory.aggregate({ where: where as any, _sum: { runtimeMinutes: true } }),
+          this.prisma.watchHistory.aggregate({
+            where: where as any,
+            _sum: { runtimeMinutes: true },
+          }),
           this.prisma.user.findUnique({ where: { id: userId }, include: { profile: true } }),
         ]);
         const mins = agg._sum.runtimeMinutes ?? 0;

@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ListSource, NotificationCategory } from '@prisma/client';
 import { FeedItemDto, FeedPageDto } from '@tvwatch/shared';
@@ -68,7 +73,10 @@ export class SocialService {
   }
 
   private async usernameOf(userId: string) {
-    const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { username: true } });
+    const u = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { username: true },
+    });
     return u?.username ?? 'someone';
   }
 
@@ -96,19 +104,31 @@ export class SocialService {
    * "activity". Merged in memory and cursor-paginated by (timestamp, id), newest
    * first. The dormant Activity model is intentionally NOT used.
    */
-  async getFeed(userId: string, cursor?: string, limit = 20): Promise<FeedPageDto> {
+  async getFeed(
+    userId: string,
+    cursor?: string,
+    limit = 20,
+    audienceOverride?: string[],
+  ): Promise<FeedPageDto> {
     const lim = Math.min(Math.max(Math.floor(limit) || 20, 1), 50);
     const cur = cursor ? this.decodeFeedCursor(cursor) : null;
 
     // Audience: self + followings, minus users the viewer blocked (same rule as
     // the comments feed). Followings' comments are public on media pages, so
     // private profiles don't hide feed rows.
-    const [follows, blocked] = await Promise.all([
-      this.prisma.follow.findMany({ where: { followerId: userId }, select: { targetId: true } }),
-      this.prisma.block.findMany({ where: { blockerId: userId }, select: { blockedId: true } }),
-    ]);
+    const [follows, blocked] = audienceOverride
+      ? [[], []]
+      : await Promise.all([
+          this.prisma.follow.findMany({
+            where: { followerId: userId },
+            select: { targetId: true },
+          }),
+          this.prisma.block.findMany({ where: { blockerId: userId }, select: { blockedId: true } }),
+        ]);
     const blockedIds = new Set(blocked.map((b) => b.blockedId));
-    const audience = [userId, ...follows.map((f) => f.targetId)].filter((id) => !blockedIds.has(id));
+    const audience =
+      audienceOverride ??
+      [userId, ...follows.map((f) => f.targetId)].filter((id) => !blockedIds.has(id));
 
     const take = lim + 1;
     // lte (not lt) at the DB level: rows sharing the cursor's exact timestamp are
@@ -137,12 +157,20 @@ export class SocialService {
         include: { media: { include: mediaInclude } },
       }),
       this.prisma.rating.findMany({
-        where: { userId: { in: audience }, ...manualOnly, ...(before ? { createdAt: before } : {}) },
+        where: {
+          userId: { in: audience },
+          ...manualOnly,
+          ...(before ? { createdAt: before } : {}),
+        },
         orderBy: { createdAt: 'desc' },
         take,
       }),
       this.prisma.reaction.findMany({
-        where: { userId: { in: audience }, ...manualOnly, ...(before ? { createdAt: before } : {}) },
+        where: {
+          userId: { in: audience },
+          ...manualOnly,
+          ...(before ? { createdAt: before } : {}),
+        },
         orderBy: { createdAt: 'desc' },
         take,
       }),
@@ -151,6 +179,8 @@ export class SocialService {
           userId: { in: audience },
           ...manualOnly,
           threadType: { in: ['SHOW', 'MOVIE', 'EPISODE'] },
+          parentId: null,
+          externalReviewId: null,
           hidden: false,
           adminDeleted: false,
           deletedByUser: false,
@@ -188,7 +218,9 @@ export class SocialService {
       episodeIds.size
         ? this.prisma.episode.findMany({
             where: { id: { in: [...episodeIds] } },
-            include: { season: { include: { show: { include: { media: { include: mediaInclude } } } } } },
+            include: {
+              season: { include: { show: { include: { media: { include: mediaInclude } } } } },
+            },
           })
         : [],
       this.prisma.user.findMany({
@@ -268,62 +300,108 @@ export class SocialService {
     };
 
     for (const h of history) {
-      push('wh', h.id, h.userId, h.watchedAt, (item) => {
-        item.type = 'WATCHED';
-        if (h.mediaType === 'SHOW' && h.seasonNumber != null && h.episodeNumber != null)
-          item.detail = { seasonNumber: h.seasonNumber, episodeNumber: h.episodeNumber };
-      }, h.media as MediaRow);
+      push(
+        'wh',
+        h.id,
+        h.userId,
+        h.watchedAt,
+        (item) => {
+          item.type = 'WATCHED';
+          if (h.mediaType === 'SHOW' && h.seasonNumber != null && h.episodeNumber != null)
+            item.detail = { seasonNumber: h.seasonNumber, episodeNumber: h.episodeNumber };
+        },
+        h.media as MediaRow,
+      );
     }
     for (const w of watchlist) {
-      push('wl', w.id, w.userId, w.createdAt, (item) => {
-        item.type = 'WATCHLISTED';
-      }, w.media as MediaRow);
+      push(
+        'wl',
+        w.id,
+        w.userId,
+        w.createdAt,
+        (item) => {
+          item.type = 'WATCHLISTED';
+        },
+        w.media as MediaRow,
+      );
     }
     for (const f of favorites) {
-      push('fav', f.id, f.userId, f.createdAt, (item) => {
-        item.type = 'FAVORITED';
-      }, f.media as MediaRow);
+      push(
+        'fav',
+        f.id,
+        f.userId,
+        f.createdAt,
+        (item) => {
+          item.type = 'FAVORITED';
+        },
+        f.media as MediaRow,
+      );
     }
     for (const r of ratings) {
       const ep = r.episodeId ? episodeById.get(r.episodeId) : undefined;
       const media = r.mediaId ? mediaById.get(r.mediaId) : ep?.media;
-      push('rat', r.id, r.userId, r.createdAt, (item) => {
-        item.type = 'RATED';
-        item.detail = {
-          rating: r.rating,
-          ...(ep ? { seasonNumber: ep.seasonNumber, episodeNumber: ep.episodeNumber } : {}),
-        };
-      }, media);
+      push(
+        'rat',
+        r.id,
+        r.userId,
+        r.createdAt,
+        (item) => {
+          item.type = 'RATED';
+          item.detail = {
+            rating: r.rating,
+            ...(ep ? { seasonNumber: ep.seasonNumber, episodeNumber: ep.episodeNumber } : {}),
+          };
+        },
+        media,
+      );
     }
     for (const r of reactions) {
       const ep = r.episodeId ? episodeById.get(r.episodeId) : undefined;
       const media = r.mediaId ? mediaById.get(r.mediaId) : ep?.media;
-      push('rea', r.id, r.userId, r.createdAt, (item) => {
-        item.type = 'REACTED';
-        item.detail = {
-          reaction: r.reaction,
-          ...(ep ? { seasonNumber: ep.seasonNumber, episodeNumber: ep.episodeNumber } : {}),
-        };
-      }, media);
+      push(
+        'rea',
+        r.id,
+        r.userId,
+        r.createdAt,
+        (item) => {
+          item.type = 'REACTED';
+          item.detail = {
+            reaction: r.reaction,
+            ...(ep ? { seasonNumber: ep.seasonNumber, episodeNumber: ep.episodeNumber } : {}),
+          };
+        },
+        media,
+      );
     }
     for (const c of comments) {
       const ep = c.threadType === 'EPISODE' ? episodeById.get(c.threadId) : undefined;
       const media = c.threadType === 'EPISODE' ? ep?.media : mediaById.get(c.threadId);
-      push('com', c.id, c.userId, c.createdAt, (item) => {
-        item.type = 'COMMENTED';
-        if (c.isSpoiler) {
-          // Spoiler: the excerpt is masked server-side; clients render the spoiler treatment.
-          item.spoiler = true;
-          if (ep) item.detail = { seasonNumber: ep.seasonNumber, episodeNumber: ep.episodeNumber };
-          return;
-        }
-        const excerpt = c.body.trim().slice(0, 140);
-        const detail: FeedItemDto['detail'] = {
-          ...(excerpt ? { excerpt } : {}),
-          ...(ep ? { seasonNumber: ep.seasonNumber, episodeNumber: ep.episodeNumber } : {}),
-        };
-        if (Object.keys(detail).length) item.detail = detail;
-      }, media);
+      push(
+        'com',
+        c.id,
+        c.userId,
+        c.createdAt,
+        (item) => {
+          item.type = 'COMMENTED';
+          if (c.isSpoiler) {
+            // Spoiler: the excerpt is masked server-side; clients render the spoiler treatment.
+            item.spoiler = true;
+            item.detail = {
+              commentId: c.id,
+              ...(ep ? { seasonNumber: ep.seasonNumber, episodeNumber: ep.episodeNumber } : {}),
+            };
+            return;
+          }
+          const excerpt = c.body.trim().slice(0, 140);
+          const detail: FeedItemDto['detail'] = {
+            commentId: c.id,
+            ...(excerpt ? { excerpt } : {}),
+            ...(ep ? { seasonNumber: ep.seasonNumber, episodeNumber: ep.episodeNumber } : {}),
+          };
+          item.detail = detail;
+        },
+        media,
+      );
     }
 
     // Strict (time, id) cursor filter, newest-first sort, page slice.
@@ -347,5 +425,36 @@ export class SocialService {
         ? { nextCursor: this.encodeFeedCursor(last.time, last.id) }
         : {}),
     };
+  }
+
+  async getUserFeed(
+    viewerId: string,
+    username: string,
+    cursor?: string,
+    limit = 20,
+  ): Promise<FeedPageDto> {
+    const target = await this.prisma.user.findFirst({
+      where: { username: username.trim() },
+      select: { id: true, profile: { select: { isPrivate: true } } },
+    });
+    if (!target) throw new NotFoundException('User not found');
+    if (target.profile?.isPrivate && viewerId !== target.id) {
+      const following = await this.prisma.follow.findUnique({
+        where: { followerId_targetId: { followerId: viewerId, targetId: target.id } },
+        select: { followerId: true },
+      });
+      if (!following) throw new ForbiddenException('This profile is private');
+    }
+    const blocked = await this.prisma.block.findFirst({
+      where: {
+        OR: [
+          { blockerId: viewerId, blockedId: target.id },
+          { blockerId: target.id, blockedId: viewerId },
+        ],
+      },
+      select: { id: true },
+    });
+    if (blocked) throw new ForbiddenException('Profile unavailable');
+    return this.getFeed(viewerId, cursor, limit, [target.id]);
   }
 }

@@ -37,5 +37,18 @@
   "searchUsersHint": "사용자 이름으로 사용자 검색",
   "noFollowersYet": "아직 {{type}}이 없습니다",
   "followButton": "팔로우",
-  "followingButton": "팔로우 중"
+  "followingButton": "팔로우 중",
+  "profileTaste": {
+    "timeline": "활동",
+    "taste": "취향",
+    "privateTitle": "비공개 프로필",
+    "privateSubtitle": "팔로우하면 활동과 취향을 볼 수 있습니다.",
+    "topMovieGenres": "선호 영화 장르",
+    "topShowGenres": "선호 TV 장르",
+    "inCommon": "공통 취향",
+    "commonGenres": "두 분 모두 {{genres}} 장르를 좋아해요.",
+    "forYou": "이 사용자의 보관함에서 추천",
+    "favoriteMovies": "좋아하는 영화",
+    "favoriteShows": "좋아하는 TV 프로그램"
+  }
 }

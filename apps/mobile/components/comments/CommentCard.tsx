@@ -10,6 +10,8 @@ import { CommentMedia } from './CommentMedia';
 import { authorDisplayName } from './thread-utils';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
+import { TranslatableContent } from './TranslatableContent';
+import { TMDB_BRAND_COLOR } from './provider-theme';
 
 const AVATAR = 40;
 const AVATAR_COMPACT = 32;
@@ -109,12 +111,12 @@ export function CommentCard({
                 hitSlop={6}
                 accessibilityRole="link"
                 accessibilityLabel="TMDB"
-                style={styles.reviewBadge}
+                style={[styles.reviewBadge, { backgroundColor: TMDB_BRAND_COLOR }]}
               >
-                <T variant="micro" style={styles.reviewBadgeText}>
+                <T variant="micro" style={[styles.reviewBadgeText, { color: tokens.mediaText }]}>
                   TMDB
                 </T>
-                <Ionicons name="open-outline" size={10} color="#fff" />
+                <Ionicons name="open-outline" size={10} color={tokens.mediaText} />
               </Pressable>
             ) : null}
             {comment.isEdited && !tombstone ? (
@@ -174,9 +176,18 @@ export function CommentCard({
           {t('comments:deleted')}
         </T>
       ) : !censored && comment.body ? (
-        <T variant="body" style={styles.body}>
-          {comment.body}
-        </T>
+        <TranslatableContent
+          id={comment.reviewId ?? comment.id}
+          kind={comment.kind === 'review' ? 'review' : 'comment'}
+          content={
+            comment.content ?? {
+              original: comment.body,
+              format: 'plain',
+              eligible: false,
+            }
+          }
+          style={styles.body}
+        />
       ) : null}
 
       {/* Media (image/GIF) — fills card width, opens full-screen viewer */}
@@ -337,9 +348,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 5,
     paddingVertical: 2,
     marginLeft: spacing.xs,
-    backgroundColor: '#01b4e4',
   },
-  reviewBadgeText: { color: '#fff', fontWeight: '900', letterSpacing: 0.5, fontSize: 9 },
+  reviewBadgeText: { fontWeight: '900', letterSpacing: 0.5, fontSize: 9 },
   mediaCard: {
     flexDirection: 'row',
     alignItems: 'center',

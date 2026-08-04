@@ -42,6 +42,7 @@
   "searchToAddShort": "Buscar para adicionar…",
   "recentlyWatched": "Vistos recentemente",
   "failedToSave": "Falha ao salvar",
+  "failedToDelete": "Não foi possível excluir a lista. Tente novamente.",
   "deleteListQuestion": "Excluir lista?",
   "deleteCannotUndo": "Esta ação não pode ser desfeita.",
   "editList": "Editar lista",

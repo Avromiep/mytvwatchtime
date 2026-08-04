@@ -1,4 +1,17 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Res,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
@@ -9,6 +22,8 @@ import { UsersService } from './users.service';
 import { UserImageService } from './user-image.service';
 import { ExportService } from './export.service';
 import { DeviceRegisterDto, UpdateProfileDto } from './dto/user.dto';
+import { ProfileTasteService } from './profile-taste.service';
+import { MediaType } from '@prisma/client';
 
 @ApiTags('users')
 @ApiBearerAuth()
@@ -19,6 +34,7 @@ export class UsersController {
     private readonly users: UsersService,
     private readonly images: UserImageService,
     private readonly exports: ExportService,
+    private readonly taste: ProfileTasteService,
   ) {}
 
   @Get('me')
@@ -79,13 +95,61 @@ export class UsersController {
   }
 
   @Get('users/:username/follows')
-  userFollows(@Param('username') username: string, @Query('type') type: string, @CurrentUser('id') viewerId?: string) {
-    return this.users.getFollowsByUsername(username, type === 'following' ? 'following' : 'followers', viewerId);
+  userFollows(
+    @Param('username') username: string,
+    @Query('type') type: string,
+    @CurrentUser('id') viewerId?: string,
+  ) {
+    return this.users.getFollowsByUsername(
+      username,
+      type === 'following' ? 'following' : 'followers',
+      viewerId,
+    );
   }
 
   @Get('users/:username/lists')
   userLists(@Param('username') username: string, @CurrentUser('id') viewerId?: string) {
     return this.users.getUserPublicLists(username, viewerId);
+  }
+
+  @Get('users/:username/taste')
+  userTaste(@Param('username') username: string, @CurrentUser('id') viewerId: string) {
+    return this.taste.taste(username, viewerId);
+  }
+
+  @Get('users/:username/taste/recommendations')
+  userRecommendations(
+    @Param('username') username: string,
+    @CurrentUser('id') viewerId: string,
+    @Query('page') page = '1',
+    @Query('pageSize') pageSize = '30',
+    @Query('type') type?: string,
+  ) {
+    const mediaType = type === MediaType.SHOW || type === MediaType.MOVIE ? type : undefined;
+    return this.taste.recommendations(
+      username,
+      viewerId,
+      Number(page),
+      Number(pageSize),
+      mediaType,
+    );
+  }
+
+  @Get('users/:username/favorites')
+  userFavorites(
+    @Param('username') username: string,
+    @CurrentUser('id') viewerId: string,
+    @Query('type') type: string,
+    @Query('page') page = '1',
+    @Query('pageSize') pageSize = '20',
+  ) {
+    return this.taste.favorites(
+      username,
+      viewerId,
+      type === MediaType.MOVIE ? MediaType.MOVIE : MediaType.SHOW,
+      Number(page),
+      Number(pageSize),
+    );
   }
 
   @Get('me/follows')

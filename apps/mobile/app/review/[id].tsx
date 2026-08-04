@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Linking, Pressable, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
+import { TranslatableContent } from '../../components/comments/TranslatableContent';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
@@ -31,8 +32,8 @@ import { api } from '../../api/client';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
 import { showError } from '../../lib/dialog';
+import { TMDB_BRAND_COLOR } from '../../components/comments/provider-theme';
 
-const TMDB_BLUE = '#01b4e4';
 const AVATAR = 44;
 
 /**
@@ -73,8 +74,8 @@ export default function ReviewThreadScreen() {
       if (next.has(c.id)) next.delete(c.id);
       else next.add(c.id);
       return next;
-    }, []);
-  });
+    });
+  }, []);
 
   const loadMore = useCallback(
     async (node: CommentDto) => {
@@ -199,12 +200,12 @@ export default function ReviewThreadScreen() {
                 hitSlop={6}
                 accessibilityRole="link"
                 accessibilityLabel="TMDB"
-                style={[styles.badge, { backgroundColor: TMDB_BLUE }]}
+                style={[styles.badge, { backgroundColor: TMDB_BRAND_COLOR }]}
               >
-                <T variant="micro" style={styles.badgeText}>
+                <T variant="micro" style={[styles.badgeText, { color: tokens.mediaText }]}>
                   TMDB
                 </T>
-                <Ionicons name="open-outline" size={10} color="#fff" />
+                <Ionicons name="open-outline" size={10} color={tokens.mediaText} />
               </Pressable>
             </View>
             <View style={styles.metaRow}>
@@ -222,9 +223,19 @@ export default function ReviewThreadScreen() {
             </View>
           </View>
         </View>
-        <T variant="body" style={{ marginTop: spacing.sm }}>
-          {review.content}
-        </T>
+        <View style={{ marginTop: spacing.sm }}>
+          <TranslatableContent
+            id={review.id}
+            kind="review"
+            content={
+              review.translatableContent ?? {
+                original: review.content,
+                format: 'html',
+                eligible: false,
+              }
+            }
+          />
+        </View>
         <View style={styles.headerActions}>
           <Pressable
             onPress={handleLikeHeader}
@@ -363,7 +374,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
   },
-  badgeText: { color: '#fff', fontWeight: '900', letterSpacing: 0.5, fontSize: 9 },
+  badgeText: { fontWeight: '900', letterSpacing: 0.5, fontSize: 9 },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: 2 },
   headerActions: {
     flexDirection: 'row',

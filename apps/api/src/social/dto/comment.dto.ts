@@ -5,6 +5,7 @@ import {
   IsBoolean,
   IsEnum,
   IsInt,
+  IsIn,
   IsOptional,
   IsString,
   Max,
@@ -192,4 +193,13 @@ export class ReportCommentDto {
   @ApiProperty()
   @IsString()
   reason!: string;
+}
+
+export class TranslateContentDto {
+  @ApiProperty({
+    enum: ['en', 'fr', 'es', 'pt-BR', 'de', 'it', 'ar', 'tr', 'hi', 'id', 'ja', 'ko', 'zh-CN'],
+  })
+  @IsString()
+  @IsIn(['en', 'fr', 'es', 'pt-BR', 'de', 'it', 'ar', 'tr', 'hi', 'id', 'ja', 'ko', 'zh-CN'])
+  targetLanguage!: string;
 }

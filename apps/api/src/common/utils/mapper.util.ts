@@ -95,7 +95,9 @@ function blobProviders(list: any): WatchProviderDto[] {
       id:
         p.id != null
           ? String(p.id)
-          : String(p.name).toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+          : String(p.name)
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, '-'),
       name: p.name,
       logoUrl: p.logoUrl ?? null,
     }));
@@ -308,6 +310,7 @@ export function mapCurrentUser(user: AnyRecord): CurrentUserDto {
     authProviders: (user.authProviders ?? []).map((a: AnyRecord) => a.provider),
     isPrivate: user.profile?.isPrivate ?? false,
     hideAnimeInExplore: user.profile?.hideAnimeInExplore ?? false,
+    exploreDefaultFilters: user.profile?.exploreDefaultFilters ?? null,
     role: user.role,
     mustChangePassword: user.mustChangePassword ?? false,
     onboardingStatus: user.onboardingStatus ?? 'NOT_STARTED',

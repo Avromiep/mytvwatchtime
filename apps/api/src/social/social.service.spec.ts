@@ -112,6 +112,8 @@ describe('SocialService.getFeed', () => {
     expect(prisma.comment.findMany.mock.calls[0][0].where).toMatchObject(manualOnly);
     // Tombstoned/moderated comments never surface either.
     expect(prisma.comment.findMany.mock.calls[0][0].where).toMatchObject({
+      parentId: null,
+      externalReviewId: null,
       hidden: false,
       adminDeleted: false,
       deletedByUser: false,
@@ -150,9 +152,11 @@ describe('SocialService.getFeed', () => {
     expect(spoiler.type).toBe('COMMENTED');
     expect(spoiler.spoiler).toBe(true);
     expect(spoiler.detail?.excerpt).toBeUndefined();
+    expect(spoiler.detail?.commentId).toBe('c1');
     const open = res.items.find((i) => i.id === 'com:c2')!;
     expect(open.spoiler).toBeUndefined();
     expect(open.detail?.excerpt).toBe('great movie');
+    expect(open.detail?.commentId).toBe('c2');
   });
 
   it('merges sources newest-first and cursor-paginates by (timestamp, id)', async () => {
@@ -202,9 +206,18 @@ describe('SocialService.getFeed', () => {
         season: { number: 2, show: { media: showMedia } },
       },
     ];
-    prisma._ratings = [{ id: 'r1', userId: 'u1', episodeId: 'e1', mediaId: null, rating: 4, createdAt: at(3) }];
+    prisma._ratings = [
+      { id: 'r1', userId: 'u1', episodeId: 'e1', mediaId: null, rating: 4, createdAt: at(3) },
+    ];
     prisma._reactions = [
-      { id: 're1', userId: 'u1', episodeId: 'e1', mediaId: null, reaction: 'AMUSED', createdAt: at(2) },
+      {
+        id: 're1',
+        userId: 'u1',
+        episodeId: 'e1',
+        mediaId: null,
+        reaction: 'AMUSED',
+        createdAt: at(2),
+      },
     ];
     prisma._comments = [
       {

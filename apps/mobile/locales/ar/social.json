@@ -37,5 +37,18 @@
   "searchUsersHint": "ابحث عن المستخدمين باسم المستخدم",
   "noFollowersYet": "لا يوجد {{type}} بعد",
   "followButton": "متابعة",
-  "followingButton": "تتم المتابعة"
+  "followingButton": "تتم المتابعة",
+  "profileTaste": {
+    "timeline": "النشاط",
+    "taste": "الذوق",
+    "privateTitle": "ملف شخصي خاص",
+    "privateSubtitle": "تابع هذا المستخدم لرؤية نشاطه وذوقه.",
+    "topMovieGenres": "أنواع الأفلام المفضلة",
+    "topShowGenres": "أنواع المسلسلات المفضلة",
+    "inCommon": "ما يجمعكما",
+    "commonGenres": "كلاكما يستمتع بـ {{genres}}.",
+    "forYou": "من مكتبته، لك",
+    "favoriteMovies": "الأفلام المفضلة",
+    "favoriteShows": "المسلسلات المفضلة"
+  }
 }

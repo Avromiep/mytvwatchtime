@@ -78,5 +78,15 @@
   "spoilerReported": "ネタバレを報告しました",
   "markAsSpoiler": "ネタバレとしてマーク",
   "replyingToReview": "{{author}}さんのTMDBレビューに返信",
-  "hideReplies": "返信を隠す"
+  "hideReplies": "返信を隠す",
+  "translate": "翻訳",
+  "translating": "翻訳中…",
+  "showOriginal": "原文を表示",
+  "translatedFrom": "{{language}}から翻訳",
+  "chooseTranslationLanguage": "翻訳言語を選択",
+  "translationNotNeeded": "翻訳は必要ありません",
+  "alreadyInSelectedLanguage": "このテキストはすでに{{language}}です。",
+  "translationFailed": "翻訳できませんでした",
+  "translationFailedDescription": "翻訳を読み込めませんでした。もう一度お試しください。",
+  "close": "閉じる"
 }

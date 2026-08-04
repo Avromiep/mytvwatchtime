@@ -139,6 +139,7 @@ function Gate() {
       <Stack.Screen name="followed-lists" />
       <Stack.Screen name="find-user" />
       <Stack.Screen name="user/[username]" />
+      <Stack.Screen name="user/[username]/more" />
       <Stack.Screen name="follows" />
     </Stack>
   );

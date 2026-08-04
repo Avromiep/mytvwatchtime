@@ -78,5 +78,15 @@
   "spoilerReported": "Spoiler bildirildi",
   "markAsSpoiler": "Spoiler olarak işaretle",
   "replyingToReview": "{{author}} adlı kişinin TMDB incelemesine yanıt",
-  "hideReplies": "Yanıtları gizle"
+  "hideReplies": "Yanıtları gizle",
+  "translate": "Çevir",
+  "translating": "Çevriliyor…",
+  "showOriginal": "Orijinali göster",
+  "translatedFrom": "{{language}} dilinden çevrildi",
+  "chooseTranslationLanguage": "Çeviri dili seç",
+  "translationNotNeeded": "Çeviri gerekmiyor",
+  "alreadyInSelectedLanguage": "Bu metin zaten {{language}} dilinde.",
+  "translationFailed": "Çeviri başarısız",
+  "translationFailedDescription": "Çeviri yüklenemedi. Tekrar deneyin.",
+  "close": "Kapat"
 }

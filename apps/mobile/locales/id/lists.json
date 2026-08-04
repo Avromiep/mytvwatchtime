@@ -42,6 +42,7 @@
   "searchToAddShort": "Cari untuk ditambahkan…",
   "recentlyWatched": "Baru saja ditonton",
   "failedToSave": "Gagal menyimpan",
+  "failedToDelete": "Daftar tidak dapat dihapus. Coba lagi.",
   "deleteListQuestion": "Hapus daftar?",
   "deleteCannotUndo": "Tindakan ini tidak dapat dibatalkan.",
   "editList": "Edit daftar",

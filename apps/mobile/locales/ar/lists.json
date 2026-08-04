@@ -42,6 +42,7 @@
   "searchToAddShort": "ابحث للإضافة…",
   "recentlyWatched": "شُوهدت مؤخرًا",
   "failedToSave": "فشل الحفظ",
+  "failedToDelete": "تعذر حذف القائمة. حاول مرة أخرى.",
   "deleteListQuestion": "حذف القائمة؟",
   "deleteCannotUndo": "لا يمكن التراجع عن هذا الإجراء.",
   "editList": "تعديل القائمة",

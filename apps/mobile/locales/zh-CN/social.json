@@ -37,5 +37,18 @@
   "searchUsersHint": "按用户名查找用户",
   "noFollowersYet": "还没有{{type}}",
   "followButton": "关注",
-  "followingButton": "已关注"
+  "followingButton": "已关注",
+  "profileTaste": {
+    "timeline": "动态",
+    "taste": "品味",
+    "privateTitle": "私密个人资料",
+    "privateSubtitle": "关注此用户后即可查看动态和品味。",
+    "topMovieGenres": "最喜欢的电影类型",
+    "topShowGenres": "最喜欢的剧集类型",
+    "inCommon": "你们的共同喜好",
+    "commonGenres": "你们都喜欢{{genres}}。",
+    "forYou": "从对方片库为你推荐",
+    "favoriteMovies": "最喜欢的电影",
+    "favoriteShows": "最喜欢的剧集"
+  }
 }

@@ -42,6 +42,7 @@
   "searchToAddShort": "搜索并添加…",
   "recentlyWatched": "最近观看",
   "failedToSave": "保存失败",
+  "failedToDelete": "无法删除列表，请重试。",
   "deleteListQuestion": "删除片单？",
   "deleteCannotUndo": "此操作无法撤销。",
   "editList": "编辑片单",

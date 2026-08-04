@@ -102,5 +102,15 @@
   "spoilerReported": "Spoiler reported",
   "markAsSpoiler": "Mark as spoiler",
   "replyingToReview": "Replying to {{author}}'s TMDB review",
-  "hideReplies": "Hide replies"
+  "hideReplies": "Hide replies",
+  "translate": "Translate",
+  "translating": "Translating…",
+  "showOriginal": "Show original",
+  "translatedFrom": "Translated from {{language}}",
+  "chooseTranslationLanguage": "Choose translation language",
+  "translationNotNeeded": "Translation not needed",
+  "alreadyInSelectedLanguage": "This text is already in {{language}}.",
+  "translationFailed": "Translation failed",
+  "translationFailedDescription": "The translation could not be loaded. Please try again.",
+  "close": "Close"
 }

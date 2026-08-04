@@ -1,6 +1,27 @@
 import { Paginated, PaginationQuery } from './common';
 import { ListVisibility, MediaType } from './enums';
 import { PublicUserDto } from './auth';
+import type { MediaCardLiteDto } from './discovery';
+
+export type TranslatableTextFormat = 'plain' | 'html';
+
+export interface TranslationValueDto {
+  targetLanguage: string;
+  sourceLanguage?: string | null;
+  text: string;
+  html?: string | null;
+  format: TranslatableTextFormat;
+  translatedAt: string;
+}
+
+export interface TranslatableTextDto {
+  original: string;
+  format: TranslatableTextFormat;
+  originalHtml?: string | null;
+  sourceLanguage?: string | null;
+  eligible: boolean;
+  translation?: TranslationValueDto | null;
+}
 
 /** Sort order for comment feeds and reply threads. */
 export type CommentSort = 'LATEST' | 'MOST_LIKED';
@@ -44,6 +65,7 @@ export interface CommentDto {
   threadId: string;
   author: PublicUserDto;
   body: string;
+  content?: TranslatableTextDto;
   imageUrl?: string | null;
   /** Final GIPHY media URL when the comment carries a GIF attachment (https *.giphy.com). */
   gifUrl?: string | null;
@@ -93,6 +115,7 @@ export interface ExternalReviewDto {
   /** TMDB 1..10 author rating (null when the review has none). */
   rating?: number | null;
   content: string;
+  translatableContent?: TranslatableTextDto;
   /** Canonical TMDB review URL (badge link target). */
   url: string;
   createdAt: string;
@@ -277,12 +300,7 @@ export interface SearchQuery extends PaginationQuery {
 
 /** Activity-feed event kinds (union over the live activity tables). */
 export type FeedItemType =
-  | 'WATCHED'
-  | 'WATCHLISTED'
-  | 'FAVORITED'
-  | 'RATED'
-  | 'REACTED'
-  | 'COMMENTED';
+  'WATCHED' | 'WATCHLISTED' | 'FAVORITED' | 'RATED' | 'REACTED' | 'COMMENTED';
 
 /** Media card attached to a feed item (always resolvable to a detail route). */
 export interface FeedMediaDto {
@@ -301,6 +319,8 @@ export interface FeedItemDetailDto {
   reaction?: string;
   /** Comment excerpt (COMMENTED only; omitted when spoiler-masked). */
   excerpt?: string;
+  /** Comment id used to deep-link COMMENTED activity. */
+  commentId?: string;
   seasonNumber?: number;
   episodeNumber?: number;
 }
@@ -326,4 +346,37 @@ export interface FeedItemDto {
 export interface FeedPageDto {
   items: FeedItemDto[];
   nextCursor?: string;
+}
+
+export interface ProfileTasteGenreDto {
+  id: string;
+  name: string;
+  slug: string;
+  count: number;
+  viewerCount?: number;
+}
+
+export type TasteEndorsementSignal = 'FAVORITE' | 'HIGH_RATING' | 'POSITIVE_REACTION';
+
+export interface TasteRecommendationDto extends MediaCardLiteDto {
+  matchedGenres: ProfileTasteGenreDto[];
+  signals: TasteEndorsementSignal[];
+}
+
+export interface ProfileTasteDto {
+  topGenres: { shows: ProfileTasteGenreDto[]; movies: ProfileTasteGenreDto[] };
+  commonGenres: ProfileTasteGenreDto[];
+  recommendations: { items: TasteRecommendationDto[]; total: number };
+  favoriteShows: { items: MediaCardLiteDto[]; total: number };
+  favoriteMovies: { items: MediaCardLiteDto[]; total: number };
+}
+
+export interface TranslationRequestDto {
+  targetLanguage: string;
+}
+
+export interface TranslationResultDto extends TranslationValueDto {
+  sourceLanguage: string;
+  cached: boolean;
+  sameLanguage?: boolean;
 }

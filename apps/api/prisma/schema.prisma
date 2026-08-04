@@ -399,6 +399,7 @@ model UserProfile {
   location           String?
   isPrivate          Boolean            @default(false) @map("is_private")
   hideAnimeInExplore Boolean            @default(false) @map("hide_anime_in_explore")
+  exploreDefaultFilters Json?           @map("explore_default_filters")
   themePreference    ThemePreference    @default(SYSTEM) @map("theme_preference")
   languagePreference LanguagePreference @default(SYSTEM) @map("language_preference")
   createdAt          DateTime           @default(now()) @map("created_at")
@@ -691,6 +692,8 @@ model ExternalReview {
   avatarUrl       String?          @map("avatar_url")
   rating          Float? // provider 1..10 scale, as given
   content         String           @db.Text
+  language        String?
+  translations    Json             @default("{}")
   url             String // canonical provider review URL (badge target)
   likesCount      Int              @default(0) @map("likes_count")
   reviewCreatedAt DateTime         @map("review_created_at")
@@ -1234,6 +1237,7 @@ model Comment {
   // imported reply's parent is not in our DB yet — linked once the parent arrives.
   parentSourceKey  String?           @map("parent_source_key")
   language         String?
+  translations     Json              @default("{}")
   source           ListSource?       @default(MANUAL) @map("source")
   sourceKey        String?           @map("source_key")
   likesCount       Int               @default(0) @map("likes_count")

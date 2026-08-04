@@ -42,6 +42,7 @@
   "searchToAddShort": "追加する作品を検索…",
   "recentlyWatched": "最近観た作品",
   "failedToSave": "保存に失敗しました",
+  "failedToDelete": "リストを削除できませんでした。もう一度お試しください。",
   "deleteListQuestion": "リストを削除しますか？",
   "deleteCannotUndo": "この操作は元に戻せません。",
   "editList": "リストを編集",

@@ -19,6 +19,7 @@ import {
 } from './thread-utils';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
+import { TranslatableContent } from './TranslatableContent';
 
 /** Avatar center X within a node (avatar starts at the node's left edge). */
 const AVATAR_CX = THREAD_AVATAR / 2;
@@ -110,9 +111,18 @@ export function NodeContent({
             {t('comments:deleted')}
           </T>
         ) : comment.body ? (
-          <T variant="body" style={styles.body}>
-            {comment.body}
-          </T>
+          <TranslatableContent
+            id={comment.reviewId ?? comment.id}
+            kind={comment.kind === 'review' ? 'review' : 'comment'}
+            content={
+              comment.content ?? {
+                original: comment.body,
+                format: 'plain',
+                eligible: false,
+              }
+            }
+            style={styles.body}
+          />
         ) : null}
 
         {!tombstone ? <CommentMedia image={comment.image} gifUrl={comment.gifUrl} /> : null}

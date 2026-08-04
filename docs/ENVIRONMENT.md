@@ -113,6 +113,18 @@ docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-temp-uploa
 | Variable         | When Missing                                                 |
 | ---------------- | ------------------------------------------------------------ |
 | `OPENAI_API_KEY` | Image moderation skipped. Images still processed and stored. |
+| `AZURE_TRANSLATOR_KEY` / `AZURE_TRANSLATOR_REGION` | New comment/review translations are unavailable; cached translations still render. |
+
+### Comment and review translation
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `AZURE_TRANSLATOR_KEY` | Microsoft Azure Translator subscription key | — |
+| `AZURE_TRANSLATOR_REGION` | Azure resource region sent with Translator requests | — |
+| `AZURE_TRANSLATOR_ENDPOINT` | Translator Text API base URL | `https://api.cognitive.microsofttranslator.com` |
+
+The public `GET /feature-flags` response exposes `comment_translation`. Keys and complete
+provider responses must never be logged.
 
 ---
 

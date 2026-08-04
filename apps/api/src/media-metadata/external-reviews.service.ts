@@ -40,7 +40,7 @@ export class ExternalReviewsService {
       .catch(() => undefined);
   }
 
-  /** Full page-1 replace for one target (delete-then-insert, one transaction). */
+  /** Stable page-1 sync. Existing ids, likes, replies, and translations survive unchanged content. */
   private async replace(kind: 'media' | 'episode', targetId: string, reviews: NormalizedReview[]) {
     const rows = reviews.map((r) => ({
       provider: ExternalProvider.TMDB,
@@ -56,11 +56,31 @@ export class ExternalReviewsService {
       reviewCreatedAt: r.createdAt ? new Date(r.createdAt) : new Date(),
       reviewUpdatedAt: r.updatedAt ? new Date(r.updatedAt) : null,
     }));
+    const existing = await this.prisma.externalReview.findMany({
+      where: kind === 'media' ? { mediaId: targetId } : { episodeId: targetId },
+      select: { externalId: true, content: true },
+    });
+    const contentByExternalId = new Map(existing.map((row) => [row.externalId, row.content]));
     await this.prisma.$transaction(async (tx) => {
+      for (const row of rows) {
+        const contentChanged = contentByExternalId.get(row.externalId) !== row.content;
+        await tx.externalReview.upsert({
+          where: {
+            provider_externalId: { provider: ExternalProvider.TMDB, externalId: row.externalId },
+          },
+          create: row,
+          update: {
+            ...row,
+            ...(contentChanged ? { language: null, translations: {} } : {}),
+          },
+        });
+      }
       await tx.externalReview.deleteMany({
-        where: kind === 'media' ? { mediaId: targetId } : { episodeId: targetId },
+        where: {
+          ...(kind === 'media' ? { mediaId: targetId } : { episodeId: targetId }),
+          externalId: { notIn: rows.map((row) => row.externalId) },
+        },
       });
-      if (rows.length) await tx.externalReview.createMany({ data: rows, skipDuplicates: true });
     });
   }
 

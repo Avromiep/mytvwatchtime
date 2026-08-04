@@ -78,5 +78,15 @@
   "spoilerReported": "Spoiler gemeldet",
   "markAsSpoiler": "Als Spoiler markieren",
   "replyingToReview": "Antwort auf die TMDB-Rezension von {{author}}",
-  "hideReplies": "Antworten ausblenden"
+  "hideReplies": "Antworten ausblenden",
+  "translate": "Übersetzen",
+  "translating": "Wird übersetzt…",
+  "showOriginal": "Original anzeigen",
+  "translatedFrom": "Übersetzt aus {{language}}",
+  "chooseTranslationLanguage": "Übersetzungssprache wählen",
+  "translationNotNeeded": "Keine Übersetzung erforderlich",
+  "alreadyInSelectedLanguage": "Dieser Text ist bereits auf {{language}}.",
+  "translationFailed": "Übersetzung fehlgeschlagen",
+  "translationFailedDescription": "Die Übersetzung konnte nicht geladen werden. Versuche es erneut.",
+  "close": "Schließen"
 }
