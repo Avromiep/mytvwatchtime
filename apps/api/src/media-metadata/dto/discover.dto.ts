@@ -85,6 +85,12 @@ export class TrendingQueryDto extends ExploreFiltersDto {
   @Min(1)
   page?: number;
 
+  /** Pins infinite pagination to one completed hydration snapshot. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  snapshot?: string;
+
   /** Genre slug filter (same semantics as SearchQueryDto.genre). */
   @ApiPropertyOptional()
   @IsOptional()

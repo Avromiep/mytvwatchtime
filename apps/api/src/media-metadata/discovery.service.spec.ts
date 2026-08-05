@@ -1,6 +1,7 @@
 import { MediaType } from '@prisma/client';
 import { DiscoveryService } from './discovery.service';
 import { TmdbProvider } from './providers/tmdb.provider';
+import { ProviderError } from './providers/shared/provider-errors';
 
 /** posterLast: stable poster-last ordering for merged search result windows. */
 describe('DiscoveryService.posterLast', () => {
@@ -98,6 +99,7 @@ describe('DiscoveryService forgiving search', () => {
   const make = () => {
     const prisma = {
       userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
+      hydrationJob: { findFirst: jest.fn().mockResolvedValue(null) },
       mediaItem: {
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
@@ -704,6 +706,7 @@ describe('DiscoveryService trending release-date sort', () => {
     const tmdb = { enabled: true };
     const prisma = {
       userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
+      hydrationJob: { findFirst: jest.fn().mockResolvedValue(null) },
       mediaItem: {
         findMany: jest.fn().mockResolvedValue(
           Object.entries(years).map(([id, y]) => ({
@@ -767,6 +770,7 @@ describe('DiscoveryService curated lists', () => {
     };
     const prisma = {
       userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
+      hydrationJob: { findFirst: jest.fn().mockResolvedValue(null) },
       mediaItem: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const svc = new DiscoveryService(
@@ -780,7 +784,7 @@ describe('DiscoveryService curated lists', () => {
     jest.spyOn(svc as any, 'cachedListEntries').mockResolvedValue([{ id: 'x', g: [], oc: [] }]);
     jest.spyOn(svc as any, 'fetchListDtos').mockImplementation(async (ids: unknown) => ids as any);
     jest.spyOn(svc as any, 'fetchCardDtos').mockImplementation(async (ids: unknown) => ids as any);
-    return { svc, tmdb };
+    return { svc, tmdb, prisma };
   };
 
   it('topRatedShows/topRatedMovies route through their provider endpoints', async () => {
@@ -831,6 +835,127 @@ describe('DiscoveryService curated lists', () => {
       topRatedMovies: ['x'],
       nowPlayingMovies: ['x'],
     });
+  });
+
+  it('paginates a completed scheduled snapshot and pins subsequent pages to it', async () => {
+    const { svc, tmdb, prisma } = make();
+    const ids = Array.from({ length: 45 }, (_, index) => `show-${index + 1}`);
+    prisma.hydrationJob.findFirst.mockResolvedValue({
+      id: 'snapshot-1',
+      items: ids.map((mediaId) => ({ mediaId })),
+    });
+    prisma.mediaItem.findMany.mockResolvedValue(ids.map((id) => ({ id })));
+
+    const res = await svc.topRatedShows(
+      undefined,
+      2,
+      20,
+      undefined,
+      undefined,
+      false,
+      'snapshot-1',
+    );
+
+    expect(res).toEqual({
+      items: ids.slice(20, 40),
+      page: 2,
+      hasMore: true,
+      snapshotId: 'snapshot-1',
+    });
+    expect(prisma.hydrationJob.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: 'snapshot-1',
+          status: 'completed',
+          railSnapshot: true,
+        }),
+      }),
+    );
+    expect(tmdb.topRatedShows).not.toHaveBeenCalled();
+    expect((svc as any).cachedListEntries).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a paginated DB rail when TMDB fails before the first snapshot', async () => {
+    const { svc, prisma } = make();
+    (svc as any).cachedListEntries.mockRejectedValueOnce(
+      new ProviderError('network', 'tmdb network: fetch failed'),
+    );
+    prisma.mediaItem.findMany.mockResolvedValue([{ id: 'db-1' }]);
+
+    await expect(svc.topRatedShows(undefined, 1, 20)).resolves.toEqual({
+      items: ['db-1'],
+      page: 1,
+      hasMore: false,
+    });
+  });
+});
+
+describe('DiscoveryService provider search degradation', () => {
+  const make = () => {
+    const tmdb = {
+      enabled: true,
+      searchShows: jest
+        .fn()
+        .mockRejectedValue(new ProviderError('network', 'tmdb network: fetch failed')),
+      searchMovies: jest
+        .fn()
+        .mockRejectedValue(new ProviderError('network', 'tmdb network: fetch failed')),
+    };
+    const tvdb = {
+      enabled: true,
+      searchShows: jest.fn().mockResolvedValue({
+        items: [{ tvdbId: 42, title: 'TVDB result', year: 2024 }],
+      }),
+      searchMovies: jest.fn().mockResolvedValue({ items: [] }),
+    };
+    const meta = {
+      lightUpsertShowTvdb: jest.fn().mockResolvedValue('tvdb-1'),
+      lightUpsertMovieTvdb: jest.fn(),
+    };
+    const prisma = {
+      mediaItem: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const hydration = {
+      enqueueTvdbSearch: jest.fn().mockResolvedValue(undefined),
+      enqueueClassifyCandidate: jest.fn().mockResolvedValue(undefined),
+    };
+    const svc = new DiscoveryService(
+      tmdb as any,
+      tvdb as any,
+      meta as any,
+      prisma as any,
+      {} as any,
+      hydration as any,
+    );
+    return { svc, tmdb, tvdb };
+  };
+
+  it('retains local IDs when every requested TMDB branch has a network failure', async () => {
+    const { svc } = make();
+    const entry = await (svc as any).fetchNextTmdbPage(
+      'Strange',
+      { q: 'Strange' },
+      { ids: ['local-1'], genreIds: {}, tmdbPagesFetched: 0, exhausted: false },
+    );
+
+    expect(entry).toEqual({
+      ids: ['local-1'],
+      genreIds: {},
+      tmdbPagesFetched: 1,
+      exhausted: true,
+    });
+  });
+
+  it('uses TVDB when local search is empty and TMDB is unavailable', async () => {
+    const { svc, tvdb } = make();
+    const entry = await (svc as any).initialSearch('Strange', {
+      q: 'Strange',
+      type: MediaType.SHOW,
+    });
+
+    expect(entry.ids).toEqual(['tvdb-1']);
+    expect(entry.exhausted).toBe(true);
+    expect(tvdb.searchShows).toHaveBeenCalledWith('strange', 1);
   });
 });
 

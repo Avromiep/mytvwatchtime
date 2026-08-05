@@ -1732,6 +1732,8 @@ model HydrationJob {
   providerCalls  Json?              @map("provider_calls") // { tmdb: n, tvdb: n, kitsu: n, jikan: n }
   errorMessage   String?            @map("error_message")
   currentItem    String?            @map("current_item")
+  /// Completed scheduled catalog hydrations can serve as ordered Explore rail snapshots.
+  railSnapshot   Boolean            @default(false) @map("rail_snapshot")
   startedAt      DateTime?          @map("started_at")
   completedAt    DateTime?          @map("completed_at")
   createdAt      DateTime           @default(now()) @map("created_at")
@@ -1740,6 +1742,7 @@ model HydrationJob {
 
   @@index([status])
   @@index([type])
+  @@index([type, railSnapshot, status, completedAt])
   @@map("hydration_jobs")
 }
 
@@ -1750,6 +1753,8 @@ model HydrationJobItem {
   mediaType          String    @map("media_type")
   status             String    @default("pending")
   mediaId            String?   @map("media_id")
+  /// One-based provider rank within a scheduled Explore rail refresh.
+  rank               Int?
   // Multi-provider identity (Migration B): for non-TMDB/identity-keyed items.
   provider           String?
   providerEntityKind String?   @map("provider_entity_kind")
@@ -1761,6 +1766,7 @@ model HydrationJobItem {
   job HydrationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@index([jobId])
+  @@index([jobId, status, rank])
   @@map("hydration_job_items")
 }
 

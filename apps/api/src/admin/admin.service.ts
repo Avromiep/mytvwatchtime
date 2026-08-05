@@ -441,7 +441,7 @@ export class AdminService {
   async triggerHydration(
     adminId: string,
     type: string,
-    options?: { tmdbId?: number; pages?: number },
+    options?: { tmdbId?: number; pages?: number; railSnapshot?: boolean },
   ) {
     if (!this.tmdb.enabled) throw new BadRequestException('TMDb API key not configured');
 
@@ -560,12 +560,14 @@ export class AdminService {
         type: type as any,
         status: 'running',
         triggeredBy: adminId,
+        railSnapshot: options?.railSnapshot ?? false,
         totalItems: items.length,
         startedAt: new Date(),
         items: {
-          create: items.map((i) => ({
+          create: items.map((i, index) => ({
             tmdbId: i.tmdbId,
             mediaType: i.mediaType,
+            rank: index + 1,
             status: 'pending',
           })),
         },
@@ -574,7 +576,7 @@ export class AdminService {
     });
 
     // Process items (async, don't await — let it run in background)
-    this.processHydrationJob(job.id, type, adminId).catch((e) =>
+    this.processHydrationJob(job.id, type, adminId, options?.railSnapshot ?? false).catch((e) =>
       this.logger.error(`Hydration job ${job.id} failed: ${(e as Error).message}`),
     );
 
@@ -586,7 +588,12 @@ export class AdminService {
     return { jobId: job.id, totalItems: items.length, estimatedApiCalls, status: 'running' };
   }
 
-  private async processHydrationJob(jobId: string, type: string, adminId: string) {
+  private async processHydrationJob(
+    jobId: string,
+    type: string,
+    adminId: string,
+    railSnapshot = false,
+  ) {
     const items = await this.prisma.hydrationJobItem.findMany({
       where: { jobId, status: 'pending' },
     });
@@ -660,7 +667,15 @@ export class AdminService {
     await this.prisma.hydrationJob.update({
       where: { id: jobId },
       data: {
-        status: failed > 0 && processed === 0 ? 'failed' : 'completed',
+        // A rail snapshot activates only when every ranked item was persisted.
+        // Empty or partial scheduled refreshes leave the previous completed job active.
+        status: railSnapshot
+          ? processed > 0 && failed === 0
+            ? 'completed'
+            : 'failed'
+          : failed > 0 && processed === 0
+            ? 'failed'
+            : 'completed',
         completedAt: new Date(),
         processedItems: processed + failed + skipped,
         failedItems: failed,
@@ -728,7 +743,7 @@ export class AdminService {
       data: { status: 'running', failedItems: 0, startedAt: new Date(), completedAt: null },
     });
     // Re-run
-    this.processHydrationJob(jobId, job.type, adminId).catch((e) =>
+    this.processHydrationJob(jobId, job.type, adminId, job.railSnapshot).catch((e) =>
       this.logger.error(`Retry job ${jobId} failed: ${(e as Error).message}`),
     );
     await this.audit(adminId, 'retry_job', 'job', jobId);
@@ -831,7 +846,10 @@ export class AdminService {
   async triggerScheduledHydration(adminId: string, id: string) {
     const sched = await this.prisma.scheduledHydration.findUnique({ where: { id } });
     if (!sched) throw new NotFoundException('Scheduled hydration not found');
-    const result = await this.triggerHydration(adminId, sched.type, { pages: sched.pages });
+    const result = await this.triggerHydration(adminId, sched.type, {
+      pages: sched.pages,
+      railSnapshot: true,
+    });
     await this.prisma.scheduledHydration.update({
       where: { id },
       data: { lastRunAt: new Date(), lastJobId: result.jobId },

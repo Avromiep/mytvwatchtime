@@ -489,12 +489,14 @@ const useMediaListInfinite = (path: string, filters?: ExploreFilters) =>
   useInfiniteQuery({
     queryKey: ['mediaList', path, filterKey(filters)],
     queryFn: ({ pageParam }) =>
-      api.get<{ items: any[]; page: number; hasMore: boolean }>(path, {
-        page: pageParam as number,
+      api.get<{ items: any[]; page: number; hasMore: boolean; snapshotId?: string }>(path, {
+        page: pageParam.page,
+        snapshot: pageParam.snapshot,
         ...filterParams(filters),
       }),
-    initialPageParam: 1,
-    getNextPageParam: (last) => (last?.hasMore ? last.page + 1 : undefined),
+    initialPageParam: { page: 1, snapshot: undefined as string | undefined },
+    getNextPageParam: (last) =>
+      last?.hasMore ? { page: last.page + 1, snapshot: last.snapshotId } : undefined,
   });
 export const useTopRatedShowsBrowse = (filters?: ExploreFilters) =>
   useMediaListInfinite('/top-rated/shows', filters);

@@ -35,35 +35,35 @@ export class MediaController {
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
   trendingShows(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
-    return this.discovery.trendingShows(userId, q.page ?? 1, 20, q.genre, q);
+    return this.discovery.trendingShows(userId, q.page ?? 1, 20, q.genre, q, false, q.snapshot);
   }
 
   @Get('trending/movies')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
   trendingMovies(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
-    return this.discovery.trendingMovies(userId, q.page ?? 1, 20, q.genre, q);
+    return this.discovery.trendingMovies(userId, q.page ?? 1, 20, q.genre, q, false, q.snapshot);
   }
 
   @Get('top-rated/shows')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
   topRatedShows(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
-    return this.discovery.topRatedShows(userId, q.page ?? 1, 20, q.genre, q);
+    return this.discovery.topRatedShows(userId, q.page ?? 1, 20, q.genre, q, false, q.snapshot);
   }
 
   @Get('top-rated/movies')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
   topRatedMovies(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
-    return this.discovery.topRatedMovies(userId, q.page ?? 1, 20, q.genre, q);
+    return this.discovery.topRatedMovies(userId, q.page ?? 1, 20, q.genre, q, false, q.snapshot);
   }
 
   @Get('now-playing/movies')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
   nowPlayingMovies(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
-    return this.discovery.nowPlayingMovies(userId, q.page ?? 1, 20, q.genre, q);
+    return this.discovery.nowPlayingMovies(userId, q.page ?? 1, 20, q.genre, q, false, q.snapshot);
   }
 
   @Get('discover/sections')

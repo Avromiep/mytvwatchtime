@@ -1,7 +1,7 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { MediaType } from '@tvwatch/shared';
 import type { GenreFilterDto, MediaCardLiteDto } from '@tvwatch/shared';
-import { Prisma } from '@prisma/client';
+import { HydrationJobType, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { currentLanguage } from '../common/language.context';
 import { RedisService } from '../common/redis/redis.service';
@@ -11,6 +11,7 @@ import { MediaMetadataService } from './media-metadata.service';
 import { TmdbProvider, NormalizedSearchItem } from './providers/tmdb.provider';
 import { TvdbProvider } from './providers/tvdb.provider';
 import { HydrationQueue } from './hydration/hydration.queue';
+import { isProviderError } from './providers/shared/provider-errors';
 import { DiscoverQueryDto, ExploreFiltersDto, SearchQueryDto } from './dto/discover.dto';
 import { paginate } from '../common/dto/pagination.dto';
 
@@ -63,6 +64,14 @@ interface ExploreFilterInput {
   country?: string;
   hideAnime?: boolean;
   minRating?: number;
+}
+
+interface RailListOptions {
+  railType: HydrationJobType;
+  idsNs: string;
+  windowNs: string;
+  kind: 'show' | 'movie';
+  fetchPage: (page: number) => Promise<NormalizedSearchItem[]>;
 }
 
 @Injectable()
@@ -355,9 +364,31 @@ export class DiscoveryService {
           .searchMovies(providerTerm, nextPage)
           .then((r) => ({ kind: 'movie' as const, items: r.items })),
       );
-    const results = await Promise.all(tasks);
+    const settled = await Promise.allSettled(tasks);
+    const results: { kind: 'show' | 'movie'; items: any[] }[] = [];
+    for (const result of settled) {
+      if (result.status === 'fulfilled') {
+        results.push(result.value);
+        continue;
+      }
+      if (!isProviderError(result.reason)) throw result.reason;
+      this.logger.warn(
+        `TMDB search unavailable (${result.reason.category}): ${result.reason.message}`,
+      );
+    }
 
-    let allShort = results.length > 0;
+    // A provider outage must not discard local catalog matches or prevent the TVDB
+    // fallback in initialSearch. Mark this window exhausted when every requested
+    // TMDB branch failed so the same request does not spin through more retries.
+    if (results.length === 0) {
+      return {
+        ...entry,
+        tmdbPagesFetched: nextPage,
+        exhausted: true,
+      };
+    }
+
+    let allShort = true;
     for (const { kind, items } of results) {
       if (!items.length) continue;
       const upserted = await Promise.all(
@@ -528,71 +559,209 @@ export class DiscoveryService {
     return entries;
   }
 
+  /** Latest completed scheduled hydration for a rail; running/failed refreshes never activate. */
+  private async completedRailSnapshot(railType: HydrationJobType, snapshotId?: string) {
+    const job = await this.prisma.hydrationJob.findFirst({
+      where: {
+        type: railType,
+        status: 'completed',
+        railSnapshot: true,
+        ...(snapshotId ? { id: snapshotId } : {}),
+      },
+      orderBy: { completedAt: 'desc' },
+      select: {
+        id: true,
+        items: {
+          where: { status: 'done', mediaId: { not: null }, rank: { not: null } },
+          orderBy: [{ rank: 'asc' }, { id: 'asc' }],
+          select: { mediaId: true },
+        },
+      },
+    });
+    if (!job) return null;
+    const ids = job.items.flatMap((item) => (item.mediaId ? [item.mediaId] : []));
+    return ids.length ? { id: job.id, ids } : null;
+  }
+
+  private exploreMediaWhere(
+    type: MediaType,
+    q: ExploreFilterInput | undefined,
+    hideAnime: boolean,
+  ): Prisma.MediaItemWhereInput {
+    const exclude = this.parseSlugList(q?.excludeGenres);
+    const country = q?.country?.trim().toUpperCase();
+    const genreSome = q?.genre?.trim()
+      ? { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } }
+      : undefined;
+    return {
+      type,
+      ...(hideAnime ? { contentClassification: { not: 'ANIME' as const } } : {}),
+      ...(genreSome || exclude.length
+        ? {
+            genres: {
+              ...(genreSome ?? {}),
+              ...(exclude.length
+                ? { none: { genre: { slug: { in: exclude, mode: 'insensitive' as const } } } }
+                : {}),
+            },
+          }
+        : {}),
+      ...(q?.minRating ? { rating: { gte: q.minRating } } : {}),
+      ...(country ? this.countryWhere(country, type) : {}),
+    };
+  }
+
+  private exploreOrderBy(
+    type: MediaType,
+    q?: ExploreFilterInput,
+  ): Prisma.MediaItemOrderByWithRelationInput {
+    return q?.sort === 'releaseDate'
+      ? type === MediaType.MOVIE
+        ? { movie: { releaseDate: 'desc' } }
+        : { show: { yearStart: 'desc' } }
+      : { popularity: 'desc' };
+  }
+
+  /** Page a durable rail snapshot while applying filters against hydrated DB metadata. */
+  private async snapshotListPage(
+    opts: RailListOptions,
+    userId: string | undefined,
+    page: number,
+    pageSize: number,
+    genre: string | undefined,
+    filters: ExploreFiltersDto | undefined,
+    compact: boolean,
+    snapshotId?: string,
+  ) {
+    const snapshot = await this.completedRailSnapshot(opts.railType, snapshotId);
+    if (!snapshot) return null;
+    const type = opts.kind === 'show' ? MediaType.SHOW : MediaType.MOVIE;
+    const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
+    const where = this.exploreMediaWhere(type, { ...filters, genre }, hideAnime);
+    const matching = await this.prisma.mediaItem.findMany({
+      where: { ...where, id: { in: snapshot.ids } },
+      select: { id: true },
+    });
+    const matchingIds = new Set(matching.map((item) => item.id));
+    let ordered = snapshot.ids.filter((id) => matchingIds.has(id));
+    if (filters?.sort === 'releaseDate') ordered = await this.sortIdsByReleaseDesc(ordered);
+
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.max(1, pageSize);
+    const start = (safePage - 1) * safePageSize;
+    const pageIds = ordered.slice(start, start + safePageSize);
+    const items = compact
+      ? await this.fetchCardDtos(pageIds, userId, safePageSize)
+      : await this.fetchListDtos(pageIds, userId, safePageSize);
+    return {
+      items,
+      page: safePage,
+      hasMore: ordered.length > start + safePageSize,
+      snapshotId: snapshot.id,
+    };
+  }
+
+  /** Ranked-catalog fallback used only before a rail has its first snapshot or during rollout. */
+  private async databaseListPage(
+    type: MediaType,
+    page: number,
+    pageSize: number,
+    userId?: string,
+    q?: ExploreFilterInput,
+    compact = false,
+  ) {
+    const hideAnime = (q?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.max(1, pageSize);
+    const rows = await this.prisma.mediaItem.findMany({
+      where: this.exploreMediaWhere(type, q, hideAnime),
+      orderBy: this.exploreOrderBy(type, q),
+      skip: (safePage - 1) * safePageSize,
+      take: safePageSize + 1,
+      select: { id: true },
+    });
+    const pageIds = rows.slice(0, safePageSize).map((row) => row.id);
+    const items = compact
+      ? await this.fetchCardDtos(pageIds, userId, safePageSize)
+      : await this.fetchListDtos(pageIds, userId, safePageSize);
+    return { items, page: safePage, hasMore: rows.length > safePageSize };
+  }
+
   /**
    * Shared paged-list flow (trending + curated lists): unfiltered pages come from
    * the short entry cache; genre/exclusion/country filters accumulate a filtered
    * upstream window; sort=releaseDate re-orders the window newest-first.
    */
   private async listPage(
-    opts: {
-      idsNs: string;
-      windowNs: string;
-      kind: 'show' | 'movie';
-      fetchPage: (page: number) => Promise<NormalizedSearchItem[]>;
-    },
+    opts: RailListOptions,
     userId?: string,
     page = 1,
     pageSize = 20,
     genre?: string,
     filters?: ExploreFiltersDto,
     compact = false,
+    snapshotId?: string,
   ) {
+    const snapshot = await this.snapshotListPage(
+      opts,
+      userId,
+      page,
+      pageSize,
+      genre,
+      filters,
+      compact,
+      snapshotId,
+    );
+    if (snapshot) return snapshot;
+
+    const type = opts.kind === 'show' ? MediaType.SHOW : MediaType.MOVIE;
     if (!this.tmdb.enabled)
-      return {
-        items: await this.topDb(
-          opts.kind === 'show' ? MediaType.SHOW : MediaType.MOVIE,
-          pageSize,
-          userId,
-          { ...filters, genre },
-          compact,
-        ),
-        page,
-        hasMore: false,
-      };
-    const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
-    const releaseSort = filters?.sort === 'releaseDate';
-    const g = genre?.trim();
-    if (g || this.parseSlugList(filters?.excludeGenres).length > 0 || filters?.country?.trim()) {
-      const entriesFor = (p: number) =>
-        this.cachedListEntries(opts.idsNs, opts.kind, p, opts.fetchPage);
-      const win = await this.listWindow(
-        opts.windowNs,
-        opts.kind,
-        g,
-        page * pageSize,
-        hideAnime,
-        filters,
-        entriesFor,
+      return this.databaseListPage(type, page, pageSize, userId, { ...filters, genre }, compact);
+
+    try {
+      const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
+      const releaseSort = filters?.sort === 'releaseDate';
+      const g = genre?.trim();
+      if (g || this.parseSlugList(filters?.excludeGenres).length > 0 || filters?.country?.trim()) {
+        const entriesFor = (p: number) =>
+          this.cachedListEntries(opts.idsNs, opts.kind, p, opts.fetchPage);
+        const win = await this.listWindow(
+          opts.windowNs,
+          opts.kind,
+          g,
+          page * pageSize,
+          hideAnime,
+          filters,
+          entriesFor,
+        );
+        const ids = releaseSort ? await this.sortIdsByReleaseDesc(win.ids) : win.ids;
+        const pageIds = ids.slice((page - 1) * pageSize, page * pageSize);
+        const items = compact
+          ? await this.fetchCardDtos(pageIds, userId, pageSize)
+          : await this.fetchListDtos(pageIds, userId, pageSize);
+        return { items, page, hasMore: ids.length > page * pageSize || !win.exhausted };
+      }
+      const entries = await this.cachedListEntries(opts.idsNs, opts.kind, page, opts.fetchPage);
+      const visible = hideAnime ? await this.filterAnimeEntries(entries) : entries;
+      const ids = visible.map((e) => e.id);
+      const ordered = releaseSort ? await this.sortIdsByReleaseDesc(ids) : ids;
+      const listItems = compact
+        ? await this.fetchCardDtos(ordered, userId, pageSize)
+        : await this.fetchListDtos(ordered, userId, pageSize);
+      return { items: listItems, page, hasMore: entries.length === 20 };
+    } catch (error) {
+      if (!isProviderError(error)) throw error;
+      this.logger.warn(
+        `Explore rail ${opts.railType} fell back to the catalog (${error.category}): ${error.message}`,
       );
-      const ids = releaseSort ? await this.sortIdsByReleaseDesc(win.ids) : win.ids;
-      const pageIds = ids.slice((page - 1) * pageSize, page * pageSize);
-      const items = compact
-        ? await this.fetchCardDtos(pageIds, userId, pageSize)
-        : await this.fetchListDtos(pageIds, userId, pageSize);
-      return { items, page, hasMore: ids.length > page * pageSize || !win.exhausted };
+      return this.databaseListPage(type, page, pageSize, userId, { ...filters, genre }, compact);
     }
-    const entries = await this.cachedListEntries(opts.idsNs, opts.kind, page, opts.fetchPage);
-    const visible = hideAnime ? await this.filterAnimeEntries(entries) : entries;
-    const ids = visible.map((e) => e.id);
-    const ordered = releaseSort ? await this.sortIdsByReleaseDesc(ids) : ids;
-    const listItems = compact
-      ? await this.fetchCardDtos(ordered, userId, pageSize)
-      : await this.fetchListDtos(ordered, userId, pageSize);
-    return { items: listItems, page, hasMore: entries.length === 20 };
   }
 
   private trendingListOpts(kind: 'show' | 'movie') {
     return {
+      railType:
+        kind === 'show' ? HydrationJobType.trending_shows : HydrationJobType.trending_movies,
       idsNs: 'trending:ids:v3',
       windowNs: 'trending:filtered:v1',
       kind,
@@ -608,6 +777,7 @@ export class DiscoveryService {
     genre?: string,
     filters?: ExploreFiltersDto,
     compact = false,
+    snapshotId?: string,
   ) {
     // NOTE: TMDB trending has no server-side sort — with sort=releaseDate the
     // filtered window / page is re-ordered newest-first locally (sortIdsByReleaseDesc).
@@ -619,6 +789,7 @@ export class DiscoveryService {
       genre,
       filters,
       compact,
+      snapshotId,
     );
   }
 
@@ -629,6 +800,7 @@ export class DiscoveryService {
     genre?: string,
     filters?: ExploreFiltersDto,
     compact = false,
+    snapshotId?: string,
   ) {
     return this.listPage(
       this.trendingListOpts('movie'),
@@ -638,6 +810,7 @@ export class DiscoveryService {
       genre,
       filters,
       compact,
+      snapshotId,
     );
   }
 
@@ -648,9 +821,11 @@ export class DiscoveryService {
     genre?: string,
     filters?: ExploreFiltersDto,
     compact = false,
+    snapshotId?: string,
   ) {
     return this.listPage(
       {
+        railType: HydrationJobType.top_rated_shows,
         idsNs: 'list:ids:v1:top-rated',
         windowNs: 'list:filtered:v1:top-rated',
         kind: 'show',
@@ -662,6 +837,7 @@ export class DiscoveryService {
       genre,
       filters,
       compact,
+      snapshotId,
     );
   }
 
@@ -672,9 +848,11 @@ export class DiscoveryService {
     genre?: string,
     filters?: ExploreFiltersDto,
     compact = false,
+    snapshotId?: string,
   ) {
     return this.listPage(
       {
+        railType: HydrationJobType.top_rated_movies,
         idsNs: 'list:ids:v1:top-rated',
         windowNs: 'list:filtered:v1:top-rated',
         kind: 'movie',
@@ -686,6 +864,7 @@ export class DiscoveryService {
       genre,
       filters,
       compact,
+      snapshotId,
     );
   }
 
@@ -696,9 +875,11 @@ export class DiscoveryService {
     genre?: string,
     filters?: ExploreFiltersDto,
     compact = false,
+    snapshotId?: string,
   ) {
     return this.listPage(
       {
+        railType: HydrationJobType.now_playing_movies,
         idsNs: 'list:ids:v1:now-playing',
         windowNs: 'list:filtered:v1:now-playing',
         kind: 'movie',
@@ -710,6 +891,7 @@ export class DiscoveryService {
       genre,
       filters,
       compact,
+      snapshotId,
     );
   }
 
@@ -1027,9 +1209,7 @@ export class DiscoveryService {
         this.trendingMovies(userId, 1, 20, g, filters, true),
         this.topRatedShows(userId, 1, 20, g, filters, true),
         this.topRatedMovies(userId, 1, 20, g, filters, true),
-        this.tmdb.enabled
-          ? this.nowPlayingMovies(userId, 1, 20, g, filters, true)
-          : { items: [], page: 1, hasMore: false },
+        this.nowPlayingMovies(userId, 1, 20, g, filters, true),
       ]);
     return {
       trendingShows: trendingShows.items,

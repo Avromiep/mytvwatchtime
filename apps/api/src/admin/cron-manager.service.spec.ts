@@ -256,6 +256,7 @@ describe('CronManagerService', () => {
 
     expect(adminService.triggerHydration).toHaveBeenCalledWith('system', 'trending_shows', {
       pages: 2,
+      railSnapshot: true,
     });
     expect(prisma.scheduledHydration.update).toHaveBeenCalledWith({
       where: { id: 'h1' },

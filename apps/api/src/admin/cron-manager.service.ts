@@ -327,6 +327,7 @@ export class CronManagerService implements OnModuleInit {
     if (!row || !row.enabled) return;
     const result = await this.adminService.triggerHydration('system', row.type, {
       pages: row.pages,
+      railSnapshot: true,
     });
     await this.prisma.scheduledHydration.update({
       where: { id: row.id },

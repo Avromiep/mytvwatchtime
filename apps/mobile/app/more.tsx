@@ -100,13 +100,15 @@ export default function MoreScreen() {
   const pageQuery = useInfiniteQuery({
     queryKey: ['more', pagedPath, genre ?? '', x ?? '', s ?? '', c ?? '', a ?? ''],
     queryFn: ({ pageParam }) =>
-      api.get<{ items: any[]; hasMore: boolean }>(pagedPath!, {
-        page: pageParam,
+      api.get<{ items: any[]; hasMore: boolean; snapshotId?: string }>(pagedPath!, {
+        page: pageParam.page,
+        snapshot: pageParam.snapshot,
         genre: genre || undefined,
         ...exploreFilters,
       }),
-    initialPageParam: 1,
-    getNextPageParam: (last, pages) => (last.hasMore ? pages.length + 1 : undefined),
+    initialPageParam: { page: 1, snapshot: undefined as string | undefined },
+    getNextPageParam: (last, pages) =>
+      last.hasMore ? { page: pages.length + 1, snapshot: last.snapshotId } : undefined,
     enabled: !!pagedPath,
     staleTime: 60000,
   });
