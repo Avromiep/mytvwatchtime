@@ -29,7 +29,7 @@ export class CollectionsService {
       this.redis.delByPattern(`showsprogress:${userId}:*`),
       // Watchlist membership feeds the for-you exclusion set; favorites feed
       // its affinity — both must recompute on change.
-      this.redis.delByPattern(`foryou:v1:${userId}:*`),
+      this.redis.delByPattern(`foryou:v3:${userId}:*`),
       this.redis.del(`watchnext:${userId}`),
       this.redis.del(`upcoming:${userId}`),
     ]);
@@ -77,6 +77,7 @@ export class CollectionsService {
         data: { dropped: true },
       });
       await this.invalidateUserLibraryCaches(userId);
+      this.events.emit('watchlist.removed', { userId, mediaId });
     }
     return { inWatchlist: false };
   }
@@ -90,8 +91,10 @@ export class CollectionsService {
     const media = await this.prisma.mediaItem.findUnique({ where: { id: mediaId } });
     if (!media) throw new NotFoundException('Media not found');
 
+    let removedFromWatchlist = false;
     await this.prisma.$transaction(async (tx) => {
       const existing = await tx.watchlistItem.deleteMany({ where: { userId, mediaId } });
+      removedFromWatchlist = existing.count > 0;
       if (existing.count > 0) {
         await tx.mediaItem.update({
           where: { id: mediaId },
@@ -108,6 +111,7 @@ export class CollectionsService {
     });
 
     await this.invalidateUserLibraryCaches(userId);
+    if (removedFromWatchlist) this.events.emit('watchlist.removed', { userId, mediaId });
     return { dropped: true, inWatchlist: false };
   }
 
@@ -195,8 +199,9 @@ export class CollectionsService {
   }
 
   async removeFavorite(userId: string, mediaId: string) {
-    await this.prisma.favorite.deleteMany({ where: { userId, mediaId } });
+    const existing = await this.prisma.favorite.deleteMany({ where: { userId, mediaId } });
     await this.invalidateUserLibraryCaches(userId);
+    if (existing.count > 0) this.events.emit('favorite.removed', { userId, mediaId });
     return { favorite: false };
   }
 

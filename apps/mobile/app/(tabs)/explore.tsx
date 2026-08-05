@@ -24,6 +24,7 @@ import {
 import {
   ExploreFilters,
   useDiscoverSections,
+  useForYou,
   useGenres,
   useSearch,
   useUpdateProfile,
@@ -264,12 +265,30 @@ export default function ExploreScreen() {
     mediaType === 'movies' ? MediaType.MOVIE : mediaType === 'shows' ? MediaType.SHOW : undefined;
   const search = useSearch(debouncedQ, searchType, genre, filters);
   const sections = useDiscoverSections(user?.id, genre, filters, defaultsHydrated);
+  const topShowsForYou = useForYou(
+    MediaType.SHOW,
+    user?.id,
+    genre,
+    filters,
+    defaultsHydrated && mediaType !== 'movies',
+  );
+  const topMoviesForYou = useForYou(
+    MediaType.MOVIE,
+    user?.id,
+    genre,
+    filters,
+    defaultsHydrated && mediaType !== 'shows',
+  );
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await sections.refetch();
+    await Promise.all([
+      sections.refetch(),
+      ...(mediaType !== 'movies' ? [topShowsForYou.refetch()] : []),
+      ...(mediaType !== 'shows' ? [topMoviesForYou.refetch()] : []),
+    ]);
     setRefreshing(false);
-  }, [sections]);
+  }, [mediaType, sections, topMoviesForYou, topShowsForYou]);
 
   // Adaptive grid: column count scales with the available width (same approach
   // as My Shows). Renders pre-grouped rows per the project grid pattern.
@@ -516,67 +535,80 @@ export default function ExploreScreen() {
             />
           }
         >
-          {sections.isLoading ? (
-            <Spinner />
-          ) : (
-            <>
-              {/* Type filter: Movies hides the shows sections and vice versa. */}
-              {mediaType !== 'movies' && (
-                <>
-                  <Carousel
-                    title={t('explore:topShowsForYou')}
-                    data={sections.data?.topForYou ?? []}
-                    kind="shows"
-                    action={t('explore:seeAll')}
-                    onAction={() => router.push(moreHref('top-for-you'))}
-                  />
-                  <Carousel
-                    title={t('explore:trendingShows')}
-                    data={sections.data?.trendingShows ?? []}
-                    kind="shows"
-                    action={t('explore:seeAll')}
-                    onAction={() => router.push(moreHref('trending-shows'))}
-                  />
-                </>
-              )}
-              {mediaType !== 'shows' && (
-                <>
-                  <Carousel
-                    title={t('explore:trendingMovies')}
-                    data={sections.data?.trendingMovies ?? []}
-                    kind="movies"
-                    action={t('explore:seeAll')}
-                    onAction={() => router.push(moreHref('trending-movies'))}
-                  />
-                  <Carousel
-                    title={t('explore:nowPlayingMovies')}
-                    data={sections.data?.nowPlayingMovies ?? []}
-                    kind="movies"
-                    action={t('explore:seeAll')}
-                    onAction={() => router.push(moreHref('now-playing-movies'))}
-                  />
-                </>
-              )}
-              {mediaType !== 'movies' && (
+          <>
+            {/* Personalized rails load independently so a cold affinity rebuild
+                never blocks the catalog rails below. */}
+            {mediaType !== 'movies' &&
+              (topShowsForYou.isLoading ? (
+                <Spinner />
+              ) : (
                 <Carousel
-                  title={t('explore:topRatedShows')}
-                  data={sections.data?.topRatedShows ?? []}
+                  title={t('explore:topShowsForYou')}
+                  data={topShowsForYou.data ?? []}
                   kind="shows"
                   action={t('explore:seeAll')}
-                  onAction={() => router.push(moreHref('top-rated-shows'))}
+                  onAction={() => router.push(moreHref('top-for-you'))}
                 />
-              )}
-              {mediaType !== 'shows' && (
+              ))}
+            {mediaType !== 'shows' &&
+              (topMoviesForYou.isLoading ? (
+                <Spinner />
+              ) : (
                 <Carousel
-                  title={t('explore:topRatedMovies')}
-                  data={sections.data?.topRatedMovies ?? []}
+                  title={t('explore:topMoviesForYou')}
+                  data={topMoviesForYou.data ?? []}
                   kind="movies"
                   action={t('explore:seeAll')}
-                  onAction={() => router.push(moreHref('top-rated-movies'))}
+                  onAction={() => router.push(moreHref('top-movies-for-you'))}
                 />
-              )}
-            </>
-          )}
+              ))}
+            {mediaType !== 'movies' && sections.data ? (
+              <Carousel
+                title={t('explore:trendingShows')}
+                data={sections.data?.trendingShows ?? []}
+                kind="shows"
+                action={t('explore:seeAll')}
+                onAction={() => router.push(moreHref('trending-shows'))}
+              />
+            ) : null}
+            {mediaType !== 'shows' && sections.data ? (
+              <>
+                <Carousel
+                  title={t('explore:trendingMovies')}
+                  data={sections.data?.trendingMovies ?? []}
+                  kind="movies"
+                  action={t('explore:seeAll')}
+                  onAction={() => router.push(moreHref('trending-movies'))}
+                />
+                <Carousel
+                  title={t('explore:nowPlayingMovies')}
+                  data={sections.data?.nowPlayingMovies ?? []}
+                  kind="movies"
+                  action={t('explore:seeAll')}
+                  onAction={() => router.push(moreHref('now-playing-movies'))}
+                />
+              </>
+            ) : null}
+            {mediaType !== 'movies' && sections.data ? (
+              <Carousel
+                title={t('explore:topRatedShows')}
+                data={sections.data?.topRatedShows ?? []}
+                kind="shows"
+                action={t('explore:seeAll')}
+                onAction={() => router.push(moreHref('top-rated-shows'))}
+              />
+            ) : null}
+            {mediaType !== 'shows' && sections.data ? (
+              <Carousel
+                title={t('explore:topRatedMovies')}
+                data={sections.data?.topRatedMovies ?? []}
+                kind="movies"
+                action={t('explore:seeAll')}
+                onAction={() => router.push(moreHref('top-rated-movies'))}
+              />
+            ) : null}
+            {sections.isLoading ? <Spinner /> : null}
+          </>
         </ScrollView>
       )}
     </Screen>

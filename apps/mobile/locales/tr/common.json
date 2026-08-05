@@ -97,5 +97,12 @@
   "unwatchOnce": "Bir izlemeyi geri al",
   "unwatchAll": "Tümünü izlenmedi olarak işaretle",
   "unwatchAllConfirmTitle": "Tümü izlenmedi olarak işaretlensin mi?",
-  "unwatchAllConfirmDesc": "Bu, kaydedilmiş {{count}} izlemeyi kaldırır."
+  "unwatchAllConfirmDesc": "Bu, kaydedilmiş {{count}} izlemeyi kaldırır.",
+  "libraryEmptyMovieTitle": "Film kitaplığın boş",
+  "libraryEmptyShowTitle": "Dizi kitaplığın boş",
+  "libraryEmptyExplore": "Seveceğin bir içerik bulup takip etmeye başlamak için Keşfet'e göz at.",
+  "libraryEmptyExploreCta": "Keşfet",
+  "libraryEmptyBuilder": "Ya da izlediklerini eklemek, dizi ilerlemeni ayarlamak ve izleme listeni oluşturmak için Hızlı Kitaplık Oluşturucu'yu kullan.",
+  "libraryEmptyBuilderCta": "Hızlı Kitaplık Oluşturucu",
+  "libraryEmptyImport": "TV Time veya Trakt kullanıyor musun? Kitaplığını taşımak için verilerini içe aktar."
 }

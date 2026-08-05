@@ -97,5 +97,12 @@
   "unwatchOnce": "Remover uma visualização",
   "unwatchAll": "Marcar tudo como não assistido",
   "unwatchAllConfirmTitle": "Marcar tudo como não assistido?",
-  "unwatchAllConfirmDesc": "Isso remove as {{count}} visualizações registradas."
+  "unwatchAllConfirmDesc": "Isso remove as {{count}} visualizações registradas.",
+  "libraryEmptyMovieTitle": "Sua biblioteca de filmes está vazia",
+  "libraryEmptyShowTitle": "Sua biblioteca de séries está vazia",
+  "libraryEmptyExplore": "Confira o Explorar para encontrar algo que você goste e começar a acompanhar.",
+  "libraryEmptyExploreCta": "Explorar",
+  "libraryEmptyBuilder": "Ou use o Criador rápido de biblioteca para adicionar títulos assistidos, definir o progresso das séries e montar sua lista.",
+  "libraryEmptyBuilderCta": "Criador rápido de biblioteca",
+  "libraryEmptyImport": "Já acompanha seus títulos no TV Time ou Trakt? Importe seus dados para trazer sua biblioteca."
 }

@@ -44,5 +44,12 @@
   "unwatchOnce": "Retirer un visionnage",
   "unwatchAll": "Tout marquer comme non vu",
   "unwatchAllConfirmTitle": "Tout marquer comme non vu ?",
-  "unwatchAllConfirmDesc": "Cela supprime les {{count}} visionnages enregistrés."
+  "unwatchAllConfirmDesc": "Cela supprime les {{count}} visionnages enregistrés.",
+  "libraryEmptyMovieTitle": "Votre bibliothèque de films est vide",
+  "libraryEmptyShowTitle": "Votre bibliothèque de séries est vide",
+  "libraryEmptyExplore": "Parcourez la section Explorer pour trouver un titre et commencer à le suivre.",
+  "libraryEmptyExploreCta": "Explorer",
+  "libraryEmptyBuilder": "Ou utilisez le créateur rapide de bibliothèque pour ajouter vos titres vus, définir votre progression et créer votre liste.",
+  "libraryEmptyBuilderCta": "Créateur rapide de bibliothèque",
+  "libraryEmptyImport": "Vous suivez déjà vos contenus sur TV Time ou Trakt ? Importez vos données pour récupérer votre bibliothèque."
 }

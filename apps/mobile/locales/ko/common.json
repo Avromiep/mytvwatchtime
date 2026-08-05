@@ -97,5 +97,12 @@
   "unwatchOnce": "한 번 시청 취소",
   "unwatchAll": "모두 안 본 것으로 표시",
   "unwatchAllConfirmTitle": "모두 안 본 것으로 표시할까요?",
-  "unwatchAllConfirmDesc": "기록된 {{count}}회 시청이 모두 삭제됩니다."
+  "unwatchAllConfirmDesc": "기록된 {{count}}회 시청이 모두 삭제됩니다.",
+  "libraryEmptyMovieTitle": "영화 라이브러리가 비어 있습니다",
+  "libraryEmptyShowTitle": "TV 프로그램 라이브러리가 비어 있습니다",
+  "libraryEmptyExplore": "둘러보기에서 보고 싶은 작품을 찾아 추적을 시작하세요.",
+  "libraryEmptyExploreCta": "둘러보기",
+  "libraryEmptyBuilder": "또는 빠른 라이브러리 빌더로 시청한 작품을 추가하고 프로그램 진행 상황과 시청 목록을 설정하세요.",
+  "libraryEmptyBuilderCta": "빠른 라이브러리 빌더",
+  "libraryEmptyImport": "이미 TV Time 또는 Trakt에서 기록하고 있나요? 데이터를 가져와 라이브러리를 옮겨 보세요."
 }

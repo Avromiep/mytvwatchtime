@@ -97,5 +97,12 @@
   "unwatchOnce": "التراجع عن مشاهدة واحدة",
   "unwatchAll": "وضع الكل كغير مشاهد",
   "unwatchAllConfirmTitle": "وضع الكل كغير مشاهد؟",
-  "unwatchAllConfirmDesc": "سيؤدي هذا إلى إزالة جميع المشاهدات المسجلة ({{count}})."
+  "unwatchAllConfirmDesc": "سيؤدي هذا إلى إزالة جميع المشاهدات المسجلة ({{count}}).",
+  "libraryEmptyMovieTitle": "مكتبة أفلامك فارغة",
+  "libraryEmptyShowTitle": "مكتبة مسلسلاتك فارغة",
+  "libraryEmptyExplore": "تصفّح قسم الاستكشاف للعثور على ما يعجبك وبدء التتبّع.",
+  "libraryEmptyExploreCta": "استكشف",
+  "libraryEmptyBuilder": "أو استخدم أداة إنشاء المكتبة السريعة لإضافة ما شاهدته وضبط تقدّم المسلسلات وإنشاء قائمة المشاهدة.",
+  "libraryEmptyBuilderCta": "أداة إنشاء المكتبة السريعة",
+  "libraryEmptyImport": "هل تتتبّع مشاهداتك بالفعل على TV Time أو Trakt؟ استورد بياناتك لنقل مكتبتك."
 }

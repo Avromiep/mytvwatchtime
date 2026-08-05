@@ -667,7 +667,7 @@ export class ImportService {
           this.redis.delByPattern(`watchnext:${userId}:*`),
           this.redis.delByPattern(`upcoming:${userId}:*`),
           this.redis.delByPattern(`showsprogress:${userId}:*`),
-          this.redis.delByPattern(`foryou:v1:${userId}:*`),
+          this.redis.delByPattern(`foryou:v3:${userId}:*`),
           this.redis.del(`watchnext:${userId}`),
           this.redis.del(`upcoming:${userId}`),
         ]).catch(() => undefined);

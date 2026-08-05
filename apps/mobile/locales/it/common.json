@@ -97,5 +97,12 @@
   "unwatchOnce": "Rimuovi una visione",
   "unwatchAll": "Segna tutto come non visto",
   "unwatchAllConfirmTitle": "Segnare tutto come non visto?",
-  "unwatchAllConfirmDesc": "Questo rimuove tutte le {{count}} visioni registrate."
+  "unwatchAllConfirmDesc": "Questo rimuove tutte le {{count}} visioni registrate.",
+  "libraryEmptyMovieTitle": "La tua libreria di film è vuota",
+  "libraryEmptyShowTitle": "La tua libreria di serie TV è vuota",
+  "libraryEmptyExplore": "Vai su Esplora per trovare qualcosa che ti piace e iniziare a seguirlo.",
+  "libraryEmptyExploreCta": "Esplora",
+  "libraryEmptyBuilder": "Oppure usa il Generatore rapido della libreria per aggiungere titoli visti, impostare i progressi delle serie e creare la watchlist.",
+  "libraryEmptyBuilderCta": "Generatore rapido della libreria",
+  "libraryEmptyImport": "Usi già TV Time o Trakt? Importa i tuoi dati per trasferire la libreria."
 }

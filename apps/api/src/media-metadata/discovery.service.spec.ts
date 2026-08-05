@@ -196,7 +196,12 @@ describe('DiscoveryService forgiving search', () => {
 });
 
 describe('DiscoveryService hideAnimeInExplore', () => {
-  const make = (profile: { hideAnimeInExplore: boolean } | null) => {
+  const make = (
+    profile: {
+      hideAnimeInExplore: boolean;
+      exploreDefaultFilters?: Record<string, unknown> | null;
+    } | null,
+  ) => {
     const prisma = {
       userProfile: { findUnique: jest.fn().mockResolvedValue(profile) },
       mediaItem: { findMany: jest.fn().mockResolvedValue([]) },
@@ -222,8 +227,9 @@ describe('DiscoveryService hideAnimeInExplore', () => {
     prisma.$queryRaw
       .mockResolvedValueOnce([{ name: 'Drama', c: 1 }]) // history genres
       .mockResolvedValueOnce([]) // favorite genres
+      .mockResolvedValueOnce([]) // watchlist genres
       .mockResolvedValueOnce([]) // keywords
-      .mockResolvedValueOnce([]); // excluded ids
+      .mockResolvedValueOnce([{ media_id: 'history-seed' }]); // tracked ids
   };
 
   /** One rankable candidate so forYou produces a non-empty (cacheable) ranking. */
@@ -274,10 +280,10 @@ describe('DiscoveryService hideAnimeInExplore', () => {
     const { svc, prisma, redis } = make({ hideAnimeInExplore: true });
     mockRankingQueries(prisma);
     prisma.mediaItem.findMany.mockResolvedValue([CANDIDATE]);
-    jest.spyOn(svc as any, 'fetchListDtos').mockResolvedValue([]);
+    jest.spyOn(svc as any, 'fetchCardDtos').mockResolvedValue([]);
     await svc.forYou('u1', 1, 10);
     const key = redis.set.mock.calls[0][0] as string;
-    expect(key).toContain('foryou:v1:u1:');
+    expect(key).toContain('foryou:v3:u1:show:');
     expect(key).toContain('noanime');
     expect(redis.get).toHaveBeenCalledWith(key);
   });
@@ -286,21 +292,84 @@ describe('DiscoveryService hideAnimeInExplore', () => {
     const { svc, prisma, redis } = make({ hideAnimeInExplore: false });
     mockRankingQueries(prisma);
     prisma.mediaItem.findMany.mockResolvedValue([CANDIDATE]);
-    jest.spyOn(svc as any, 'fetchListDtos').mockResolvedValue([]);
+    jest.spyOn(svc as any, 'fetchCardDtos').mockResolvedValue([]);
     await svc.forYou('u1', 1, 10);
     const key = redis.set.mock.calls[0][0] as string;
-    expect(key).toContain('foryou:v1:u1:');
+    expect(key).toContain('foryou:v3:u1:show:');
     expect(key).not.toContain('noanime');
   });
 
   it('forYou does NOT cache an empty ranking (new-user first-open must not poison the section)', async () => {
     const { svc, prisma, redis } = make(null);
-    // No taste signal at all: history/favorite genres both empty → ranking [].
-    prisma.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
-    jest.spyOn(svc as any, 'fetchListDtos').mockResolvedValue([]);
+    // No taste signal or library at all: all aggregates/exclusions empty → ranking [].
+    prisma.$queryRaw
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    jest.spyOn(svc as any, 'fetchCardDtos').mockResolvedValue([]);
     const res = await svc.forYou('u1', 1, 10);
     expect(res.items).toEqual([]);
     expect(redis.set).not.toHaveBeenCalled();
+  });
+
+  it('serves a light-metadata library an immediate fallback without caching it', async () => {
+    const { svc, prisma, redis } = make(null);
+    prisma.$queryRaw
+      .mockResolvedValueOnce([]) // history genres
+      .mockResolvedValueOnce([]) // favorite genres
+      .mockResolvedValueOnce([]) // watchlist genres not hydrated yet
+      .mockResolvedValueOnce([]) // keywords not hydrated yet
+      .mockResolvedValueOnce([{ media_id: 'watchlist-seed' }]);
+    prisma.mediaItem.findMany.mockResolvedValue([CANDIDATE]);
+    jest.spyOn(svc as any, 'fetchCardDtos').mockResolvedValue([CANDIDATE]);
+
+    const res = await svc.forYou('u1', 1, 10);
+
+    expect(res.items).toEqual([CANDIDATE]);
+    expect(prisma.mediaItem.findMany.mock.calls[0][0].where).not.toHaveProperty('genres');
+    expect(prisma.mediaItem.findMany.mock.calls[0][0].where.id.notIn).toEqual(['watchlist-seed']);
+    expect(redis.set).not.toHaveBeenCalled();
+  });
+
+  it('warms show and movie rankings for the saved Explore defaults', async () => {
+    const { svc } = make({
+      hideAnimeInExplore: false,
+      exploreDefaultFilters: {
+        genre: 'drama',
+        excludeGenres: ['horror'],
+        order: 'releaseDate',
+        country: 'CA',
+        hideAnime: true,
+      },
+    });
+    const personalizedIds = jest.spyOn(svc as any, 'personalizedIds').mockResolvedValue([]);
+
+    await svc.warmPersonalizedRecommendations('u1');
+
+    const expectedFilters = {
+      excludeGenres: 'horror',
+      country: 'CA',
+      sort: 'releaseDate',
+      hideAnime: true,
+    };
+    expect(personalizedIds).toHaveBeenCalledWith(
+      MediaType.SHOW,
+      'u1',
+      'drama',
+      expectedFilters,
+      true,
+      true,
+    );
+    expect(personalizedIds).toHaveBeenCalledWith(
+      MediaType.MOVIE,
+      'u1',
+      'drama',
+      expectedFilters,
+      true,
+      true,
+    );
   });
 });
 
@@ -330,6 +399,7 @@ describe('DiscoveryService explore filters (DB paths)', () => {
       {} as any,
     );
     jest.spyOn(svc as any, 'fetchListDtos').mockResolvedValue([]);
+    jest.spyOn(svc as any, 'fetchCardDtos').mockResolvedValue([]);
     return { svc, prisma };
   };
 
@@ -469,8 +539,9 @@ describe('DiscoveryService explore filters (DB paths)', () => {
     prisma.$queryRaw
       .mockResolvedValueOnce([{ name: 'Drama', c: 1 }]) // history genres
       .mockResolvedValueOnce([]) // favorite genres
+      .mockResolvedValueOnce([]) // watchlist genres
       .mockResolvedValueOnce([]) // keywords
-      .mockResolvedValueOnce([]); // excluded ids
+      .mockResolvedValueOnce([{ media_id: 'history-seed' }]); // tracked ids
     await (svc as any).rankForYouIds('u1', undefined, false, {
       excludeGenres: 'anime,horror',
       country: 'kr',
@@ -482,6 +553,71 @@ describe('DiscoveryService explore filters (DB paths)', () => {
     expect(where.show).toEqual({
       is: { OR: [{ originCountries: { has: 'KR' } }, { originCountries: { isEmpty: true } }] },
     });
+  });
+
+  it('starts keyword affinity from the small watched/favorite/watchlist set', async () => {
+    const { svc, prisma } = make();
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ name: 'Drama', c: 1 }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ media_id: 'history-seed' }]);
+
+    await (svc as any).rankForYouIds('u1');
+
+    const sql = (prisma.$queryRaw.mock.calls[3][0] as readonly string[]).join(' ');
+    expect(sql).toContain('WITH taste_media AS MATERIALIZED');
+    expect(sql).toContain('SELECT media_id FROM watchlist_items');
+    expect(sql).toContain('FROM taste_media t');
+    expect(sql).toContain('JOIN shows s ON s.media_id = t.media_id');
+    expect(sql).toContain('JOIN movies m ON m.media_id = t.media_id');
+  });
+
+  it('builds recommendations immediately from a watchlist-only taste signal', async () => {
+    const { svc, prisma } = make();
+    prisma.$queryRaw
+      .mockResolvedValueOnce([]) // history genres
+      .mockResolvedValueOnce([]) // favorite genres
+      .mockResolvedValueOnce([{ name: 'Drama', c: 2 }]) // watchlist genres
+      .mockResolvedValueOnce([]) // keywords
+      .mockResolvedValueOnce([{ media_id: 'watchlist-seed' }]); // exclusions
+    prisma.mediaItem.findMany.mockResolvedValue([
+      {
+        id: 'new-recommendation',
+        rating: 8,
+        genres: [{ genre: { name: 'Drama' } }],
+        show: { keywords: [], yearStart: new Date().getFullYear() },
+        movie: null,
+      },
+    ]);
+
+    await expect((svc as any).rankForYouIds('u1')).resolves.toEqual({
+      ids: ['new-recommendation'],
+      cacheable: true,
+    });
+    expect(prisma.mediaItem.findMany.mock.calls[0][0].where.id.notIn).toEqual(['watchlist-seed']);
+  });
+
+  it('builds a movie candidate pool and preserves watched/watchlist/favorite exclusions', async () => {
+    const { svc, prisma } = make();
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ name: 'Drama', c: 1 }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { media_id: 'watched' },
+        { media_id: 'watchlisted' },
+        { media_id: 'favorite' },
+      ]);
+
+    await (svc as any).rankForYouIds('u1', undefined, false, undefined, MediaType.MOVIE);
+
+    const call = prisma.mediaItem.findMany.mock.calls[0][0];
+    expect(call.where.type).toBe(MediaType.MOVIE);
+    expect(call.where.id.notIn).toEqual(['watched', 'watchlisted', 'favorite']);
+    expect(call.include.movie).toEqual({ select: { keywords: true, releaseYear: true } });
   });
 
   it('filterEntriesExcluding keeps entries with UNKNOWN origin for shows', async () => {
@@ -516,7 +652,8 @@ describe('DiscoveryService explore filters (DB paths)', () => {
       .mockResolvedValueOnce([{ name: 'Drama', c: 1 }])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([]);
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ media_id: 'history-seed' }]);
     // One rankable candidate → non-empty ranking → the cache set happens.
     prisma.mediaItem.findMany.mockResolvedValue([
       {
@@ -529,9 +666,34 @@ describe('DiscoveryService explore filters (DB paths)', () => {
     ]);
     await svc.forYou('u1', 1, 10, undefined, { excludeGenres: 'horror', country: 'JP' });
     const key = redis.set.mock.calls[0][0] as string;
-    expect(key).toContain('foryou:v1:u1:');
+    expect(key).toContain('foryou:v3:u1:show:');
     expect(key).toContain('horror');
     expect(key).toContain('JP');
+  });
+
+  it('uses an independent movie cache namespace', async () => {
+    const { svc, prisma } = make();
+    const redis = (svc as any).redis;
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ name: 'Drama', c: 1 }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ media_id: 'history-seed' }]);
+    prisma.mediaItem.findMany.mockResolvedValue([
+      {
+        id: 'movie-candidate',
+        rating: 8,
+        popularity: 10,
+        genres: [{ genre: { name: 'Drama' } }],
+        show: null,
+        movie: { keywords: [], releaseYear: new Date().getFullYear() },
+      },
+    ]);
+
+    await svc.moviesForYou('u1', 1, 10);
+
+    expect(redis.set.mock.calls[0][0]).toContain('foryou:v3:u1:movie:');
   });
 });
 
@@ -561,6 +723,7 @@ describe('DiscoveryService trending release-date sort', () => {
       {} as any,
     );
     jest.spyOn(svc as any, 'fetchListDtos').mockImplementation(async (ids: unknown) => ids as any);
+    jest.spyOn(svc as any, 'fetchCardDtos').mockImplementation(async (ids: unknown) => ids as any);
     jest
       .spyOn(svc as any, 'cachedListEntries')
       .mockResolvedValue(Object.keys(years).map((id) => ({ id, g: [], oc: [] })));
@@ -616,6 +779,7 @@ describe('DiscoveryService curated lists', () => {
     );
     jest.spyOn(svc as any, 'cachedListEntries').mockResolvedValue([{ id: 'x', g: [], oc: [] }]);
     jest.spyOn(svc as any, 'fetchListDtos').mockImplementation(async (ids: unknown) => ids as any);
+    jest.spyOn(svc as any, 'fetchCardDtos').mockImplementation(async (ids: unknown) => ids as any);
     return { svc, tmdb };
   };
 
@@ -657,11 +821,10 @@ describe('DiscoveryService curated lists', () => {
     );
   });
 
-  it('discoverSections returns every section, anonymous topForYou = trending slice', async () => {
+  it('discoverSections returns only compact catalog sections', async () => {
     const { svc } = make();
     const res = await svc.discoverSections(undefined);
     expect(res).toEqual({
-      topForYou: ['x'],
       trendingShows: ['x'],
       trendingMovies: ['x'],
       topRatedShows: ['x'],

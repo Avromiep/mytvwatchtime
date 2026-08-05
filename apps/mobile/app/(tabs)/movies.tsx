@@ -14,6 +14,7 @@ import { Image } from 'expo-image';
 import { MediaType } from '@tvwatch/shared';
 import { Header } from '../../components/Header';
 import { PosterCard } from '../../components/cards';
+import { LibraryEmptyState } from '../../components/LibraryEmptyState';
 import { EmptyState, Screen, Spinner, T } from '../../components/primitives';
 import { useFavoritePages, useWatchedMoviePages, useWatchlistPages } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
@@ -249,6 +250,7 @@ export default function MoviesScreen() {
     watchlist.items.length === 0 && watched.items.length === 0 && favorites.items.length === 0;
   const initialLoading =
     noData && (watchlist.isPending || watched.isPending || favorites.isPending);
+  const libraryEmpty = collectionsLoaded && noData;
 
   const listRef = useRef<FlatList<FlatRow>>(null);
   const scrollOffset = useRef(0);
@@ -456,6 +458,15 @@ export default function MoviesScreen() {
       <Screen>
         <Header title={t('movies:title')} />
         <Spinner />
+      </Screen>
+    );
+  }
+
+  if (libraryEmpty) {
+    return (
+      <Screen>
+        <Header title={t('movies:title')} />
+        <LibraryEmptyState kind="movies" refreshing={refreshing} onRefresh={onRefresh} />
       </Screen>
     );
   }

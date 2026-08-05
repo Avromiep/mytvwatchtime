@@ -97,5 +97,12 @@
   "unwatchOnce": "撤销一次观看",
   "unwatchAll": "全部标记为未看",
   "unwatchAllConfirmTitle": "全部标记为未看？",
-  "unwatchAllConfirmDesc": "这将删除全部 {{count}} 次已记录的观看。"
+  "unwatchAllConfirmDesc": "这将删除全部 {{count}} 次已记录的观看。",
+  "libraryEmptyMovieTitle": "你的电影媒体库还是空的",
+  "libraryEmptyShowTitle": "你的剧集媒体库还是空的",
+  "libraryEmptyExplore": "前往“探索”寻找喜欢的内容并开始追踪。",
+  "libraryEmptyExploreCta": "探索",
+  "libraryEmptyBuilder": "或者使用快速媒体库生成器添加已看内容、设置剧集进度并创建想看清单。",
+  "libraryEmptyBuilderCta": "快速媒体库生成器",
+  "libraryEmptyImport": "已经在 TV Time 或 Trakt 上记录了吗？导入数据即可迁移你的媒体库。"
 }

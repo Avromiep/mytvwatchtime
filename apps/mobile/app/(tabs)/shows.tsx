@@ -4,12 +4,14 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header, IconButton } from '../../components/Header';
 import { EpisodeCard, UpcomingCard } from '../../components/cards';
+import { LibraryEmptyState } from '../../components/LibraryEmptyState';
 import { Chip, EmptyState, Screen, SectionHeader, Spinner, T } from '../../components/primitives';
 import { InfoBanner } from '../../components/InfoBanner';
 import {
   useMarkEpisodeWatched,
   usePausedWatchNext,
   useRewatchEpisode,
+  useShowProgressSummary,
   useUnwatchEpisodeOnce,
   useUpcoming,
   useUpcomingPast,
@@ -83,6 +85,7 @@ export default function ShowsScreen() {
   const { tokens } = useAppearance();
   const { data: announcement } = useActiveAnnouncement();
   const unreadNotifications = useUnreadNotificationCount();
+  const librarySummary = useShowProgressSummary();
   const dismissKey = announcement
     ? `announcement:${announcement.id}:rev:${announcement.revision}`
     : null;
@@ -93,6 +96,13 @@ export default function ShowsScreen() {
     setResetKey((k) => k + 1);
   });
   const showBanner = !!announcement && !!dismissKey && showAnnouncementBanner === true;
+  const trackedShowCount = librarySummary.data
+    ? librarySummary.data.watching +
+      librarySummary.data.notStarted +
+      librarySummary.data.finished +
+      librarySummary.data.paused
+    : null;
+  const libraryEmpty = trackedShowCount === 0;
   return (
     <Screen>
       <Header
@@ -105,43 +115,57 @@ export default function ShowsScreen() {
           />
         }
       />
-      <View style={styles.tabs}>
-        <Chip
-          label={t('shows:watchList')}
-          active={tab === 'watchlist'}
-          onPress={() => setTab('watchlist')}
+      {librarySummary.isPending ? (
+        <Spinner />
+      ) : libraryEmpty ? (
+        <LibraryEmptyState
+          kind="shows"
+          refreshing={librarySummary.isRefetching}
+          onRefresh={() => {
+            void librarySummary.refetch();
+          }}
         />
-        <Chip
-          label={t('shows:upcoming')}
-          active={tab === 'upcoming'}
-          onPress={() => setTab('upcoming')}
-        />
-      </View>
-      {tab === 'watchlist' && showBanner && announcement ? (
-        <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }}>
-          <InfoBanner
-            icon={
-              (VALID_ICONS.has(announcement.icon)
-                ? announcement.icon
-                : 'information-circle-outline') as any
-            }
-            title={pickLocale(announcement.title, i18n.language)}
-            message={pickLocale(announcement.message, i18n.language)}
-            actionLabel={
-              announcement.actionLabel
-                ? pickLocale(announcement.actionLabel, i18n.language)
-                : undefined
-            }
-            onAction={
-              announcement.action?.type !== 'none'
-                ? () => runAnnouncementAction(announcement.action)
-                : undefined
-            }
-            onClose={dismissAnnouncementBanner}
-          />
-        </View>
-      ) : null}
-      {tab === 'watchlist' ? <WatchList key={resetKey} /> : <Upcoming />}
+      ) : (
+        <>
+          <View style={styles.tabs}>
+            <Chip
+              label={t('shows:watchList')}
+              active={tab === 'watchlist'}
+              onPress={() => setTab('watchlist')}
+            />
+            <Chip
+              label={t('shows:upcoming')}
+              active={tab === 'upcoming'}
+              onPress={() => setTab('upcoming')}
+            />
+          </View>
+          {tab === 'watchlist' && showBanner && announcement ? (
+            <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }}>
+              <InfoBanner
+                icon={
+                  (VALID_ICONS.has(announcement.icon)
+                    ? announcement.icon
+                    : 'information-circle-outline') as any
+                }
+                title={pickLocale(announcement.title, i18n.language)}
+                message={pickLocale(announcement.message, i18n.language)}
+                actionLabel={
+                  announcement.actionLabel
+                    ? pickLocale(announcement.actionLabel, i18n.language)
+                    : undefined
+                }
+                onAction={
+                  announcement.action?.type !== 'none'
+                    ? () => runAnnouncementAction(announcement.action)
+                    : undefined
+                }
+                onClose={dismissAnnouncementBanner}
+              />
+            </View>
+          ) : null}
+          {tab === 'watchlist' ? <WatchList key={resetKey} /> : <Upcoming />}
+        </>
+      )}
     </Screen>
   );
 }

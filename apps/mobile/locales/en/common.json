@@ -99,5 +99,12 @@
   "unwatchOnce": "Unwatch once",
   "unwatchAll": "Unwatch all",
   "unwatchAllConfirmTitle": "Unwatch all?",
-  "unwatchAllConfirmDesc": "This removes all {{count}} recorded watches."
+  "unwatchAllConfirmDesc": "This removes all {{count}} recorded watches.",
+  "libraryEmptyMovieTitle": "Your movie library is empty",
+  "libraryEmptyShowTitle": "Your TV show library is empty",
+  "libraryEmptyExplore": "Check Explore to find something you'll love and start tracking.",
+  "libraryEmptyExploreCta": "Explore",
+  "libraryEmptyBuilder": "Or use our Quick Library Builder to add watched titles, set show progress, and build your watchlist.",
+  "libraryEmptyBuilderCta": "Quick Library Builder",
+  "libraryEmptyImport": "Already tracking on TV Time or Trakt? Import your data to bring your library over."
 }

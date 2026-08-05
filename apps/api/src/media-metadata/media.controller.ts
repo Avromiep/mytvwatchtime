@@ -73,12 +73,26 @@ export class MediaController {
     return this.discovery.discoverSections(userId, q.genre, q);
   }
 
-  /** Paginated personalized suggestions (see-all for "Top shows for you"). */
+  /** Backward-compatible alias for paginated personalized shows. */
   @Get('discover/for-you')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
   forYou(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
     return this.discovery.forYou(userId, q.page ?? 1, 20, q.genre, q);
+  }
+
+  @Get('discover/for-you/shows')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  forYouShows(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
+    return this.discovery.forYou(userId, q.page ?? 1, 20, q.genre, q);
+  }
+
+  @Get('discover/for-you/movies')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  forYouMovies(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
+    return this.discovery.moviesForYou(userId, q.page ?? 1, 20, q.genre, q);
   }
 
   /** Catalog genres (most-used first) — filter chip lists in explore/search/see-all. */

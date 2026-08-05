@@ -24,6 +24,7 @@ import { StructureRemapService } from './structure-remap.service';
 import { CastDedupService } from './cast-dedup.service';
 import { ExternalReviewsService } from './external-reviews.service';
 import { StructureAuthorityService } from './structure-authority.service';
+import { PersonalizationWarmProcessor } from './personalization-warm.processor';
 
 @Module({
   controllers: [MediaController],
@@ -51,6 +52,7 @@ import { StructureAuthorityService } from './structure-authority.service';
     TvmazeProvider,
     MediaMetadataService,
     DiscoveryService,
+    PersonalizationWarmProcessor,
     ExternalReviewsService,
   ],
   exports: [

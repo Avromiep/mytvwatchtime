@@ -431,7 +431,7 @@ export class OnboardingService {
       this.redis.delByPattern(`upcoming:${userId}:*`),
       this.redis.delByPattern(`showsprogress:${userId}:*`),
       // The apply writes the user's first taste signal — recompute for-you.
-      this.redis.delByPattern(`foryou:v1:${userId}:*`),
+      this.redis.delByPattern(`foryou:v3:${userId}:*`),
       this.redis.del(`watchnext:${userId}`),
       this.redis.del(`upcoming:${userId}`),
     ]);

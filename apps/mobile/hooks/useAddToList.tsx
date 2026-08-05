@@ -79,7 +79,10 @@ function ListPickerContent({ lists, onAdd, onRemove }: ListPickerContentProps) {
             disabled={busy === l.id}
             style={({ pressed }) => [
               styles.row,
-              { backgroundColor: tokens.surfaceElevated, opacity: pressed || busy === l.id ? 0.85 : 1 },
+              {
+                backgroundColor: tokens.surfaceElevated,
+                opacity: pressed || busy === l.id ? 0.85 : 1,
+              },
             ]}
             accessibilityRole="button"
             accessibilityLabel={l.title}
@@ -87,7 +90,9 @@ function ListPickerContent({ lists, onAdd, onRemove }: ListPickerContentProps) {
             {l.coverUrl ? (
               <PosterImage uri={l.coverUrl} style={styles.cover} />
             ) : (
-              <View style={[styles.cover, styles.coverFallback, { backgroundColor: tokens.surface }]}>
+              <View
+                style={[styles.cover, styles.coverFallback, { backgroundColor: tokens.surface }]}
+              >
                 <Ionicons name="list-outline" size={20} color={tokens.primary} />
               </View>
             )}
@@ -145,7 +150,10 @@ export function useAddToList() {
         staleTime: 0,
       });
     } catch (e: any) {
-      showError({ title: t('lists:failedToSave'), description: e?.message ?? t('common:pleaseTryAgain') });
+      showError({
+        title: t('lists:failedToSave'),
+        description: e?.message ?? t('common:pleaseTryAgain'),
+      });
       return;
     }
     if (!lists.length) {
@@ -169,7 +177,10 @@ export function useAddToList() {
               showToast(t('lists:addedToList'));
               return (res as any)?.itemId ?? null;
             } catch (e: any) {
-              showError({ title: t('lists:failedToSave'), description: e?.message ?? t('common:pleaseTryAgain') });
+              showError({
+                title: t('lists:failedToSave'),
+                description: e?.message ?? t('common:pleaseTryAgain'),
+              });
               throw e;
             }
           }}
@@ -179,7 +190,10 @@ export function useAddToList() {
               invalidateLists();
               showToast(t('lists:removedFromList'));
             } catch (e: any) {
-              showError({ title: t('lists:failedToSave'), description: e?.message ?? t('common:pleaseTryAgain') });
+              showError({
+                title: t('lists:failedToSave'),
+                description: e?.message ?? t('common:pleaseTryAgain'),
+              });
               throw e;
             }
           }}
@@ -201,8 +215,7 @@ export function useAddToList() {
     trackingPaused?: boolean;
   }) => {
     const canDrop =
-      (media.kind === 'show' && !media.dropped) ||
-      (media.kind === 'movie' && !!media.inWatchlist);
+      (media.kind === 'show' && !media.dropped) || (media.kind === 'movie' && !!media.inWatchlist);
     showDialog({
       title: media.title,
       buttons: [
@@ -210,7 +223,12 @@ export function useAddToList() {
         // closeOnPress 'before': these actions open a follow-up dialog/modal — the
         // menu must be dismissed first so two RN Modals are never stacked (iOS breaks
         // when the underneath modal is dismissed while another is presented).
-        { label: t('lists:addToList'), variant: 'primary', closeOnPress: 'before', onPress: () => openListPicker(media.id) },
+        {
+          label: t('lists:addToList'),
+          variant: 'primary',
+          closeOnPress: 'before',
+          onPress: () => openListPicker(media.id),
+        },
         ...(media.kind === 'movie'
           ? [
               {
@@ -224,9 +242,7 @@ export function useAddToList() {
         ...(media.kind === 'show' && !media.dropped
           ? [
               {
-                label: media.trackingPaused
-                  ? t('lists:resumeTracking')
-                  : t('lists:pauseTracking'),
+                label: media.trackingPaused ? t('lists:resumeTracking') : t('lists:pauseTracking'),
                 variant: 'secondary' as const,
                 onPress: () => {
                   const next = !media.trackingPaused;
@@ -282,7 +298,6 @@ export function useAddToList() {
               },
             ]
           : []),
-        { label: t('common:cancel'), variant: 'ghost' },
       ],
     });
   };

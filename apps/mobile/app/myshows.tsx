@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Header } from '../components/Header';
 import { PosterCard, cardYear } from '../components/cards';
+import { LibraryEmptyState } from '../components/LibraryEmptyState';
 import { EmptyState, Screen, Spinner, T } from '../components/primitives';
 import { useShowProgressPages, useShowProgressSummary } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
@@ -456,6 +457,20 @@ export default function MyShowsScreen() {
         <Spinner />
       </Screen>
     );
+
+  const trackedShowCount =
+    (summary.data?.watching ?? 0) +
+    (summary.data?.notStarted ?? 0) +
+    (summary.data?.finished ?? 0) +
+    (summary.data?.paused ?? 0);
+  if (summary.isSuccess && trackedShowCount === 0) {
+    return (
+      <Screen>
+        <Header title={t('social:myShows.title')} showBack />
+        <LibraryEmptyState kind="shows" refreshing={refreshing} onRefresh={onRefresh} />
+      </Screen>
+    );
+  }
 
   return (
     <Screen>

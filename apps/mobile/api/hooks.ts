@@ -87,6 +87,7 @@ export const qk = {
   personCredits: (id: string, type: string) => ['personCredits', id, type] as const,
   search: (q: string, type?: string) => ['search', q, type ?? 'all'] as const,
   discover: () => ['discoverSections'] as const,
+  forYou: (type: MediaType) => ['forYou', type] as const,
   discoverShows: (p: any) => ['discoverShows', p] as const,
   discoverMovies: (p: any) => ['discoverMovies', p] as const,
   trendingShows: ['trendingShows'] as const,
@@ -394,10 +395,6 @@ export const useDiscoverSections = (
   filters?: ExploreFilters,
   enabled = true,
 ) =>
-  // User-scoped key: the server's anonymous fallback (topForYou = trending) must NEVER
-  // share a cache entry with the personalized sections — otherwise a token-less early
-  // request (cold start / expired token) shows trending as "Top shows for you" until
-  // the next manual refetch.
   useQuery({
     queryKey: [...qk.discover(), userId ?? 'anon', genre ?? '', filterKey(filters)],
     queryFn: () =>
@@ -406,6 +403,27 @@ export const useDiscoverSections = (
         ...filterParams(filters),
       }),
     enabled,
+  });
+export const useForYou = (
+  type: MediaType,
+  userId?: string,
+  genre?: string | null,
+  filters?: ExploreFilters,
+  enabled = true,
+) =>
+  useQuery({
+    queryKey: [...qk.forYou(type), userId ?? 'anon', genre ?? '', filterKey(filters)],
+    queryFn: () =>
+      api
+        .get<{ items: MediaCardLiteDto[]; page: number; hasMore: boolean }>(
+          `/discover/for-you/${type === MediaType.SHOW ? 'shows' : 'movies'}`,
+          {
+            genre: genre || undefined,
+            ...filterParams(filters),
+          },
+        )
+        .then((response) => response.items),
+    enabled: enabled && !!userId,
   });
 // Activity feed (explore "Feed" tab): self + followings, cursor-paginated newest first.
 export const useFeed = (enabled = true) =>
@@ -1060,6 +1078,7 @@ export const useMarkEpisodeWatched = () => {
       qc.invalidateQueries({ queryKey: ['showsByStatus'] });
       // First watches seed the for-you ranking — refresh the Explore carousel.
       qc.invalidateQueries({ queryKey: qk.discover() });
+      qc.invalidateQueries({ queryKey: ['forYou'] });
       invalidateLeaderboardSoon(qc);
       void refreshWidgets();
     },
@@ -1107,6 +1126,7 @@ export const useMarkSeasonWatched = () => {
       // A season mark is a bulk watch action — the Shows tab and leaderboard change too.
       qc.invalidateQueries({ queryKey: ['watchNext'] });
       qc.invalidateQueries({ queryKey: ['upcoming'] });
+      qc.invalidateQueries({ queryKey: ['forYou'] });
       invalidateLeaderboardSoon(qc);
       void refreshWidgets();
     },
@@ -1648,6 +1668,7 @@ export const useToggleMovieWatchlist = () => {
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ['watchlist'] });
       qc.invalidateQueries({ queryKey: ['movie'] });
+      qc.invalidateQueries({ queryKey: ['forYou'] });
     },
   });
 };
@@ -1693,6 +1714,7 @@ export const useMarkMovieWatched = () => {
       qc.invalidateQueries({ queryKey: ['history'] });
       qc.invalidateQueries({ queryKey: ['movies', 'watched'] });
       qc.invalidateQueries({ queryKey: ['favorites'] });
+      qc.invalidateQueries({ queryKey: ['forYou'] });
       invalidateLeaderboardSoon(qc);
     },
   });
@@ -1792,6 +1814,7 @@ export const useToggleWatchlist = () => {
       qc.invalidateQueries({ queryKey: ['upcoming'] });
       // My Shows buckets (watching/notStarted) — removal marks the show dropped.
       qc.invalidateQueries({ queryKey: ['showsByStatus'] });
+      qc.invalidateQueries({ queryKey: ['forYou'] });
       void refreshWidgets();
     },
   });
@@ -1822,6 +1845,7 @@ export const useToggleFavorite = () => {
       qc.invalidateQueries({ queryKey: ['movie'] });
       // Favorites drive for-you affinity.
       qc.invalidateQueries({ queryKey: qk.discover() });
+      qc.invalidateQueries({ queryKey: ['forYou'] });
     },
   });
 };
@@ -1983,8 +2007,9 @@ export const useApplyOnboarding = () => {
       // single-entity marks) — no stats invalidation here.
       qc.invalidateQueries({ queryKey: qk.watchNext });
       qc.invalidateQueries({ queryKey: qk.upcoming });
-      // "Top shows for you" gets its first taste signal from the apply.
+      // Personalized rails get their first taste signal from the apply.
       qc.invalidateQueries({ queryKey: qk.discover() });
+      qc.invalidateQueries({ queryKey: ['forYou'] });
       qc.invalidateQueries({ queryKey: ['show'] });
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['movie'] });
@@ -2110,6 +2135,7 @@ export const useConfirmImport = () => {
       qc.invalidateQueries({ queryKey: ['watchlist'] });
       qc.invalidateQueries({ queryKey: ['favorites'] });
       qc.invalidateQueries({ queryKey: ['history'] });
+      qc.invalidateQueries({ queryKey: ['forYou'] });
     },
   });
 };
@@ -2334,6 +2360,7 @@ export const useDropMedia = () => {
       qc.invalidateQueries({ queryKey: ['watchNext'] });
       qc.invalidateQueries({ queryKey: ['upcoming'] });
       qc.invalidateQueries({ queryKey: ['showsByStatus'] });
+      qc.invalidateQueries({ queryKey: ['forYou'] });
       void refreshWidgets();
     },
   });
@@ -2425,9 +2452,7 @@ export const useDeleteList = () => {
     mutationFn: (listId: string) => api.del(`/lists/${listId}`),
     onMutate: async (listId: string) => {
       await Promise.all(
-        LIST_COLLECTION_QUERY_PREFIXES.map((prefix) =>
-          qc.cancelQueries({ queryKey: [prefix] }),
-        ),
+        LIST_COLLECTION_QUERY_PREFIXES.map((prefix) => qc.cancelQueries({ queryKey: [prefix] })),
       );
       const previous = LIST_COLLECTION_QUERY_PREFIXES.map((prefix) =>
         patchPrefix(qc, prefix, (data) => removeListFromCollection(data, listId)),

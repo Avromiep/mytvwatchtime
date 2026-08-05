@@ -217,6 +217,7 @@ const isPersistedTabQuery = (key: readonly unknown[]): boolean => {
     case 'upcoming':
       return key.length === 1;
     case 'discoverSections':
+    case 'forYou':
     case 'genres':
       return true;
     case 'watchlist':

@@ -26,9 +26,8 @@ export interface DiscoverQuery extends PaginationQuery {
 export type MediaCardDto = ShowDto | MovieDto;
 
 /**
- * Lightweight card for LARGE user lists (watchlist/favorites, fetched up to 500 at
- * once). Only the fields PosterCard-style consumers render; full ShowDto|MovieDto
- * (with cast/genres/providers) stays for search/discover/trending/detail contexts.
+ * Lightweight card for poster-only surfaces (Explore rails and large user lists).
+ * Full ShowDto|MovieDto rows stay available to detail-rich discovery contexts.
  */
 export interface MediaCardLiteDto {
   id: string;
@@ -55,10 +54,9 @@ export interface GenreFilterDto {
 }
 
 export interface DiscoverSectionsDto {
-  topForYou: MediaCardDto[];
-  trendingShows: MediaCardDto[];
-  trendingMovies: MediaCardDto[];
-  topRatedShows: MediaCardDto[];
-  topRatedMovies: MediaCardDto[];
-  nowPlayingMovies: MediaCardDto[];
+  trendingShows: MediaCardLiteDto[];
+  trendingMovies: MediaCardLiteDto[];
+  topRatedShows: MediaCardLiteDto[];
+  topRatedMovies: MediaCardLiteDto[];
+  nowPlayingMovies: MediaCardLiteDto[];
 }

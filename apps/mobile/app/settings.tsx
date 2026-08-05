@@ -144,6 +144,7 @@ export default function SettingsScreen() {
           for (const key of [
             'search',
             'discoverSections',
+            'forYou',
             'discoverShows',
             'discoverMovies',
             'trendingShows',

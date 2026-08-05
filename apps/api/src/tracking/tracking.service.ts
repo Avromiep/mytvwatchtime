@@ -23,9 +23,8 @@ export class TrackingService {
       this.redis.delByPattern(`watchnext:${userId}:*`),
       this.redis.delByPattern(`upcoming:${userId}:*`),
       this.redis.delByPattern(`showsprogress:${userId}:*`),
-      // "Top shows for you" ranking (genres/keywords affinity from history) —
-      // recompute on every watch change.
-      this.redis.delByPattern(`foryou:v1:${userId}:*`),
+      // Personalized show/movie rankings (genres/keywords affinity from history).
+      this.redis.delByPattern(`foryou:v3:${userId}:*`),
       this.redis.del(`watchnext:${userId}`),
       this.redis.del(`upcoming:${userId}`),
     ]);
@@ -582,6 +581,7 @@ export class TrackingService {
       });
       if (dto.rating) await this.upsertMediaRating(userId, mediaId, dto.rating);
       this.events.emit('watch.movie', { userId, mediaId });
+      await this.invalidateUserCache(userId);
     }
     return { watched: true, watchCount: becameWatched ? 1 : (prev?.watchCount ?? 0) };
   }
@@ -628,6 +628,7 @@ export class TrackingService {
       where: { userId, mediaId, mediaType: MediaType.MOVIE },
     });
     this.events.emit('unwatch.movie', { userId, mediaId });
+    await this.invalidateUserCache(userId);
     return { watched: false };
   }
 

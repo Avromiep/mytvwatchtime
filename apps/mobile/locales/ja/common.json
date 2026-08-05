@@ -97,5 +97,12 @@
   "unwatchOnce": "1回分の視聴を取り消す",
   "unwatchAll": "すべて未視聴にする",
   "unwatchAllConfirmTitle": "すべて未視聴にしますか？",
-  "unwatchAllConfirmDesc": "記録された {{count}} 回の視聴がすべて削除されます。"
+  "unwatchAllConfirmDesc": "記録された {{count}} 回の視聴がすべて削除されます。",
+  "libraryEmptyMovieTitle": "映画ライブラリは空です",
+  "libraryEmptyShowTitle": "テレビ番組ライブラリは空です",
+  "libraryEmptyExplore": "「見つける」で気になる作品を探して、記録を始めましょう。",
+  "libraryEmptyExploreCta": "見つける",
+  "libraryEmptyBuilder": "または、クイックライブラリビルダーで視聴済み作品や番組の進捗、ウォッチリストをまとめて設定できます。",
+  "libraryEmptyBuilderCta": "クイックライブラリビルダー",
+  "libraryEmptyImport": "TV Time や Trakt をすでにお使いですか？データをインポートしてライブラリを引き継げます。"
 }

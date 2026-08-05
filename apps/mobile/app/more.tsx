@@ -5,8 +5,9 @@ import { Image } from 'expo-image';
 import { MediaType } from '@tvwatch/shared';
 import { Header } from '../components/Header';
 import { PosterCard, cardProgress, cardYear } from '../components/cards';
+import { LibraryEmptyState } from '../components/LibraryEmptyState';
 import { Chip, EmptyState, Screen, Spinner, AnimatedFlatList } from '../components/primitives';
-import { useFavoritePages, useGenres, useWatchlistPages } from '../api/hooks';
+import { useFavoritePages, useGenres, useWatchedMoviePages, useWatchlistPages } from '../api/hooks';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAppearance } from '../context/PreferencesProvider';
@@ -55,6 +56,7 @@ export default function MoreScreen() {
     'trending-shows': t('social:more.trendingShows'),
     'trending-movies': t('social:more.trendingMovies'),
     'top-for-you': t('social:more.topShowsForYou'),
+    'top-movies-for-you': t('social:more.topMoviesForYou'),
     'top-rated-shows': t('social:more.topRatedShows'),
     'top-rated-movies': t('social:more.topRatedMovies'),
     'now-playing-movies': t('social:more.nowPlayingMovies'),
@@ -65,11 +67,11 @@ export default function MoreScreen() {
   };
 
   const title = TITLES[tab ?? ''] ?? t('social:more.browse');
-  const isMovies = tab?.endsWith('movies');
+  const isMovies = tab === 'top-movies-for-you' || tab?.endsWith('movies');
   const kind: 'shows' | 'movies' = isMovies ? 'movies' : 'shows';
   const isTrending = tab === 'trending-shows' || tab === 'trending-movies';
   const trendingType = tab === 'trending-movies' ? 'movies' : 'shows';
-  // Server-paged sections: trending, curated lists + "Top shows for you" (all paginate).
+  // Server-paged sections: trending, curated lists + personalized rails (all paginate).
   const LIST_PATHS: Record<string, string> = {
     'top-rated-shows': '/top-rated/shows',
     'top-rated-movies': '/top-rated/movies',
@@ -77,10 +79,12 @@ export default function MoreScreen() {
   };
   const pagedPath =
     tab === 'top-for-you'
-      ? '/discover/for-you'
-      : isTrending
-        ? `/trending/${trendingType}`
-        : (LIST_PATHS[tab ?? ''] ?? null);
+      ? '/discover/for-you/shows'
+      : tab === 'top-movies-for-you'
+        ? '/discover/for-you/movies'
+        : isTrending
+          ? `/trending/${trendingType}`
+          : (LIST_PATHS[tab ?? ''] ?? null);
 
   const cols = useColumns();
   const screenWidth = useContentWidth();
@@ -117,6 +121,12 @@ export default function MoreScreen() {
   const watchlistMovies = useWatchlistPages(MediaType.MOVIE, genre, tab === 'watchlist-movies');
   const favShows = useFavoritePages(MediaType.SHOW, genre, tab === 'favorites-shows');
   const favMovies = useFavoritePages(MediaType.MOVIE, genre, tab === 'favorites-movies');
+  // Profile's My Movies destination is the watchlist collection. When that list is
+  // empty, probe the other movie collections with one item each so we only describe
+  // the whole library as empty when the user truly has no tracked movies anywhere.
+  const isProfileMovieLibrary = tab === 'watchlist-movies' && !genre;
+  const watchedMovieProbe = useWatchedMoviePages(isProfileMovieLibrary, 1);
+  const favoriteMovieProbe = useFavoritePages(MediaType.MOVIE, null, isProfileMovieLibrary, 1);
 
   const collectionQuery =
     tab === 'watchlist-shows'
@@ -134,6 +144,19 @@ export default function MoreScreen() {
     ? (pageQuery.data?.pages.flatMap((p) => p.items ?? []) ?? [])
     : (collectionQuery?.items ?? []);
   const loading = pagedPath ? pageQuery.isLoading : !!collectionQuery?.isLoading;
+  const checkingMovieLibraryEmpty =
+    isProfileMovieLibrary &&
+    watchlistMovies.isSuccess &&
+    watchlistMovies.items.length === 0 &&
+    (watchedMovieProbe.isPending || favoriteMovieProbe.isPending);
+  const movieLibraryEmpty =
+    isProfileMovieLibrary &&
+    watchlistMovies.isSuccess &&
+    watchedMovieProbe.isSuccess &&
+    favoriteMovieProbe.isSuccess &&
+    watchlistMovies.items.length === 0 &&
+    watchedMovieProbe.items.length === 0 &&
+    favoriteMovieProbe.items.length === 0;
   const loadNext = useCallback(() => {
     if (pagedPath) {
       loadMore();
@@ -195,6 +218,38 @@ export default function MoreScreen() {
       clearTimeout(failSafe);
     };
   }, [preloadKey]);
+
+  if (checkingMovieLibraryEmpty) {
+    return (
+      <Screen>
+        <Header title={title} showBack />
+        <Spinner />
+      </Screen>
+    );
+  }
+
+  if (movieLibraryEmpty) {
+    return (
+      <Screen>
+        <Header title={title} showBack />
+        <LibraryEmptyState
+          kind="movies"
+          refreshing={
+            watchlistMovies.isRefetching ||
+            watchedMovieProbe.isRefetching ||
+            favoriteMovieProbe.isRefetching
+          }
+          onRefresh={() => {
+            void Promise.all([
+              watchlistMovies.refetch(),
+              watchedMovieProbe.refetch(),
+              favoriteMovieProbe.refetch(),
+            ]);
+          }}
+        />
+      </Screen>
+    );
+  }
 
   return (
     <Screen>

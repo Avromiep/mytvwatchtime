@@ -545,6 +545,7 @@ export class DiscoveryService {
     pageSize = 20,
     genre?: string,
     filters?: ExploreFiltersDto,
+    compact = false,
   ) {
     if (!this.tmdb.enabled)
       return {
@@ -553,6 +554,7 @@ export class DiscoveryService {
           pageSize,
           userId,
           { ...filters, genre },
+          compact,
         ),
         page,
         hasMore: false,
@@ -573,18 +575,19 @@ export class DiscoveryService {
         entriesFor,
       );
       const ids = releaseSort ? await this.sortIdsByReleaseDesc(win.ids) : win.ids;
-      const items = await this.fetchListDtos(
-        ids.slice((page - 1) * pageSize, page * pageSize),
-        userId,
-        pageSize,
-      );
+      const pageIds = ids.slice((page - 1) * pageSize, page * pageSize);
+      const items = compact
+        ? await this.fetchCardDtos(pageIds, userId, pageSize)
+        : await this.fetchListDtos(pageIds, userId, pageSize);
       return { items, page, hasMore: ids.length > page * pageSize || !win.exhausted };
     }
     const entries = await this.cachedListEntries(opts.idsNs, opts.kind, page, opts.fetchPage);
     const visible = hideAnime ? await this.filterAnimeEntries(entries) : entries;
     const ids = visible.map((e) => e.id);
     const ordered = releaseSort ? await this.sortIdsByReleaseDesc(ids) : ids;
-    const listItems = await this.fetchListDtos(ordered, userId, pageSize);
+    const listItems = compact
+      ? await this.fetchCardDtos(ordered, userId, pageSize)
+      : await this.fetchListDtos(ordered, userId, pageSize);
     return { items: listItems, page, hasMore: entries.length === 20 };
   }
 
@@ -604,10 +607,19 @@ export class DiscoveryService {
     pageSize = 20,
     genre?: string,
     filters?: ExploreFiltersDto,
+    compact = false,
   ) {
     // NOTE: TMDB trending has no server-side sort — with sort=releaseDate the
     // filtered window / page is re-ordered newest-first locally (sortIdsByReleaseDesc).
-    return this.listPage(this.trendingListOpts('show'), userId, page, pageSize, genre, filters);
+    return this.listPage(
+      this.trendingListOpts('show'),
+      userId,
+      page,
+      pageSize,
+      genre,
+      filters,
+      compact,
+    );
   }
 
   async trendingMovies(
@@ -616,8 +628,17 @@ export class DiscoveryService {
     pageSize = 20,
     genre?: string,
     filters?: ExploreFiltersDto,
+    compact = false,
   ) {
-    return this.listPage(this.trendingListOpts('movie'), userId, page, pageSize, genre, filters);
+    return this.listPage(
+      this.trendingListOpts('movie'),
+      userId,
+      page,
+      pageSize,
+      genre,
+      filters,
+      compact,
+    );
   }
 
   async topRatedShows(
@@ -626,6 +647,7 @@ export class DiscoveryService {
     pageSize = 20,
     genre?: string,
     filters?: ExploreFiltersDto,
+    compact = false,
   ) {
     return this.listPage(
       {
@@ -639,6 +661,7 @@ export class DiscoveryService {
       pageSize,
       genre,
       filters,
+      compact,
     );
   }
 
@@ -648,6 +671,7 @@ export class DiscoveryService {
     pageSize = 20,
     genre?: string,
     filters?: ExploreFiltersDto,
+    compact = false,
   ) {
     return this.listPage(
       {
@@ -661,6 +685,7 @@ export class DiscoveryService {
       pageSize,
       genre,
       filters,
+      compact,
     );
   }
 
@@ -670,6 +695,7 @@ export class DiscoveryService {
     pageSize = 20,
     genre?: string,
     filters?: ExploreFiltersDto,
+    compact = false,
   ) {
     return this.listPage(
       {
@@ -683,6 +709,7 @@ export class DiscoveryService {
       pageSize,
       genre,
       filters,
+      compact,
     );
   }
 
@@ -991,47 +1018,20 @@ export class DiscoveryService {
 
   async discoverSections(userId?: string, genre?: string, filters?: ExploreFiltersDto) {
     const g = genre?.trim() || undefined;
-    // All sections resolve in parallel — the explore landing waits for the SLOWEST
-    // list, not the sum of them. Every section short-circuits to its entry cache
-    // on repeat loads, so a warm open costs zero provider calls.
-    const [trendingShows, trendingMovies, topRatedShows, topRatedMovies, nowPlaying, forYouPage] =
+    // Personalization is intentionally NOT part of this request. It has its own
+    // show/movie endpoints, so an expensive cold affinity rebuild cannot hold the
+    // catalog rails hostage. Explore cards also use the compact poster DTO.
+    const [trendingShows, trendingMovies, topRatedShows, topRatedMovies, nowPlaying] =
       await Promise.all([
+        this.trendingShows(userId, 1, 20, g, filters, true),
+        this.trendingMovies(userId, 1, 20, g, filters, true),
+        this.topRatedShows(userId, 1, 20, g, filters, true),
+        this.topRatedMovies(userId, 1, 20, g, filters, true),
         this.tmdb.enabled
-          ? this.trendingShows(userId, 1, 20, g, filters)
-          : {
-              items: await this.topDb(MediaType.SHOW, 20, userId, { ...filters, genre: g }),
-              page: 1,
-              hasMore: false,
-            },
-        this.tmdb.enabled
-          ? this.trendingMovies(userId, 1, 20, g, filters)
-          : {
-              items: await this.topDb(MediaType.MOVIE, 20, userId, { ...filters, genre: g }),
-              page: 1,
-              hasMore: false,
-            },
-        this.tmdb.enabled
-          ? this.topRatedShows(userId, 1, 20, g, filters)
-          : {
-              items: await this.topDb(MediaType.SHOW, 20, userId, { ...filters, genre: g }),
-              page: 1,
-              hasMore: false,
-            },
-        this.tmdb.enabled
-          ? this.topRatedMovies(userId, 1, 20, g, filters)
-          : {
-              items: await this.topDb(MediaType.MOVIE, 20, userId, { ...filters, genre: g }),
-              page: 1,
-              hasMore: false,
-            },
-        this.tmdb.enabled
-          ? this.nowPlayingMovies(userId, 1, 20, g, filters)
+          ? this.nowPlayingMovies(userId, 1, 20, g, filters, true)
           : { items: [], page: 1, hasMore: false },
-        userId ? this.forYou(userId, 1, 10, g, filters) : Promise.resolve(null),
       ]);
-    const topForYou = forYouPage ? forYouPage.items : trendingShows.items.slice(0, 10);
     return {
-      topForYou,
       trendingShows: trendingShows.items,
       trendingMovies: trendingMovies.items,
       topRatedShows: topRatedShows.items,
@@ -1041,10 +1041,8 @@ export class DiscoveryService {
   }
 
   /**
-   * Paginated "Top shows for you": the full ranked suggestion list is cached per
-   * (user, genre, filter fingerprint, lang) for 5 min, so both the Explore
-   * carousel (page 1, size 10) and the see-all (20/page, infinite scroll) page
-   * through ONE ranking ordered best-first. Anonymous users get trending shows.
+   * Paginated personalized shows. The cached value contains ids only, so it is
+   * locale-independent and can be warmed outside a request language context.
    */
   async forYou(
     userId: string | undefined,
@@ -1053,22 +1051,38 @@ export class DiscoveryService {
     genre?: string,
     filters?: ExploreFiltersDto,
   ) {
-    if (!userId) return this.trendingShows(undefined, page, pageSize, genre, filters);
-    const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
-    // Filter fingerprint segment — same pattern as :noanime|:all.
-    const fp = `${this.parseSlugList(filters?.excludeGenres).join(',') || '-'}:${filters?.country?.trim().toUpperCase() || '-'}`;
-    const key = `foryou:v1:${userId}:${genre?.trim().toLowerCase() || 'all'}:${currentLanguage()}:${hideAnime ? 'noanime' : 'all'}:${fp}`;
-    let ids = await this.redis.get<string[]>(key);
-    if (!ids) {
-      ids = await this.rankForYouIds(userId, genre?.trim() || undefined, hideAnime, filters);
-      // Empty rankings are NOT cached: a brand-new user's first open would
-      // otherwise poison the section for 5 min after their first adds.
-      if (ids.length) await this.redis.set(key, ids, 300);
+    return this.personalizedForYou(MediaType.SHOW, userId, page, pageSize, genre, filters);
+  }
+
+  /** Paginated personalized movies; taste signals still come from both media types. */
+  async moviesForYou(
+    userId: string | undefined,
+    page = 1,
+    pageSize = 20,
+    genre?: string,
+    filters?: ExploreFiltersDto,
+  ) {
+    return this.personalizedForYou(MediaType.MOVIE, userId, page, pageSize, genre, filters);
+  }
+
+  private async personalizedForYou(
+    type: MediaType,
+    userId: string | undefined,
+    page: number,
+    pageSize: number,
+    genre?: string,
+    filters?: ExploreFiltersDto,
+  ) {
+    if (!userId) {
+      return type === MediaType.SHOW
+        ? this.trendingShows(undefined, page, pageSize, genre, filters, true)
+        : this.trendingMovies(undefined, page, pageSize, genre, filters, true);
     }
+    let ids = await this.personalizedIds(type, userId, genre, filters);
     // releaseDate sort: re-order the ranked window newest-first (the cached ranking
     // is sort-agnostic — the affinity order is just the default view).
     if (filters?.sort === 'releaseDate') ids = await this.sortIdsByReleaseDesc(ids);
-    const items = await this.fetchListDtos(
+    const items = await this.fetchCardDtos(
       ids.slice((page - 1) * pageSize, page * pageSize),
       userId,
       pageSize,
@@ -1076,9 +1090,75 @@ export class DiscoveryService {
     return { items, page, hasMore: ids.length > page * pageSize };
   }
 
+  private forYouKey(
+    type: MediaType,
+    userId: string,
+    genre: string | undefined,
+    hideAnime: boolean,
+    filters?: ExploreFiltersDto,
+  ) {
+    const fp = `${this.parseSlugList(filters?.excludeGenres).join(',') || '-'}:${filters?.country?.trim().toUpperCase() || '-'}`;
+    return `foryou:v3:${userId}:${type.toLowerCase()}:${genre?.trim().toLowerCase() || 'all'}:${hideAnime ? 'noanime' : 'all'}:${fp}`;
+  }
+
+  private async personalizedIds(
+    type: MediaType,
+    userId: string,
+    genre?: string,
+    filters?: ExploreFiltersDto,
+    force = false,
+    resolvedHideAnime?: boolean,
+  ): Promise<string[]> {
+    const hideAnime =
+      resolvedHideAnime ?? ((filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId)));
+    const normalizedGenre = genre?.trim() || undefined;
+    const key = this.forYouKey(type, userId, normalizedGenre, hideAnime, filters);
+    let ids = force ? null : await this.redis.get<string[]>(key);
+    if (!ids) {
+      const ranking = await this.rankForYouIds(userId, normalizedGenre, hideAnime, filters, type);
+      ids = ranking.ids;
+      // Empty rankings are NOT cached: a brand-new user's first open would
+      // otherwise poison the section after their first library changes.
+      // Cold-start fallbacks are also left uncached: search-created light media
+      // can gain genres/keywords shortly afterward, and the next read should use
+      // that richer signal instead of a five-minute generic ranking.
+      if (ids.length && ranking.cacheable) await this.redis.set(key, ids, 300);
+    }
+    return ids;
+  }
+
+  /** Rebuild both default personalized rails after a user's library changes. */
+  async warmPersonalizedRecommendations(userId: string): Promise<void> {
+    const profile = await this.prisma.userProfile.findUnique({
+      where: { userId },
+      select: { hideAnimeInExplore: true, exploreDefaultFilters: true },
+    });
+    const saved =
+      profile?.exploreDefaultFilters &&
+      typeof profile.exploreDefaultFilters === 'object' &&
+      !Array.isArray(profile.exploreDefaultFilters)
+        ? (profile.exploreDefaultFilters as Record<string, unknown>)
+        : undefined;
+    const excludeGenres = Array.isArray(saved?.excludeGenres)
+      ? saved.excludeGenres.filter((value): value is string => typeof value === 'string').join(',')
+      : undefined;
+    const filters: ExploreFiltersDto = {
+      excludeGenres,
+      country: typeof saved?.country === 'string' ? saved.country : undefined,
+      sort: saved?.order === 'releaseDate' ? 'releaseDate' : undefined,
+      hideAnime: saved?.hideAnime === true,
+    };
+    const genre = typeof saved?.genre === 'string' ? saved.genre : undefined;
+    const hideAnime = filters.hideAnime || (profile?.hideAnimeInExplore ?? false);
+    await Promise.all([
+      this.personalizedIds(MediaType.SHOW, userId, genre, filters, true, hideAnime),
+      this.personalizedIds(MediaType.MOVIE, userId, genre, filters, true, hideAnime),
+    ]);
+  }
+
   /**
-   * Personalized "Top shows for you" ranking. Affinity comes from the user's genres
-   * (history ×2, favorites ×1) AND the TMDB keywords of what they watch/love;
+   * Personalized ranking. Affinity comes from the user's genres
+   * (history ×2, favorites/watchlist ×1) AND the TMDB keywords of their library;
    * candidates are then ranked by affinity + community rating + recency, so
    * fresh well-rated matches beat old catalog filler. Anything the user already
    * watched, watchlisted, or favorited is excluded. With a genre filter active the
@@ -1090,15 +1170,16 @@ export class DiscoveryService {
     genre?: string,
     hideAnime = false,
     filters?: ExploreFiltersDto,
-  ): Promise<string[]> {
+    type: MediaType = MediaType.SHOW,
+  ): Promise<{ ids: string[]; cacheable: boolean }> {
     const exclude = this.parseSlugList(filters?.excludeGenres);
     const country = filters?.country?.trim().toUpperCase();
-    // Score genres: watch history counts double, favorites +1 each.
+    // Score genres: watch history counts double; favorites and watchlist +1 each.
     // Aggregates in SQL — the old findMany pulled every mediaGenre row for the
-    // user's entire history/favorites (thousands of rows) on every Discover open.
+    // user's entire library (thousands of rows) on every Discover open.
     // EXISTS keeps the old semantics: each mediaGenre row counts once per media,
     // regardless of how many history rows that media has.
-    const [histGenres, favGenres] = await Promise.all([
+    const [histGenres, favGenres, watchlistGenres] = await Promise.all([
       this.prisma.$queryRaw<{ name: string; c: number }[]>`
         SELECT g.name, COUNT(*)::int AS c
         FROM media_genres mg
@@ -1113,73 +1194,103 @@ export class DiscoveryService {
         WHERE EXISTS (SELECT 1 FROM favorites f WHERE f.media_id = mg.media_id AND f.user_id = ${userId})
         GROUP BY g.name
       `,
+      this.prisma.$queryRaw<{ name: string; c: number }[]>`
+        SELECT g.name, COUNT(*)::int AS c
+        FROM media_genres mg
+        JOIN genres g ON g.id = mg.genre_id
+        WHERE EXISTS (SELECT 1 FROM watchlist_items wi WHERE wi.media_id = mg.media_id AND wi.user_id = ${userId})
+        GROUP BY g.name
+      `,
     ]);
     const scores = new Map<string, number>();
     for (const r of histGenres) scores.set(r.name, (scores.get(r.name) ?? 0) + 2 * r.c);
     for (const r of favGenres) scores.set(r.name, (scores.get(r.name) ?? 0) + r.c);
+    for (const r of watchlistGenres) scores.set(r.name, (scores.get(r.name) ?? 0) + r.c);
     const topGenres = [...scores.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
     const genreNames = topGenres.map(([name]) => name);
-    // No taste signal at all: only a genre-filtered browse can still rank by rating+recency.
-    if (genreNames.length === 0 && !genre) return [];
-
-    // Keyword affinity: frequency of TMDB keywords over the user's watched +
-    // favorited shows/movies (persisted at hydration) — catches taste signals
+    // Keyword affinity: frequency of TMDB keywords over the user's watched,
+    // favorited, and watchlisted titles (persisted at hydration) — catches signals
     // genres are too coarse for (e.g. "isekai", "true crime", "sitcom").
-    const topKeywords = await this.prisma.$queryRaw<{ kw: string; c: number }[]>`
-      SELECT kw, COUNT(*)::int AS c FROM (
-        SELECT jsonb_array_elements_text(s.keywords::jsonb) AS kw
-        FROM shows s
-        WHERE jsonb_typeof(s.keywords::jsonb) = 'array' AND (
-          EXISTS (SELECT 1 FROM watch_history wh WHERE wh.media_id = s.media_id AND wh.user_id = ${userId})
-          OR EXISTS (SELECT 1 FROM favorites f WHERE f.media_id = s.media_id AND f.user_id = ${userId})
+    // Load exclusions alongside keywords. Besides saving a sequential DB round trip,
+    // the exclusions tell us whether a metadata-light user has any library at all.
+    const [topKeywords, excludedRows] = await Promise.all([
+      this.prisma.$queryRaw<{ kw: string; c: number }[]>`
+        WITH taste_media AS MATERIALIZED (
+          SELECT media_id FROM watch_history WHERE user_id = ${userId}
+          UNION
+          SELECT media_id FROM favorites WHERE user_id = ${userId}
+          UNION
+          SELECT media_id FROM watchlist_items WHERE user_id = ${userId}
         )
-        UNION ALL
-        SELECT jsonb_array_elements_text(m.keywords::jsonb) AS kw
-        FROM movies m
-        WHERE jsonb_typeof(m.keywords::jsonb) = 'array' AND (
-          EXISTS (SELECT 1 FROM watch_history wh WHERE wh.media_id = m.media_id AND wh.user_id = ${userId})
-          OR EXISTS (SELECT 1 FROM favorites f WHERE f.media_id = m.media_id AND f.user_id = ${userId})
-        )
-      ) kws
-      GROUP BY kw
-      ORDER BY c DESC
-      LIMIT 12
-    `;
-    const keywordWeight = new Map(topKeywords.map((r, i) => [r.kw.toLowerCase(), 12 - i]));
-
-    // Novelty: never recommend what the user already tracks.
-    const excludedIds = (
-      await this.prisma.$queryRaw<{ media_id: string }[]>`
+        SELECT kw, COUNT(*)::int AS c FROM (
+          SELECT jsonb_array_elements_text(s.keywords::jsonb) AS kw
+          FROM taste_media t
+          JOIN shows s ON s.media_id = t.media_id
+          WHERE jsonb_typeof(s.keywords::jsonb) = 'array'
+          UNION ALL
+          SELECT jsonb_array_elements_text(m.keywords::jsonb) AS kw
+          FROM taste_media t
+          JOIN movies m ON m.media_id = t.media_id
+          WHERE jsonb_typeof(m.keywords::jsonb) = 'array'
+        ) kws
+        GROUP BY kw
+        ORDER BY c DESC
+        LIMIT 12
+      `,
+      this.prisma.$queryRaw<{ media_id: string }[]>`
         SELECT media_id FROM watch_history WHERE user_id = ${userId}
         UNION SELECT media_id FROM watchlist_items WHERE user_id = ${userId}
         UNION SELECT media_id FROM favorites WHERE user_id = ${userId}
-      `
-    ).map((r) => r.media_id);
+      `,
+    ]);
+    const keywordWeight = new Map(topKeywords.map((r, i) => [r.kw.toLowerCase(), 12 - i]));
+
+    // Novelty: never recommend what the user already tracks.
+    const excludedIds = excludedRows.map((r) => r.media_id);
+    // A truly empty account has no basis for a "For You" rail. A user with library
+    // items but no persisted genres/keywords yet gets an immediate quality-ranked
+    // fallback; this is common while a search-created light row is being hydrated.
+    if (excludedIds.length === 0 && !genre) return { ids: [], cacheable: false };
+    const hasAffinity = genreNames.length > 0 || topKeywords.length > 0 || !!genre;
 
     const candidates = await this.prisma.mediaItem.findMany({
       where: {
-        type: MediaType.SHOW,
+        type,
         posterUrl: { not: null },
         // User opted out of anime: ANIME-classified rows leave the candidate pool.
         ...(hideAnime ? { contentClassification: { not: 'ANIME' } } : {}),
         // Genre filter active: the pool is that genre's catalog (affinity only ranks).
         // Otherwise: the pool is the user's affinity genres. Excluded slugs leave the
         // pool either way (some + none combine on the genres relation).
-        genres: {
-          ...(genre
-            ? { some: { genre: { slug: { equals: genre, mode: 'insensitive' as const } } } }
-            : { some: { genre: { name: { in: genreNames } } } }),
-          ...(exclude.length
-            ? { none: { genre: { slug: { in: exclude, mode: 'insensitive' as const } } } }
-            : {}),
-        },
-        // Country filter with known-mismatch semantics (pool is shows-only).
-        ...(country ? this.countryWhere(country, MediaType.SHOW) : {}),
+        ...(genre || genreNames.length > 0 || exclude.length > 0
+          ? {
+              genres: {
+                ...(genre
+                  ? {
+                      some: {
+                        genre: { slug: { equals: genre, mode: 'insensitive' as const } },
+                      },
+                    }
+                  : genreNames.length > 0
+                    ? { some: { genre: { name: { in: genreNames } } } }
+                    : {}),
+                ...(exclude.length
+                  ? {
+                      none: {
+                        genre: { slug: { in: exclude, mode: 'insensitive' as const } },
+                      },
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(country ? this.countryWhere(country, type) : {}),
         id: { notIn: excludedIds },
       },
       include: {
         genres: { include: { genre: true } },
         show: { select: { keywords: true, yearStart: true } },
+        movie: { select: { keywords: true, releaseYear: true } },
       },
       orderBy: { popularity: 'desc' },
       take: 600,
@@ -1195,12 +1306,14 @@ export class DiscoveryService {
         const rank = genreRank.get(mg.genre.name);
         if (rank !== undefined) score += 12 - rank * 2;
       }
-      const kws = Array.isArray(m.show?.keywords) ? (m.show!.keywords as string[]) : [];
+      const rawKeywords = type === MediaType.SHOW ? m.show?.keywords : m.movie?.keywords;
+      const kws = Array.isArray(rawKeywords) ? (rawKeywords as string[]) : [];
       let kwScore = 0;
       for (const k of kws) kwScore += keywordWeight.get(k.toLowerCase()) ?? 0;
       score += Math.min(kwScore, 18);
       score += m.rating ?? 0;
-      const year = m.show?.yearStart ?? null;
+      const year =
+        type === MediaType.SHOW ? (m.show?.yearStart ?? null) : (m.movie?.releaseYear ?? null);
       if (year) {
         const age = thisYear - year;
         if (age <= 3) score += 10;
@@ -1212,14 +1325,20 @@ export class DiscoveryService {
     });
     scored.sort((a, b) => b.score - a.score);
     // Cap the cached ranking at 300 — plenty of scroll depth, bounded Redis payload.
-    return scored.slice(0, 300).map((s) => s.id);
+    return { ids: scored.slice(0, 300).map((s) => s.id), cacheable: hasAffinity };
   }
 
   private async discoverViaDb(type: MediaType, q: DiscoverQueryDto, userId?: string) {
     return this.topDb(type, q.pageSize || 20, userId, q);
   }
 
-  private async topDb(type: MediaType, limit: number, userId?: string, q?: ExploreFilterInput) {
+  private async topDb(
+    type: MediaType,
+    limit: number,
+    userId?: string,
+    q?: ExploreFilterInput,
+    compact = false,
+  ) {
     const hideAnime = (q?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
     const exclude = this.parseSlugList(q?.excludeGenres);
     const country = q?.country?.trim().toUpperCase();
@@ -1257,10 +1376,8 @@ export class DiscoveryService {
       orderBy,
       take: limit,
     });
-    return this.fetchListDtos(
-      rows.map((r) => r.id),
-      userId,
-    );
+    const ids = rows.map((r) => r.id);
+    return compact ? this.fetchCardDtos(ids, userId, limit) : this.fetchListDtos(ids, userId);
   }
 
   /**

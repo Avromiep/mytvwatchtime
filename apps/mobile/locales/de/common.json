@@ -97,5 +97,12 @@
   "unwatchOnce": "Eine Wiederholung entfernen",
   "unwatchAll": "Alle als nicht gesehen markieren",
   "unwatchAllConfirmTitle": "Alle als nicht gesehen markieren?",
-  "unwatchAllConfirmDesc": "Dadurch werden alle {{count}} erfassten Sichtungen entfernt."
+  "unwatchAllConfirmDesc": "Dadurch werden alle {{count}} erfassten Sichtungen entfernt.",
+  "libraryEmptyMovieTitle": "Deine Filmbibliothek ist leer",
+  "libraryEmptyShowTitle": "Deine Serienbibliothek ist leer",
+  "libraryEmptyExplore": "Sieh dich im Entdecken-Bereich um, finde etwas Passendes und beginne mit dem Tracking.",
+  "libraryEmptyExploreCta": "Entdecken",
+  "libraryEmptyBuilder": "Oder nutze den Schnellassistenten, um gesehene Titel hinzuzufügen, deinen Serienfortschritt festzulegen und deine Merkliste aufzubauen.",
+  "libraryEmptyBuilderCta": "Bibliothek schnell einrichten",
+  "libraryEmptyImport": "Du trackst bereits mit TV Time oder Trakt? Importiere deine Daten und übernimm deine Bibliothek."
 }

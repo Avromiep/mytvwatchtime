@@ -97,5 +97,12 @@
   "unwatchOnce": "एक देखना हटाएँ",
   "unwatchAll": "सभी को नहीं देखा के रूप में चिह्नित करें",
   "unwatchAllConfirmTitle": "सभी को नहीं देखा के रूप में चिह्नित करें?",
-  "unwatchAllConfirmDesc": "इससे सभी {{count}} दर्ज बार देखे जाने की प्रविष्टियाँ हट जाएँगी।"
+  "unwatchAllConfirmDesc": "इससे सभी {{count}} दर्ज बार देखे जाने की प्रविष्टियाँ हट जाएँगी।",
+  "libraryEmptyMovieTitle": "आपकी फ़िल्म लाइब्रेरी खाली है",
+  "libraryEmptyShowTitle": "आपकी टीवी शो लाइब्रेरी खाली है",
+  "libraryEmptyExplore": "अपनी पसंद की चीज़ खोजने और उसे ट्रैक करना शुरू करने के लिए एक्सप्लोर देखें।",
+  "libraryEmptyExploreCta": "एक्सप्लोर करें",
+  "libraryEmptyBuilder": "या देखे गए टाइटल जोड़ने, शो की प्रगति सेट करने और वॉचलिस्ट बनाने के लिए क्विक लाइब्रेरी बिल्डर का उपयोग करें।",
+  "libraryEmptyBuilderCta": "क्विक लाइब्रेरी बिल्डर",
+  "libraryEmptyImport": "क्या आप पहले से TV Time या Trakt पर ट्रैक करते हैं? अपनी लाइब्रेरी लाने के लिए अपना डेटा इम्पोर्ट करें।"
 }
