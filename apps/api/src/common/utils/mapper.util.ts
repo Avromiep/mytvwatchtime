@@ -182,6 +182,7 @@ export function mapShow(media: AnyRecord, userId?: string): ShowDto {
     addedCount: media.addedCount ?? 0,
     inWatchlist: !!(media.watchlist?.length || media._inWatchlist),
     favorite: !!(media.favorites?.length || media._favorite),
+    dropped: !!userStatus?.dropped,
     trackingPaused: !!userStatus?.pausedAt,
     trackingPausedAt: userStatus?.pausedAt ? new Date(userStatus.pausedAt).toISOString() : null,
     userProgress: total > 0 ? Math.min(1, watched / total) : 0,

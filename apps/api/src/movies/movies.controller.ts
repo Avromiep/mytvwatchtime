@@ -66,6 +66,11 @@ export class MoviesController {
     return this.collections.removeWatchlist(userId, id);
   }
 
+  @Post('movies/:id/drop')
+  drop(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.collections.dropMedia(userId, id);
+  }
+
   @Post('movies/:id/favorite')
   addFavorite(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.collections.addFavorite(userId, id);

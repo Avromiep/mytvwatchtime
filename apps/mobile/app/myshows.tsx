@@ -9,7 +9,6 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
-import { useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Header } from '../components/Header';
@@ -18,6 +17,7 @@ import { EmptyState, Screen, Spinner, T } from '../components/primitives';
 import { useShowProgressPages, useShowProgressSummary } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { spacing } from '../theme/theme';
+import { useContentWidth } from '../hooks/useContentWidth';
 import { useTranslation } from 'react-i18next';
 
 interface StatusItem {
@@ -47,7 +47,7 @@ interface FlatRow {
 const GRID_CARD_STYLE = { marginRight: 0 } as const;
 
 export default function MyShowsScreen() {
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   const { tokens } = useAppearance();
   const { t } = useTranslation(['social', 'common']);
   const summary = useShowProgressSummary();

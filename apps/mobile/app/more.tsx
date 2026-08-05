@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { ActivityIndicator, Dimensions, ScrollView, View } from 'react-native';
+import { ActivityIndicator, ScrollView, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
 import { MediaType } from '@tvwatch/shared';
@@ -10,15 +10,12 @@ import { useFavoritePages, useGenres, useWatchlistPages } from '../api/hooks';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAppearance } from '../context/PreferencesProvider';
+import { useContentWidth } from '../hooks/useContentWidth';
 import { spacing } from '../theme/theme';
 import { useTranslation } from 'react-i18next';
 
 function useColumns() {
-  const [width, setWidth] = useState(Dimensions.get('window').width);
-  useEffect(() => {
-    const sub = Dimensions.addEventListener('change', ({ window }) => setWidth(window.width));
-    return () => sub?.remove();
-  }, []);
+  const width = useContentWidth();
   if (width >= 1200) return 6;
   if (width >= 900) return 5;
   if (width >= 768) return 4;
@@ -86,7 +83,7 @@ export default function MoreScreen() {
         : (LIST_PATHS[tab ?? ''] ?? null);
 
   const cols = useColumns();
-  const screenWidth = Dimensions.get('window').width;
+  const screenWidth = useContentWidth();
   const containerW = Math.min(screenWidth - spacing.lg * 2, 1200);
   const cardW = Math.floor((containerW - spacing.md * (cols - 1)) / cols);
 

@@ -14,6 +14,12 @@ import { Ionicons } from '@expo/vector-icons';
 
 /** Rows rendered when a season is first opened; the rest load via "show more". */
 const INITIAL_EPISODES = 20;
+// eslint-disable-next-line local/no-hardcoded-colors -- intentional dark media scrim over backdrop in both themes
+const SHOW_SCRIM_COLORS = ['rgba(15,17,21,0.65)', 'rgba(15,17,21,0.05)', 'rgba(15,17,21,0.7)'] as [
+  string,
+  string,
+  string,
+];
 import { Header } from '../../components/Header';
 import { BadgeGrid, Carousel } from '../../components/cards';
 import { RatingChart } from '../../components/RatingChart';
@@ -62,6 +68,7 @@ import { countryFlag } from '../../lib/country';
 import { formatRuntime } from '../../lib/format';
 import { EpisodeHistoryCarousel } from '../../components/EpisodeHistoryCarousel';
 import { WhereToWatch } from '../../components/WhereToWatch';
+import { countUnwatchedPreviousEpisodes } from '../../lib/episode-progress';
 
 export default function ShowDetailScreen() {
   const { tokens } = useAppearance();
@@ -169,9 +176,8 @@ export default function ShowDetailScreen() {
           style={styles.backdrop}
           imageStyle={{ opacity: 1 }}
         >
-          {/* eslint-disable-next-line local/no-hardcoded-colors -- intentional dark media scrim over backdrop (both themes) */}
           <LinearGradient
-            colors={['rgba(15,17,21,0.65)', 'rgba(15,17,21,0.05)', 'rgba(15,17,21,0.7)']}
+            colors={SHOW_SCRIM_COLORS}
             locations={[0, 0.45, 1]}
             style={styles.overlay}
           >
@@ -188,6 +194,8 @@ export default function ShowDetailScreen() {
                       id: show.id,
                       title: show.title,
                       kind: 'show',
+                      inWatchlist: show.inWatchlist,
+                      dropped: show.dropped,
                       trackingPaused: show.trackingPaused,
                     })
                   }
@@ -370,6 +378,31 @@ function EpisodesTab({ showId }: { showId: string }) {
   const unwatchSeasonOnce = useUnwatchSeasonOnce();
   const menu = useWatchMenu();
 
+  const markEpisodeWatched = (season: any, episode: any) => {
+    const previousCount = countUnwatchedPreviousEpisodes(seasons, season.number, episode.number);
+    if (previousCount === 0) {
+      markEp.mutate({ id: episode.id, on: true });
+      return;
+    }
+    showDialog({
+      title: t('showDetail:markPreviousTitle'),
+      description: t('showDetail:markPreviousDescription', { count: previousCount }),
+      buttons: [
+        {
+          label: t('showDetail:markPrevious'),
+          variant: 'primary',
+          onPress: () => markEp.mutate({ id: episode.id, on: true, includePrevious: true }),
+        },
+        {
+          label: t('showDetail:onlyThisEpisode'),
+          variant: 'secondary',
+          onPress: () => markEp.mutate({ id: episode.id, on: true }),
+        },
+        { label: t('common:cancel'), variant: 'ghost' },
+      ],
+    });
+  };
+
   if (isLoading) return <Spinner />;
   return (
     <View style={{ paddingHorizontal: spacing.lg, marginTop: spacing.md }}>
@@ -525,7 +558,7 @@ function EpisodesTab({ showId }: { showId: string }) {
                               menu({
                                 watched: e.watched,
                                 watchCount: e.watchCount ?? 0,
-                                onMarkWatched: () => markEp.mutate({ id: e.id, on: true }),
+                                onMarkWatched: () => markEpisodeWatched(s, e),
                                 onRewatch: () => rewatchEp.mutate(e.id),
                                 onUnwatchOnce: () => unwatchOnceEp.mutate(e.id),
                                 onUnwatch: () => markEp.mutate({ id: e.id, on: false }),

@@ -53,5 +53,10 @@
   "removeItemQuestion": "項目を削除しますか？",
   "shareMsg": "TVWatchTimeで「{{title}}」をチェック",
   "emptyLabel": "空",
-  "publicLists": "公開リスト"
+  "publicLists": "公開リスト",
+  "drop": "視聴をやめる",
+  "dropTitle": "{{title}}の視聴をやめますか？",
+  "dropShowDescription": "この番組はウォッチリストと視聴中の番組から削除されます。視聴履歴と進捗は保持されます。",
+  "dropMovieDescription": "この映画はウォッチリストから削除されます。視聴履歴は保持されます。",
+  "droppedToast": "{{title}}の視聴をやめました"
 }

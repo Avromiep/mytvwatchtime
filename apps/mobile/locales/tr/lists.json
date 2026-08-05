@@ -53,5 +53,10 @@
   "removeItemQuestion": "Öğe kaldırılsın mı?",
   "shareMsg": "TVWatchTime’da “{{title}}” listesine göz at",
   "emptyLabel": "Boş",
-  "publicLists": "Herkese açık listeler"
+  "publicLists": "Herkese açık listeler",
+  "drop": "Bırak",
+  "dropTitle": "{{title}} bırakılsın mı?",
+  "dropShowDescription": "Dizi izleme listenden ve aktif dizilerinden kaldırılır. İzleme geçmişin ve ilerlemen korunur.",
+  "dropMovieDescription": "Film izleme listenden kaldırılır. İzleme geçmişin korunur.",
+  "droppedToast": "{{title}} bırakıldı"
 }

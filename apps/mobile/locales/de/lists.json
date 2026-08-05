@@ -53,5 +53,10 @@
   "removeItemQuestion": "Element entfernen?",
   "shareMsg": "Sieh dir „{{title}}“ auf TVWatchTime an",
   "emptyLabel": "Leer",
-  "publicLists": "Öffentliche Listen"
+  "publicLists": "Öffentliche Listen",
+  "drop": "Nicht weiterschauen",
+  "dropTitle": "{{title}} nicht weiterschauen?",
+  "dropShowDescription": "Die Serie wird aus deiner Watchlist und deinen aktiven Serien entfernt. Verlauf und Fortschritt bleiben erhalten.",
+  "dropMovieDescription": "Der Film wird aus deiner Watchlist entfernt. Dein Verlauf bleibt erhalten.",
+  "droppedToast": "{{title}} wird nicht weitergeschaut"
 }

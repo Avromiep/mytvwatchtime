@@ -81,6 +81,36 @@ export class CollectionsService {
     return { inWatchlist: false };
   }
 
+  /**
+   * Explicitly drop a title while preserving favorites, custom-list membership, and
+   * watch history. Shows also retain their progress row with the sticky dropped flag;
+   * movies have no in-progress state, so dropping removes them from the watchlist.
+   */
+  async dropMedia(userId: string, mediaId: string) {
+    const media = await this.prisma.mediaItem.findUnique({ where: { id: mediaId } });
+    if (!media) throw new NotFoundException('Media not found');
+
+    await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.watchlistItem.deleteMany({ where: { userId, mediaId } });
+      if (existing.count > 0) {
+        await tx.mediaItem.update({
+          where: { id: mediaId },
+          data: { addedCount: { decrement: 1 } },
+        });
+      }
+      if (media.type === MediaType.SHOW) {
+        await tx.userShowStatus.upsert({
+          where: { userId_mediaId: { userId, mediaId } },
+          create: { userId, mediaId, dropped: true },
+          update: { dropped: true, pausedAt: null },
+        });
+      }
+    });
+
+    await this.invalidateUserLibraryCaches(userId);
+    return { dropped: true, inWatchlist: false };
+  }
+
   // ---------------- Tracking pause ----------------
   /** Pause tracking: hidden from watch-next/upcoming, no episode/watchlist
    *  notifications. Idempotent; the row is upserted because watchlist-only shows

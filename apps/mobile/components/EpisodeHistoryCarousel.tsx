@@ -3,7 +3,6 @@ import {
   FlatList,
   ImageBackground,
   Pressable,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -14,6 +13,7 @@ import { useMarkEpisodeWatched, useRewatchEpisode, useShowEpisodes, useUnwatchEp
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
 import { formatAirDate, formatAirTime } from '../lib/format';
+import { useContentWidth } from '../hooks/useContentWidth';
 
 // eslint-disable-next-line local/no-hardcoded-colors -- intentional dark media scrim over episode stills, same as the show detail hero
 const SCRIM_COLORS = ['rgba(15,17,21,0.55)', 'rgba(15,17,21,0.05)', 'rgba(15,17,21,0.85)'] as [string, string, string];
@@ -41,7 +41,7 @@ export function EpisodeHistoryCarousel({ showId }: { showId: string }) {
   const unwatchOnce = useUnwatchEpisodeOnce();
   const menu = useWatchMenu();
 
-  const { width: screenW } = useWindowDimensions();
+  const screenW = useContentWidth();
   const cardW = Math.round(screenW * 0.7);
   // Ultra-wide cards: wide rectangles that stay short on phones (~2.6:1) but may
   // grow a bit taller on tablets (capped).

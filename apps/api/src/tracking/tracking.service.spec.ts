@@ -1,5 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { MediaType } from '@tvwatch/shared';
 import { TrackingService } from './tracking.service';
 
 describe('TrackingService.markSeasonWatched concurrency', () => {
@@ -306,5 +307,96 @@ describe('TrackingService dropped semantics', () => {
       where: { id: 'uss1' },
       data: expect.not.objectContaining({ dropped: expect.anything() }),
     });
+  });
+});
+
+describe('TrackingService markEpisodeAndPreviousWatched', () => {
+  it('marks earlier aired episodes and the selected episode in one batch', async () => {
+    const current = {
+      id: 's2e2',
+      number: 2,
+      runtimeMinutes: 45,
+      season: {
+        id: 'season-2',
+        showId: 'show-record',
+        number: 2,
+        isSpecial: false,
+        show: { mediaId: 'media-show' },
+      },
+    };
+    const previous = {
+      id: 's1e2',
+      number: 2,
+      runtimeMinutes: 42,
+      season: { id: 'season-1', showId: 'show-record', number: 1, isSpecial: false },
+    };
+    const tx = {
+      userEpisodeStatus: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ episodeId: previous.id, watched: false, watchCount: 0 }]),
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      watchHistory: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
+    };
+    const prisma = {
+      episode: {
+        findUnique: jest.fn().mockResolvedValue(current),
+        findMany: jest.fn().mockResolvedValue([previous]),
+      },
+      userShowStatus: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'status',
+          watchedCount: 1,
+          totalCount: 10,
+          dropped: false,
+        }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const events = { emit: jest.fn() };
+    const redis = { delByPattern: jest.fn(), del: jest.fn() };
+    const service = new TrackingService(prisma as any, events as any, redis as any);
+
+    const result = await service.markEpisodeAndPreviousWatched('user', current.id, {});
+
+    expect(prisma.episode.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          structureState: 'ACTIVE',
+          airDate: { lte: expect.any(Date) },
+          season: { showId: 'show-record', isSpecial: false },
+        }),
+      }),
+    );
+    expect(tx.userEpisodeStatus.createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ episodeId: current.id, watched: true, watchCount: 1 })],
+    });
+    expect(tx.userEpisodeStatus.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ episodeId: { in: [previous.id] } }),
+      }),
+    );
+    expect(tx.watchHistory.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({
+          episodeId: previous.id,
+          mediaType: MediaType.SHOW,
+          seasonNumber: 1,
+        }),
+        expect.objectContaining({ episodeId: current.id, seasonNumber: 2 }),
+      ]),
+    });
+    expect(prisma.userShowStatus.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ watchedCount: 3 }) }),
+    );
+    expect(events.emit).toHaveBeenCalledWith('watch.episode', {
+      userId: 'user',
+      mediaId: 'media-show',
+      episodeId: current.id,
+    });
+    expect(result).toEqual({ watched: true, watchCount: 1, count: 2, previousCount: 1 });
   });
 });

@@ -35,5 +35,9 @@
   "unwatchSeason": "Sezonu izlenmedi olarak işaretle",
   "rewatchCount": "×{{count}}",
   "unwatchSeasonConfirmTitle": "Sezon izlenmedi olarak işaretlensin mi?",
-  "unwatchSeasonConfirmDesc": "Bu, \"{{title}}\" için kaydedilmiş tüm izlemeleri kaldırır."
+  "unwatchSeasonConfirmDesc": "Bu, \"{{title}}\" için kaydedilmiş tüm izlemeleri kaldırır.",
+  "markPreviousTitle": "Önceki bölümler izlendi olarak işaretlensin mi?",
+  "markPreviousDescription": "Bazı önceki bölümler hâlâ izlenmedi. Onlar ve bu bölüm izlendi olarak işaretlensin mi?",
+  "markPrevious": "Önceki bölümleri işaretle",
+  "onlyThisEpisode": "Yalnızca bu bölüm"
 }

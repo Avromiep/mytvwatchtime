@@ -72,6 +72,7 @@ import { api, HttpError } from './client';
 import { applyWatchStateToItems } from './watch-next-optimistic';
 import { refreshWidgets } from '../widgets/sync';
 import { logFirstEvent } from '../lib/analytics';
+import { LIST_COLLECTION_QUERY_PREFIXES, removeListFromCollection } from '../lib/list-cache';
 
 export const qk = {
   me: ['me'] as const,
@@ -993,8 +994,18 @@ function invalidateLeaderboardSoon(qc: ReturnType<typeof useQueryClient>) {
 export const useMarkEpisodeWatched = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, on }: { id: string; on: boolean }) =>
-      on ? api.post(`/episodes/${id}/watched`, {}) : api.del(`/episodes/${id}/watched`),
+    mutationFn: ({
+      id,
+      on,
+      includePrevious,
+    }: {
+      id: string;
+      on: boolean;
+      includePrevious?: boolean;
+    }) =>
+      on
+        ? api.post(`/episodes/${id}/${includePrevious ? 'watched-previous' : 'watched'}`, {})
+        : api.del(`/episodes/${id}/watched`),
     // Optimistically flip the watched state across all caches so the UI reacts instantly.
     // watchCount: 1 when marking watched, 0 when unwatching.
     onMutate: async ({ id, on }) => {
@@ -1738,7 +1749,9 @@ export const useToggleWatchlist = () => {
       on ? api.post(`/shows/${id}/watchlist`, {}) : api.del(`/shows/${id}/watchlist`),
     onMutate: async ({ id, on }) => {
       const prevShow = qc.getQueryData(qk.show(id));
-      qc.setQueryData(qk.show(id), (old: any) => (old ? { ...old, inWatchlist: on } : old));
+      qc.setQueryData(qk.show(id), (old: any) =>
+        old ? { ...old, inWatchlist: on, dropped: !on } : old,
+      );
       // Removing evicts the card from watchlist grids + every My Shows bucket
       // (server marks the show dropped, hiding it from watching/finished/paused too).
       // Adding is left to the refetch.
@@ -2279,6 +2292,53 @@ export const useToggleTrackingPause = () => {
   });
 };
 
+export const useDropMedia = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, kind }: { id: string; kind: 'movie' | 'show' }) =>
+      api.post<{ dropped: boolean; inWatchlist: boolean }>(
+        `/${kind === 'show' ? 'shows' : 'movies'}/${id}/drop`,
+      ),
+    onMutate: async ({ id, kind }) => {
+      const detailKey = kind === 'show' ? qk.show(id) : qk.movie(id);
+      const prevDetail = qc.getQueryData(detailKey);
+      qc.setQueryData(detailKey, (old: any) =>
+        old
+          ? {
+              ...old,
+              inWatchlist: false,
+              ...(kind === 'show' ? { dropped: true, trackingPaused: false } : {}),
+            }
+          : old,
+      );
+      const prevWatchlist = patchPrefix(qc, 'watchlist', (data) =>
+        filterItemsDeep(data, (item: any) => item.id !== id),
+      );
+      const prevByStatus =
+        kind === 'show'
+          ? patchPrefix(qc, 'showsByStatus', (data) =>
+              filterItemsDeep(data, (item: any) => item.id !== id),
+            )
+          : undefined;
+      return { detailKey, prevDetail, prevWatchlist, prevByStatus };
+    },
+    onError: (_error, _vars, context) => {
+      if (context?.prevDetail) qc.setQueryData(context.detailKey, context.prevDetail);
+      restorePrefix(qc, context?.prevWatchlist);
+      restorePrefix(qc, context?.prevByStatus);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['show'] });
+      qc.invalidateQueries({ queryKey: ['movie'] });
+      qc.invalidateQueries({ queryKey: ['watchlist'] });
+      qc.invalidateQueries({ queryKey: ['watchNext'] });
+      qc.invalidateQueries({ queryKey: ['upcoming'] });
+      qc.invalidateQueries({ queryKey: ['showsByStatus'] });
+      void refreshWidgets();
+    },
+  });
+};
+
 export const useToggleListNotify = () => {
   const qc = useQueryClient();
   return useMutation({
@@ -2356,6 +2416,36 @@ export const useCreateList = () => {
       items?: string[];
     }) => api.post<any>('/me/lists', dto),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['myLists'] }),
+  });
+};
+
+export const useDeleteList = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (listId: string) => api.del(`/lists/${listId}`),
+    onMutate: async (listId: string) => {
+      await Promise.all(
+        LIST_COLLECTION_QUERY_PREFIXES.map((prefix) =>
+          qc.cancelQueries({ queryKey: [prefix] }),
+        ),
+      );
+      const previous = LIST_COLLECTION_QUERY_PREFIXES.map((prefix) =>
+        patchPrefix(qc, prefix, (data) => removeListFromCollection(data, listId)),
+      );
+      return { previous };
+    },
+    onError: (_error, _listId, context) => {
+      context?.previous.forEach((snapshot) => restorePrefix(qc, snapshot));
+    },
+    onSuccess: (_data, listId) => {
+      qc.removeQueries({ queryKey: ['list', listId] });
+      qc.removeQueries({ queryKey: ['listItems', listId] });
+    },
+    onSettled: () => {
+      LIST_COLLECTION_QUERY_PREFIXES.forEach((prefix) => {
+        void qc.invalidateQueries({ queryKey: [prefix] });
+      });
+    },
   });
 };
 

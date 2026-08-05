@@ -162,6 +162,8 @@ export interface ShowDto {
   match?: MatchScore;
   inWatchlist?: boolean;
   favorite?: boolean;
+  /** True when the user explicitly dropped the show. Watch history is preserved. */
+  dropped?: boolean;
   /** True when the user paused tracking — hidden from watch-next/upcoming and no
    *  episode notifications until resumed. Only set on user-scoped show payloads. */
   trackingPaused?: boolean;

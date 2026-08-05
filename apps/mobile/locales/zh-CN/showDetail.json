@@ -35,5 +35,9 @@
   "unwatchSeason": "将本季标记为未看",
   "rewatchCount": "×{{count}}",
   "unwatchSeasonConfirmTitle": "将本季标记为未看？",
-  "unwatchSeasonConfirmDesc": "这将删除“{{title}}”所有已记录的观看。"
+  "unwatchSeasonConfirmDesc": "这将删除“{{title}}”所有已记录的观看。",
+  "markPreviousTitle": "将之前的剧集标记为已看？",
+  "markPreviousDescription": "之前仍有未看的剧集。要将它们和本集一起标记为已看吗？",
+  "markPrevious": "标记之前的剧集",
+  "onlyThisEpisode": "仅本集"
 }

@@ -5,7 +5,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   buildTokens,
   isRTL,
-  resolveTheme,
   type LanguagePreference,
   type ResolvedTheme,
   type SupportedLocale,
@@ -16,6 +15,7 @@ import { api, setApiLocale } from '../api/client';
 import { useAuth } from './AuthContext';
 import i18n, { detectResolvedLocale, loadLocale } from '../i18n';
 import { syncWidgetLabels } from '../widgets/sync';
+import { resolveHydratedTheme } from '../lib/theme-hydration';
 
 const THEME_KEY = 'pref:theme';
 const LANG_KEY = 'pref:lang';
@@ -40,6 +40,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   const [themePreference, setThemePreferenceState] = useState<ThemePreference>('system');
   const [languagePreference, setLanguagePreferenceState] = useState<LanguagePreference>('system');
   const [locale, setLocale] = useState<SupportedLocale>('en');
+  const [preferencesLoaded, setPreferencesLoaded] = useState(Platform.OS !== 'web');
   const appliedForUserId = useRef<string | null>(null);
   const prevLocaleRef = useRef<string | null>(null);
   const queryClient = useQueryClient();
@@ -47,23 +48,38 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   // Load local preferences once at startup (no network block).
   useEffect(() => {
     (async () => {
-      const [t, l] = await Promise.all([AsyncStorage.getItem(THEME_KEY), AsyncStorage.getItem(LANG_KEY)]);
-      const tp: ThemePreference = t === 'light' || t === 'dark' ? t : 'system';
-      const lp: LanguagePreference =
-        l === 'system' || l === 'en' || l === 'fr' || l === 'es' || l === 'pt-BR' || l === 'de' || l === 'it' || l === 'ar' || l === 'tr' || l === 'hi' || l === 'id' || l === 'ja' || l === 'ko' || l === 'zh-CN'
-          ? (l as LanguagePreference)
-          : 'system';
-      setThemePreferenceState(tp);
-      setLanguagePreferenceState(lp);
-      const resolved = detectResolvedLocale(lp);
-      setLocale(resolved);
-      void loadLocale(resolved);
+      try {
+        const [t, l] = await Promise.all([
+          AsyncStorage.getItem(THEME_KEY),
+          AsyncStorage.getItem(LANG_KEY),
+        ]);
+        const tp: ThemePreference = t === 'light' || t === 'dark' ? t : 'system';
+        const lp: LanguagePreference =
+          l === 'system' || l === 'en' || l === 'fr' || l === 'es' || l === 'pt-BR' || l === 'de' || l === 'it' || l === 'ar' || l === 'tr' || l === 'hi' || l === 'id' || l === 'ja' || l === 'ko' || l === 'zh-CN'
+            ? (l as LanguagePreference)
+            : 'system';
+        setThemePreferenceState(tp);
+        setLanguagePreferenceState(lp);
+        const resolved = detectResolvedLocale(lp);
+        setLocale(resolved);
+        void loadLocale(resolved);
+      } catch {
+        // Keep the system defaults; preference storage must not block rendering.
+      } finally {
+        // Also release the deterministic web theme if storage is unavailable.
+        setPreferencesLoaded(true);
+      }
     })();
   }, []);
 
   // Account-wins on sign-in: apply the account's non-system prefs once per login.
   useEffect(() => {
-    if (!user || appliedForUserId.current === user.id) return;
+    if (!preferencesLoaded) return;
+    if (!user) {
+      appliedForUserId.current = null;
+      return;
+    }
+    if (appliedForUserId.current === user.id) return;
     appliedForUserId.current = user.id;
     if (user.themePreference && user.themePreference !== 'system') {
       setThemePreferenceState(user.themePreference);
@@ -77,9 +93,13 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       setLocale(resolved);
       void loadLocale(resolved);
     }
-  }, [user]);
+  }, [user, preferencesLoaded]);
 
-  const resolvedTheme: ResolvedTheme = resolveTheme(themePreference, (systemScheme as 'light' | 'dark' | null) ?? null);
+  const resolvedTheme: ResolvedTheme = resolveHydratedTheme(
+    preferencesLoaded,
+    themePreference,
+    (systemScheme as 'light' | 'dark' | null) ?? null,
+  );
   const tokens = useMemo(() => buildTokens(resolvedTheme), [resolvedTheme]);
   const rtl = isRTL(locale);
 

@@ -35,5 +35,9 @@
   "unwatchSeason": "시즌을 안 본 것으로 표시",
   "rewatchCount": "×{{count}}",
   "unwatchSeasonConfirmTitle": "시즌을 안 본 것으로 표시할까요?",
-  "unwatchSeasonConfirmDesc": "\"{{title}}\"의 기록된 시청이 모두 삭제됩니다."
+  "unwatchSeasonConfirmDesc": "\"{{title}}\"의 기록된 시청이 모두 삭제됩니다.",
+  "markPreviousTitle": "이전 에피소드를 시청 완료로 표시할까요?",
+  "markPreviousDescription": "아직 보지 않은 이전 에피소드가 있습니다. 이전 에피소드와 이 에피소드를 시청 완료로 표시할까요?",
+  "markPrevious": "이전 에피소드 표시",
+  "onlyThisEpisode": "이 에피소드만"
 }

@@ -35,5 +35,9 @@
   "unwatchSeason": "Tandai musim belum ditonton",
   "rewatchCount": "×{{count}}",
   "unwatchSeasonConfirmTitle": "Tandai musim belum ditonton?",
-  "unwatchSeasonConfirmDesc": "Ini menghapus semua tontonan yang tercatat untuk \"{{title}}\"."
+  "unwatchSeasonConfirmDesc": "Ini menghapus semua tontonan yang tercatat untuk \"{{title}}\".",
+  "markPreviousTitle": "Tandai episode sebelumnya sudah ditonton?",
+  "markPreviousDescription": "Beberapa episode sebelumnya belum ditonton. Tandai semuanya dan episode ini sudah ditonton?",
+  "markPrevious": "Tandai episode sebelumnya",
+  "onlyThisEpisode": "Hanya episode ini"
 }

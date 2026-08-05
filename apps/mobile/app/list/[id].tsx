@@ -5,13 +5,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useTranslation } from 'react-i18next';
-import { useQueryClient } from '@tanstack/react-query';
 import { Header } from '../../components/Header';
 import { cardYear } from '../../components/cards';
 import { Button, Card, EmptyState, PosterImage, Screen, Spinner, T } from '../../components/primitives';
 import { TextField } from '../../components/TextField';
 import { api } from '../../api/client';
-import { useList, useListItems, useToggleListLike, useToggleListSub, useToggleListNotify, useAddListItem, useRemoveListItem, useSearch, useRecentWatched } from '../../api/hooks';
+import { useList, useListItems, useToggleListLike, useToggleListSub, useToggleListNotify, useAddListItem, useRemoveListItem, useSearch, useRecentWatched, useDeleteList } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
 import { countryFlag } from '../../lib/country';
@@ -287,12 +286,11 @@ function AddItemSearch({ listId, existingIds, onAdd }: { listId: string; existin
 function EditListModal({ listId, title, description, visibility, onClose }: { listId: string; title: string; description?: string; visibility: string; onClose: () => void }) {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['lists', 'common']);
-  const queryClient = useQueryClient();
+  const deleteList = useDeleteList();
   const [editTitle, setEditTitle] = useState(title);
   const [editDesc, setEditDesc] = useState(description || '');
   const [editPublic, setEditPublic] = useState(visibility === 'PUBLIC');
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
 
   const save = async () => {
     setSaving(true);
@@ -301,27 +299,18 @@ function EditListModal({ listId, title, description, visibility, onClose }: { li
   };
 
   const del = () => {
-    if (deleting) return;
+    if (deleteList.isPending) return;
     showConfirm({
       title: t('lists:deleteListQuestion'),
       description: t('lists:deleteCannotUndo'),
       confirmLabel: t('common:delete'),
       destructive: true,
       onConfirm: async () => {
-        setDeleting(true);
         try {
-          await api.del(`/lists/${listId}`);
-          queryClient.removeQueries({ queryKey: ['list', listId] });
-          queryClient.removeQueries({ queryKey: ['listItems', listId] });
-          await Promise.all([
-            queryClient.invalidateQueries({ queryKey: ['lists'] }),
-            queryClient.invalidateQueries({ queryKey: ['userLists'] }),
-            queryClient.invalidateQueries({ queryKey: ['followedLists'] }),
-          ]);
+          await deleteList.mutateAsync(listId);
           onClose();
           router.back();
         } catch {
-          setDeleting(false);
           showError({ description: t('lists:failedToDelete') });
         }
       },
@@ -350,12 +339,12 @@ function EditListModal({ listId, title, description, visibility, onClose }: { li
           <Button title={t('lists:updateList')} onPress={save} loading={saving} icon="checkmark-outline" />
           <Pressable
             onPress={del}
-            disabled={deleting}
+            disabled={deleteList.isPending}
             style={{
               alignItems: 'center',
               marginTop: spacing.lg,
               paddingVertical: spacing.md,
-              opacity: deleting ? 0.6 : 1,
+              opacity: deleteList.isPending ? 0.6 : 1,
             }}
           >
             <T variant="caption" style={{ color: tokens.danger }}>{t('lists:deleteList')}</T>

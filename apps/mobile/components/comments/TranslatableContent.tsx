@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Linking, Pressable, StyleProp, TextStyle, View, useWindowDimensions } from 'react-native';
+import { Linking, Pressable, StyleProp, TextStyle, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import RenderHtml from 'react-native-render-html';
 import {
@@ -14,6 +14,7 @@ import { useFeatureFlags, useTranslateContent } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { showDialog } from '../../lib/dialog';
 import { spacing } from '../../theme/theme';
+import { useContentWidth } from '../../hooks/useContentWidth';
 import { T } from '../primitives';
 
 export function TranslatableContent({
@@ -37,7 +38,7 @@ export function TranslatableContent({
   );
   const [translated, setTranslated] = useState(!!content.translation);
   const [sameLanguage, setSameLanguage] = useState(false);
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
 
   useEffect(() => {
     setTarget(resolvedLocale as SupportedLocale);

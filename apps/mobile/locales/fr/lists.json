@@ -53,5 +53,10 @@
   "removeItemQuestion": "Retirer l’élément ?",
   "shareMsg": "Découvrez « {{title}} » sur TVWatchTime",
   "emptyLabel": "Vide",
-  "publicLists": "Listes publiques"
+  "publicLists": "Listes publiques",
+  "drop": "Abandonner",
+  "dropTitle": "Abandonner {{title}} ?",
+  "dropShowDescription": "Cette série sera retirée de votre liste de suivi et de vos séries actives. Votre historique et votre progression seront conservés.",
+  "dropMovieDescription": "Ce film sera retiré de votre liste de suivi. Votre historique sera conservé.",
+  "droppedToast": "{{title}} a été abandonné"
 }

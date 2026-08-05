@@ -35,5 +35,9 @@
   "unwatchSeason": "وضع الموسم كغير مشاهد",
   "rewatchCount": "×{{count}}",
   "unwatchSeasonConfirmTitle": "وضع الموسم كغير مشاهد؟",
-  "unwatchSeasonConfirmDesc": "سيؤدي هذا إلى إزالة جميع المشاهدات المسجلة لـ \"{{title}}\"."
+  "unwatchSeasonConfirmDesc": "سيؤدي هذا إلى إزالة جميع المشاهدات المسجلة لـ \"{{title}}\".",
+  "markPreviousTitle": "وضع الحلقات السابقة كمشاهدة؟",
+  "markPreviousDescription": "لا تزال بعض الحلقات السابقة غير مشاهدة. هل تريد وضعها مع هذه الحلقة كمشاهدة؟",
+  "markPrevious": "وضع الحلقات السابقة كمشاهدة",
+  "onlyThisEpisode": "هذه الحلقة فقط"
 }

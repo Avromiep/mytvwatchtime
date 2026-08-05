@@ -6,7 +6,6 @@ import {
   StyleSheet,
   View,
   ViewStyle,
-  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Swipeable } from 'react-native-gesture-handler';
@@ -27,6 +26,7 @@ import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
 import { useTranslation } from 'react-i18next';
 import { firstNetwork } from '@tvwatch/shared';
+import { useContentWidth } from '../hooks/useContentWidth';
 
 
 
@@ -163,7 +163,7 @@ export const PosterCard = React.memo(PosterCardImpl, (prev, next) =>
 );
 
 export function PosterGrid({ data, kind, emptyTitle, emptyCta, minCardWidth = 96 }: { data: any[]; kind: 'shows' | 'movies'; emptyTitle: string; emptyCta?: string; minCardWidth?: number }) {
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   if (!data || data.length === 0) return <EmptyState title={emptyTitle} cta={emptyCta} icon="layers-outline" />;
   const containerW = width - spacing.lg * 2;
   const gap = spacing.sm;

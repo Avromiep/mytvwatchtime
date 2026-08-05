@@ -7,7 +7,6 @@ import {
   StyleSheet,
   TextInput,
   View,
-  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -31,6 +30,7 @@ import {
 } from '../../api/hooks';
 import { useAuth } from '../../context/AuthContext';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
+import { useContentWidth } from '../../hooks/useContentWidth';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing, typography } from '../../theme/theme';
 import { useTranslation } from 'react-i18next';
@@ -211,7 +211,7 @@ function ExploreFilterBar({
 
 export default function ExploreScreen() {
   const { tokens } = useAppearance();
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   const { t, i18n } = useTranslation(['explore', 'common']);
   const { user, refreshUser } = useAuth();
   const updateProfile = useUpdateProfile();

@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { ActivityIndicator, Dimensions, FlatList, View } from 'react-native';
+import React, { useMemo } from 'react';
+import { ActivityIndicator, FlatList, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import type { PersonCreditDto } from '@tvwatch/shared';
@@ -8,16 +8,13 @@ import { PosterCard } from '../../../components/cards';
 import { EmptyState, PosterImage, Screen, Spinner, T } from '../../../components/primitives';
 import { usePerson, usePersonCredits } from '../../../api/hooks';
 import { useAppearance } from '../../../context/PreferencesProvider';
+import { useContentWidth } from '../../../hooks/useContentWidth';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../../theme/theme';
 
 /** Same responsive density as the explore/trending see-all grids (more.tsx). */
 function useColumns() {
-  const [width, setWidth] = useState(Dimensions.get('window').width);
-  useEffect(() => {
-    const sub = Dimensions.addEventListener('change', ({ window }) => setWidth(window.width));
-    return () => sub?.remove();
-  }, []);
+  const width = useContentWidth();
   if (width >= 1200) return 6;
   if (width >= 900) return 5;
   if (width >= 768) return 4;
@@ -78,7 +75,7 @@ export default function PersonCreditsScreen() {
   const items = useMemo(() => (query.data?.pages ?? []).flatMap((p) => p.items), [query.data]);
 
   const cols = useColumns();
-  const screenWidth = Dimensions.get('window').width;
+  const screenWidth = useContentWidth();
   const containerW = Math.min(screenWidth - spacing.lg * 2, 1200);
   const cardW = Math.floor((containerW - spacing.md * (cols - 1)) / cols);
 

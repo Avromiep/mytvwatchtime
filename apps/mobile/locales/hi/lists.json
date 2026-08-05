@@ -53,5 +53,10 @@
   "removeItemQuestion": "आइटम हटाएँ?",
   "shareMsg": "TVWatchTime पर “{{title}}” देखें",
   "emptyLabel": "खाली",
-  "publicLists": "सार्वजनिक सूचियाँ"
+  "publicLists": "सार्वजनिक सूचियाँ",
+  "drop": "छोड़ें",
+  "dropTitle": "{{title}} को छोड़ें?",
+  "dropShowDescription": "यह शो आपकी वॉचलिस्ट और सक्रिय शो से हट जाएगा। आपका देखने का इतिहास और प्रगति सुरक्षित रहेगी।",
+  "dropMovieDescription": "यह फ़िल्म आपकी वॉचलिस्ट से हट जाएगी। आपका देखने का इतिहास सुरक्षित रहेगा।",
+  "droppedToast": "{{title}} को छोड़ दिया गया"
 }

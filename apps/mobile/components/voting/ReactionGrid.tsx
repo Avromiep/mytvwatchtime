@@ -1,10 +1,11 @@
 import React from 'react';
-import { useWindowDimensions, View } from 'react-native';
+import { View } from 'react-native';
 import type { TFunction } from 'i18next';
 import type { ReactionVoteSectionDto } from '@tvwatch/shared';
 import { SelectableIconTile } from './SelectableIconTile';
 import { REACTION_META, REACTION_ORDER, composeOptionLabel, reactionPercents, type ReactionTypeKey } from './meta';
 import { spacing } from '../../theme/theme';
+import { useContentWidth } from '../../hooks/useContentWidth';
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -23,7 +24,7 @@ export function ReactionGrid({
   pending: boolean;
   t: TFunction;
 }) {
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   // Defensive: tolerate an older single-select backend payload (userVote) so a
   // version skew can't crash the grid or self-revert selections.
   const userVotes = section.userVotes ?? [];

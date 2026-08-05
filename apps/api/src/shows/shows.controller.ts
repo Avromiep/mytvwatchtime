@@ -48,6 +48,15 @@ export class ShowsController {
     return this.tracking.markEpisodeWatched(userId, id, dto);
   }
 
+  @Post('episodes/:id/watched-previous')
+  markEpisodeAndPrevious(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() dto: MarkWatchedDto,
+  ) {
+    return this.tracking.markEpisodeAndPreviousWatched(userId, id, dto);
+  }
+
   @Delete('episodes/:id/watched')
   unmarkEpisode(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.tracking.unmarkEpisodeWatched(userId, id);
@@ -124,6 +133,11 @@ export class ShowsController {
   @Delete('shows/:id/watchlist')
   removeWatchlist(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.collections.removeWatchlist(userId, id);
+  }
+
+  @Post('shows/:id/drop')
+  drop(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.collections.dropMedia(userId, id);
   }
 
   @Post('shows/:id/pause')

@@ -53,5 +53,10 @@
   "removeItemQuestion": "إزالة العنصر؟",
   "shareMsg": "اطّلع على «{{title}}» على TVWatchTime",
   "emptyLabel": "فارغة",
-  "publicLists": "قوائم عامة"
+  "publicLists": "قوائم عامة",
+  "drop": "توقف عن المتابعة",
+  "dropTitle": "التوقف عن متابعة {{title}}؟",
+  "dropShowDescription": "سيؤدي هذا إلى إزالة المسلسل من قائمة المشاهدة والمسلسلات النشطة. سيبقى سجل المشاهدة والتقدم محفوظين.",
+  "dropMovieDescription": "سيؤدي هذا إلى إزالة الفيلم من قائمة المشاهدة. سيبقى سجل المشاهدة محفوظًا.",
+  "droppedToast": "تم التوقف عن متابعة {{title}}"
 }

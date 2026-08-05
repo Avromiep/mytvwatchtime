@@ -53,5 +53,10 @@
   "removeItemQuestion": "Remove item?",
   "shareMsg": "Check out \"{{title}}\" on TVWatchTime",
   "emptyLabel": "Empty",
-  "publicLists": "Public lists"
+  "publicLists": "Public lists",
+  "drop": "Drop",
+  "dropTitle": "Drop {{title}}?",
+  "dropShowDescription": "This removes the show from your watchlist and active shows. Your watch history and progress will be kept.",
+  "dropMovieDescription": "This removes the movie from your watchlist. Your watch history will be kept.",
+  "droppedToast": "{{title}} was dropped"
 }

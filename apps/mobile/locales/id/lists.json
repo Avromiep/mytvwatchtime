@@ -53,5 +53,10 @@
   "removeItemQuestion": "Hapus item?",
   "shareMsg": "Lihat “{{title}}” di TVWatchTime",
   "emptyLabel": "Kosong",
-  "publicLists": "Daftar publik"
+  "publicLists": "Daftar publik",
+  "drop": "Tinggalkan",
+  "dropTitle": "Tinggalkan {{title}}?",
+  "dropShowDescription": "Serial ini akan dihapus dari daftar tontonan dan serial aktif. Riwayat serta progres tontonan tetap disimpan.",
+  "dropMovieDescription": "Film ini akan dihapus dari daftar tontonan. Riwayat tontonan tetap disimpan.",
+  "droppedToast": "{{title}} ditinggalkan"
 }

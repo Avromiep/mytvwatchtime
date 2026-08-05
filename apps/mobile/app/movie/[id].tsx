@@ -109,7 +109,12 @@ export default function MovieDetailScreen() {
                   accessibilityRole="button"
                   accessibilityLabel={t('common:moreOptions')}
                   onPress={() =>
-                    addToList.openMediaMenu({ id: movie.id, title: movie.title, kind: 'movie' })
+                    addToList.openMediaMenu({
+                      id: movie.id,
+                      title: movie.title,
+                      kind: 'movie',
+                      inWatchlist: movie.inWatchlist,
+                    })
                   }
                 >
                   <Ionicons name="ellipsis-horizontal" size={24} color={tokens.mediaText} />

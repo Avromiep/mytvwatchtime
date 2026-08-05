@@ -38,5 +38,9 @@
   "unwatchSeason": "Unwatch season",
   "rewatchCount": "×{{count}}",
   "unwatchSeasonConfirmTitle": "Unwatch season?",
-  "unwatchSeasonConfirmDesc": "This removes every recorded watch of \"{{title}}\"."
+  "unwatchSeasonConfirmDesc": "This removes every recorded watch of \"{{title}}\".",
+  "markPreviousTitle": "Mark previous episodes as watched?",
+  "markPreviousDescription": "Some earlier episodes are still unwatched. Mark them and this episode as watched?",
+  "markPrevious": "Mark previous episodes",
+  "onlyThisEpisode": "Only this episode"
 }

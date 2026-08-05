@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TextInput,
   View,
-  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,6 +21,7 @@ import { useSkipSetup } from '../../lib/onboarding/useSkipSetup';
 import { OnboardingDraft, selectionCounts } from '../../lib/onboarding/draft';
 import { logEvent } from '../../lib/analytics';
 import { showToast } from '../../lib/toast';
+import { useContentWidth } from '../../hooks/useContentWidth';
 import { radius, spacing } from '../../theme/theme';
 
 export type PickerMode = 'WATCHED' | 'WATCHLIST';
@@ -46,7 +46,7 @@ export function TitlePicker({
 }) {
   const { t } = useTranslation(['onboarding', 'common']);
   const { tokens } = useAppearance();
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { draft, ready, act, flush } = useOnboardingDraft(user?.id);

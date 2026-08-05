@@ -96,6 +96,127 @@ export class TrackingService {
   }
 
   /**
+   * Mark the selected episode and every earlier aired episode in its show as watched.
+   * Specials never participate in progress, so callers fall back to the single-episode
+   * mutation when the selected episode belongs to a special season.
+   */
+  async markEpisodeAndPreviousWatched(userId: string, episodeId: string, dto: MarkWatchedDto) {
+    const current = await this.prisma.episode.findUnique({
+      where: { id: episodeId },
+      include: { season: { include: { show: true } } },
+    });
+    if (!current) throw new NotFoundException('Episode not found');
+    if (current.season.isSpecial) {
+      return this.markEpisodeWatched(userId, episodeId, dto);
+    }
+
+    const now = new Date();
+    const previous = await this.prisma.episode.findMany({
+      where: {
+        structureState: 'ACTIVE',
+        airDate: { lte: now },
+        season: { showId: current.season.showId, isSpecial: false },
+        OR: [
+          { season: { number: { lt: current.season.number } } },
+          { season: { number: current.season.number }, number: { lt: current.number } },
+        ],
+      },
+      include: { season: true },
+      orderBy: [{ season: { number: 'asc' } }, { number: 'asc' }],
+    });
+    const episodes = [...previous, current];
+    const episodeIds = episodes.map((episode) => episode.id);
+    const mediaId = current.season.show.mediaId;
+    let newlyWatched: typeof episodes = [];
+    let currentWatchCount = 1;
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const result = await this.prisma.$transaction(
+          async (tx) => {
+            const existing = await tx.userEpisodeStatus.findMany({
+              where: { userId, episodeId: { in: episodeIds } },
+              select: { episodeId: true, watched: true, watchCount: true },
+            });
+            const existingById = new Map(existing.map((status) => [status.episodeId, status]));
+            const toCreate = episodes.filter((episode) => !existingById.has(episode.id));
+            const toMark = episodes.filter(
+              (episode) => existingById.get(episode.id)?.watched === false,
+            );
+            const transitioned = [...toCreate, ...toMark];
+
+            if (toCreate.length) {
+              await tx.userEpisodeStatus.createMany({
+                data: toCreate.map((episode) => ({
+                  userId,
+                  episodeId: episode.id,
+                  watched: true,
+                  watchedAt: now,
+                  watchCount: 1,
+                  device: dto.device,
+                })),
+              });
+            }
+            if (toMark.length) {
+              await tx.userEpisodeStatus.updateMany({
+                where: {
+                  userId,
+                  episodeId: { in: toMark.map((episode) => episode.id) },
+                  watched: false,
+                },
+                data: { watched: true, watchedAt: now, watchCount: 1, device: dto.device },
+              });
+            }
+            if (transitioned.length) {
+              await tx.watchHistory.createMany({
+                data: transitioned.map((episode) => ({
+                  userId,
+                  mediaId,
+                  mediaType: MediaType.SHOW,
+                  episodeId: episode.id,
+                  seasonNumber: episode.season.number,
+                  episodeNumber: episode.number,
+                  runtimeMinutes: episode.runtimeMinutes,
+                  watchedAt: now,
+                })),
+              });
+            }
+
+            const currentStatus = existingById.get(episodeId);
+            return {
+              transitioned,
+              currentWatchCount: currentStatus?.watched ? currentStatus.watchCount : 1,
+            };
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
+        newlyWatched = result.transitioned;
+        currentWatchCount = result.currentWatchCount;
+        break;
+      } catch (error) {
+        const isRetryable =
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          (error.code === 'P2002' || error.code === 'P2034');
+        if (!isRetryable || attempt === 2) throw error;
+      }
+    }
+
+    if (newlyWatched.length) {
+      await this.bumpShowCount(userId, mediaId, newlyWatched.length, now);
+      this.events.emit('watch.episode', { userId, mediaId, episodeId });
+    }
+    if (dto.rating) await this.upsertEpisodeRating(userId, episodeId, dto.rating);
+    if (dto.reaction) await this.upsertReaction(userId, episodeId, dto.reaction);
+    await this.invalidateUserCache(userId);
+    return {
+      watched: true,
+      watchCount: currentWatchCount,
+      count: newlyWatched.length,
+      previousCount: newlyWatched.filter((episode) => episode.id !== episodeId).length,
+    };
+  }
+
+  /**
    * Record another viewing of an already-watched episode. watchCount increments, a new
    * watchHistory row is appended (so stats/badges count the rewatch), but watchedAt (the
    * first-watch date) and the show's distinct watchedCount are left untouched.

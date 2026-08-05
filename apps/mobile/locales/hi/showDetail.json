@@ -35,5 +35,9 @@
   "unwatchSeason": "सीज़न को नहीं देखा के रूप में चिह्नित करें",
   "rewatchCount": "×{{count}}",
   "unwatchSeasonConfirmTitle": "सीज़न को नहीं देखा के रूप में चिह्नित करें?",
-  "unwatchSeasonConfirmDesc": "इससे \"{{title}}\" की सभी दर्ज बार देखे जाने की प्रविष्टियाँ हट जाएँगी।"
+  "unwatchSeasonConfirmDesc": "इससे \"{{title}}\" की सभी दर्ज बार देखे जाने की प्रविष्टियाँ हट जाएँगी।",
+  "markPreviousTitle": "पिछले एपिसोड देखे गए के रूप में चिह्नित करें?",
+  "markPreviousDescription": "कुछ पिछले एपिसोड अभी नहीं देखे गए हैं। उन्हें और इस एपिसोड को देखा गया चिह्नित करें?",
+  "markPrevious": "पिछले एपिसोड चिह्नित करें",
+  "onlyThisEpisode": "केवल यह एपिसोड"
 }

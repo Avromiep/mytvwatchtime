@@ -35,5 +35,9 @@
   "unwatchSeason": "Marquer la saison comme non vue",
   "rewatchCount": "×{{count}}",
   "unwatchSeasonConfirmTitle": "Marquer la saison comme non vue ?",
-  "unwatchSeasonConfirmDesc": "Cela supprime tous les visionnages enregistrés de « {{title}} »."
+  "unwatchSeasonConfirmDesc": "Cela supprime tous les visionnages enregistrés de « {{title}} ».",
+  "markPreviousTitle": "Marquer les épisodes précédents comme vus ?",
+  "markPreviousDescription": "Certains épisodes précédents ne sont pas encore vus. Les marquer, ainsi que cet épisode, comme vus ?",
+  "markPrevious": "Marquer les épisodes précédents",
+  "onlyThisEpisode": "Seulement cet épisode"
 }

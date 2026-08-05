@@ -18,8 +18,8 @@ import { EmptyState, Screen, Spinner, T } from '../../components/primitives';
 import { useFavoritePages, useWatchedMoviePages, useWatchlistPages } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
-import { useWindowDimensions } from 'react-native';
 import { spacing } from '../../theme/theme';
+import { useContentWidth } from '../../hooks/useContentWidth';
 
 interface MovieItem {
   id: string;
@@ -51,7 +51,7 @@ const GRID_CARD_STYLE = { marginRight: 0 } as const;
 const MOVIE_PAGE_SIZE = 24;
 
 export default function MoviesScreen() {
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   const { tokens } = useAppearance();
   const { t } = useTranslation(['movies', 'common']);
   // First pages load in parallel; additional pages are fetched only when the user

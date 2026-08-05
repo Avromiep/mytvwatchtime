@@ -53,5 +53,10 @@
   "removeItemQuestion": "Rimuovere l’elemento?",
   "shareMsg": "Guarda “{{title}}” su TVWatchTime",
   "emptyLabel": "Vuota",
-  "publicLists": "Elenchi pubblici"
+  "publicLists": "Elenchi pubblici",
+  "drop": "Abbandona",
+  "dropTitle": "Abbandonare {{title}}?",
+  "dropShowDescription": "La serie verrà rimossa dalla tua lista e dalle serie attive. La cronologia e i progressi saranno conservati.",
+  "dropMovieDescription": "Il film verrà rimosso dalla tua lista. La cronologia sarà conservata.",
+  "droppedToast": "{{title}} è stato abbandonato"
 }

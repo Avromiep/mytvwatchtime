@@ -35,5 +35,9 @@
   "unwatchSeason": "シーズンを未視聴にする",
   "rewatchCount": "×{{count}}",
   "unwatchSeasonConfirmTitle": "シーズンを未視聴にしますか？",
-  "unwatchSeasonConfirmDesc": "「{{title}}」の記録された視聴がすべて削除されます。"
+  "unwatchSeasonConfirmDesc": "「{{title}}」の記録された視聴がすべて削除されます。",
+  "markPreviousTitle": "以前のエピソードを視聴済みにしますか？",
+  "markPreviousDescription": "以前のエピソードに未視聴のものがあります。それらとこのエピソードを視聴済みにしますか？",
+  "markPrevious": "以前のエピソードを視聴済みにする",
+  "onlyThisEpisode": "このエピソードのみ"
 }

@@ -21,6 +21,7 @@ import { useNotificationNavigation } from '../hooks/useNotificationNavigation';
 import { initAnalytics } from '../lib/analytics';
 import { isOnboardingDone } from '../lib/onboarding/draft';
 import { serializeQueryClient } from '../lib/query-persistence';
+import { WEB_PORTRAIT_MAX_WIDTH } from '../hooks/useContentWidth';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync();
@@ -148,9 +149,29 @@ function Gate() {
 function RootShell() {
   const { resolvedTheme, tokens } = useAppearance();
   return (
-    <View style={{ flex: 1, backgroundColor: tokens.background }}>
-      <StatusBar style={resolvedTheme === 'dark' ? 'light' : 'dark'} />
-      <Gate />
+    <View
+      style={{
+        flex: 1,
+        backgroundColor: Platform.OS === 'web' ? tokens.surfaceAlt : tokens.background,
+      }}
+    >
+      <View
+        style={[
+          { flex: 1, backgroundColor: tokens.background },
+          Platform.OS === 'web' && {
+            width: '100%',
+            maxWidth: WEB_PORTRAIT_MAX_WIDTH,
+            alignSelf: 'center',
+            overflow: 'hidden',
+            borderLeftWidth: 1,
+            borderRightWidth: 1,
+            borderColor: tokens.border,
+          },
+        ]}
+      >
+        <StatusBar style={resolvedTheme === 'dark' ? 'light' : 'dark'} />
+        <Gate />
+      </View>
     </View>
   );
 }

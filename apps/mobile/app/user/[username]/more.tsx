@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { FlatList, View, useWindowDimensions } from 'react-native';
+import { FlatList, View } from 'react-native';
 import { MediaType } from '@tvwatch/shared';
 import { useLocalSearchParams } from 'expo-router';
 import { Header } from '../../../components/Header';
@@ -7,6 +7,7 @@ import { PosterCard } from '../../../components/cards';
 import { Screen, Spinner } from '../../../components/primitives';
 import { usePublicFavorites, useTasteRecommendations } from '../../../api/hooks';
 import { spacing } from '../../../theme/theme';
+import { useContentWidth } from '../../../hooks/useContentWidth';
 import { useTranslation } from 'react-i18next';
 
 export default function UserTasteMoreScreen() {
@@ -20,7 +21,7 @@ export default function UserTasteMoreScreen() {
     () => (query.data?.pages ?? []).flatMap((page) => page.items),
     [query.data],
   );
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   const contentWidth = width - spacing.lg * 2;
   const gap = spacing.sm;
   const cols = Math.max(3, Math.floor((contentWidth + gap) / (96 + gap)));

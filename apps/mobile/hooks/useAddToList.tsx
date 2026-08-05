@@ -5,7 +5,12 @@ import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { api } from '../api/client';
-import { useAddListItem, useRemoveListItem, useToggleTrackingPause } from '../api/hooks';
+import {
+  useAddListItem,
+  useDropMedia,
+  useRemoveListItem,
+  useToggleTrackingPause,
+} from '../api/hooks';
 import { dismissAllDialogs, showConfirm, showDialog, showError } from '../lib/dialog';
 import { showToast } from '../lib/toast';
 import { PosterImage, T } from '../components/primitives';
@@ -121,6 +126,7 @@ export function useAddToList() {
   const removeItem = useRemoveListItem();
   const reassign = useReassign();
   const togglePause = useToggleTrackingPause();
+  const dropMedia = useDropMedia();
 
   const invalidateLists = () => {
     // Prefix match: covers ['myLists'] and the picker-scoped keys below.
@@ -183,15 +189,20 @@ export function useAddToList() {
     });
   };
 
-  /** Overflow (⋯) menu for a media detail page. Movies also get a "Reassign" action
-   *  (wrong-match fix); shows get "Pause/Resume tracking" (hidden from watch-next,
-   *  no notifications while paused). `reassignModal` must be rendered by the calling screen. */
+  /** Overflow (⋯) menu for a media detail page. Movies also get a "Reassign" action;
+   *  shows get "Pause/Resume tracking". Active shows and watchlisted movies can be
+   *  dropped while preserving history. `reassignModal` is rendered by the caller. */
   const openMediaMenu = (media: {
     id: string;
     title: string;
     kind?: 'movie' | 'show';
+    inWatchlist?: boolean;
+    dropped?: boolean;
     trackingPaused?: boolean;
   }) => {
+    const canDrop =
+      (media.kind === 'show' && !media.dropped) ||
+      (media.kind === 'movie' && !!media.inWatchlist);
     showDialog({
       title: media.title,
       buttons: [
@@ -210,7 +221,7 @@ export function useAddToList() {
               },
             ]
           : []),
-        ...(media.kind === 'show'
+        ...(media.kind === 'show' && !media.dropped
           ? [
               {
                 label: media.trackingPaused
@@ -233,6 +244,40 @@ export function useAddToList() {
                         }),
                     },
                   );
+                },
+              },
+            ]
+          : []),
+        ...(canDrop
+          ? [
+              {
+                label: t('lists:drop'),
+                variant: 'danger' as const,
+                closeOnPress: 'before' as const,
+                onPress: () => {
+                  showConfirm({
+                    title: t('lists:dropTitle', { title: media.title }),
+                    description: t(
+                      media.kind === 'show'
+                        ? 'lists:dropShowDescription'
+                        : 'lists:dropMovieDescription',
+                    ),
+                    confirmLabel: t('lists:drop'),
+                    destructive: true,
+                    onConfirm: () =>
+                      dropMedia.mutate(
+                        { id: media.id, kind: media.kind! },
+                        {
+                          onSuccess: () =>
+                            showToast(t('lists:droppedToast', { title: media.title })),
+                          onError: (e: any) =>
+                            showError({
+                              title: t('lists:failedToSave'),
+                              description: e?.message ?? t('common:pleaseTryAgain'),
+                            }),
+                        },
+                      ),
+                  });
                 },
               },
             ]

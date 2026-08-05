@@ -116,6 +116,7 @@ export class ShowsService {
     const result = seasons.map((s) => ({
       id: s.id,
       number: s.number,
+      isSpecial: s.isSpecial,
       title: localized(s as any, 'titles', 'title') ?? s.title,
       posterUrl: localized(s as any, 'posterUrls', 'posterUrl') ?? s.posterUrl ?? null,
       episodeCount: s.episodeCount,

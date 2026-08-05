@@ -36,3 +36,57 @@ describe('CollectionsService bounded movie library', () => {
     expect(result.total).toBe(1);
   });
 });
+
+describe('CollectionsService dropMedia', () => {
+  const redis = { delByPattern: jest.fn(), del: jest.fn() };
+  const events = { emit: jest.fn() };
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it('drops a show, removes its watchlist row, and preserves its progress row', async () => {
+    const tx = {
+      watchlistItem: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      mediaItem: { update: jest.fn().mockResolvedValue({}) },
+      userShowStatus: { upsert: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      mediaItem: { findUnique: jest.fn().mockResolvedValue({ id: 'show', type: MediaType.SHOW }) },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new CollectionsService(prisma as any, events as any, redis as any, {} as any);
+
+    await expect(service.dropMedia('user', 'show')).resolves.toEqual({
+      dropped: true,
+      inWatchlist: false,
+    });
+    expect(tx.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'show' },
+      data: { addedCount: { decrement: 1 } },
+    });
+    expect(tx.userShowStatus.upsert).toHaveBeenCalledWith({
+      where: { userId_mediaId: { userId: 'user', mediaId: 'show' } },
+      create: { userId: 'user', mediaId: 'show', dropped: true },
+      update: { dropped: true, pausedAt: null },
+    });
+  });
+
+  it('drops a movie from the watchlist without creating show progress state', async () => {
+    const tx = {
+      watchlistItem: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      mediaItem: { update: jest.fn() },
+      userShowStatus: { upsert: jest.fn() },
+    };
+    const prisma = {
+      mediaItem: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'movie', type: MediaType.MOVIE }),
+      },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new CollectionsService(prisma as any, events as any, redis as any, {} as any);
+
+    await service.dropMedia('user', 'movie');
+
+    expect(tx.mediaItem.update).not.toHaveBeenCalled();
+    expect(tx.userShowStatus.upsert).not.toHaveBeenCalled();
+  });
+});
