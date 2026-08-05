@@ -104,5 +104,6 @@
   "libraryEmptyExploreCta": "見つける",
   "libraryEmptyBuilder": "または、クイックライブラリビルダーで視聴済み作品や番組の進捗、ウォッチリストをまとめて設定できます。",
   "libraryEmptyBuilderCta": "クイックライブラリビルダー",
-  "libraryEmptyImport": "TV Time や Trakt をすでにお使いですか？データをインポートしてライブラリを引き継げます。"
+  "libraryEmptyImport": "TV Time や Trakt をすでにお使いですか？データをインポートしてライブラリを引き継げます。",
+  "libraryEmptyAnimationText": "表示するものはありません"
 }

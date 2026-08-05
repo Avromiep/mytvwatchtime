@@ -203,7 +203,8 @@ export function useAddToList() {
     });
   };
 
-  /** Overflow (⋯) menu for a media detail page. Movies also get a "Reassign" action;
+  /** Overflow (⋯) menu for a media detail page. Movies with transferable user activity
+   *  also get a "Reassign" action;
    *  shows get "Pause/Resume tracking". Active shows and watchlisted movies can be
    *  dropped while preserving history. `reassignModal` is rendered by the caller. */
   const openMediaMenu = (media: {
@@ -213,6 +214,7 @@ export function useAddToList() {
     inWatchlist?: boolean;
     dropped?: boolean;
     trackingPaused?: boolean;
+    canReassign?: boolean;
   }) => {
     const canDrop =
       (media.kind === 'show' && !media.dropped) || (media.kind === 'movie' && !!media.inWatchlist);
@@ -229,7 +231,7 @@ export function useAddToList() {
           closeOnPress: 'before',
           onPress: () => openListPicker(media.id),
         },
-        ...(media.kind === 'movie'
+        ...(media.kind === 'movie' && media.canReassign
           ? [
               {
                 label: t('lists:reassign'),

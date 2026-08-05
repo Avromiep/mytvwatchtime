@@ -61,7 +61,8 @@ export function FavoriteCharacterVote({
       // Inside the episode pager (horizontal paging FlatList): let this row consume the
       // horizontal swipe first; only at its edge does the pager take over (Android).
       nestedScrollEnabled
-      contentContainerStyle={{ paddingRight: spacing.md }}
+      style={styles.fullBleed}
+      contentContainerStyle={styles.fullBleedContent}
     >
       {orderedCast.map((c) => {
         const selected = section.userVote === c.creditId;
@@ -122,6 +123,8 @@ export function FavoriteCharacterVote({
 }
 
 const styles = StyleSheet.create({
+  fullBleed: { marginHorizontal: -spacing.md },
+  fullBleedContent: { paddingHorizontal: spacing.md },
   item: { width: 84, marginRight: spacing.xs, alignItems: 'center' },
   avatarWrap: {
     width: PORTRAIT_W,

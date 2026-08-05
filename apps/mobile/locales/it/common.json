@@ -104,5 +104,6 @@
   "libraryEmptyExploreCta": "Esplora",
   "libraryEmptyBuilder": "Oppure usa il Generatore rapido della libreria per aggiungere titoli visti, impostare i progressi delle serie e creare la watchlist.",
   "libraryEmptyBuilderCta": "Generatore rapido della libreria",
-  "libraryEmptyImport": "Usi già TV Time o Trakt? Importa i tuoi dati per trasferire la libreria."
+  "libraryEmptyImport": "Usi già TV Time o Trakt? Importa i tuoi dati per trasferire la libreria.",
+  "libraryEmptyAnimationText": "Niente da vedere"
 }

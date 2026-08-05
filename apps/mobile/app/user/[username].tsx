@@ -36,7 +36,12 @@ type ProfileTab = 'timeline' | 'taste';
 
 function MediaRail({ items }: { items: MediaCardLiteDto[] }) {
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={styles.fullBleedRail}
+      contentContainerStyle={styles.fullBleedRailContent}
+    >
       {items.map((item) => (
         <PosterCard
           key={item.id}
@@ -303,7 +308,12 @@ export default function UserProfileScreen() {
           {lists?.length ? (
             <View>
               <SectionHeader title={t('lists:publicLists')} />
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.fullBleedRail}
+                contentContainerStyle={styles.fullBleedRailContent}
+              >
                 {lists.map((list) => (
                   <ListCard
                     key={list.id}
@@ -321,6 +331,8 @@ export default function UserProfileScreen() {
 }
 
 const styles = StyleSheet.create({
+  fullBleedRail: { marginHorizontal: -spacing.lg },
+  fullBleedRailContent: { paddingHorizontal: spacing.lg },
   avatar: { width: 80, height: 80, borderRadius: 40, borderWidth: 3 },
   identity: {
     position: 'absolute',

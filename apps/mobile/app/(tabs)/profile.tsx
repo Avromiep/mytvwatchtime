@@ -323,6 +323,7 @@ export default function ProfileScreen() {
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
+                style={{ marginHorizontal: -spacing.lg }}
                 contentContainerStyle={{ paddingHorizontal: spacing.lg }}
               >
                 {myLists.data.map((list: any) => (
@@ -378,6 +379,7 @@ export default function ProfileScreen() {
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
+                style={{ marginHorizontal: -spacing.lg }}
                 contentContainerStyle={{ paddingHorizontal: spacing.lg }}
               >
                 {followedLists.data.map((list: any) => (
@@ -390,7 +392,6 @@ export default function ProfileScreen() {
               </ScrollView>
             </View>
           ) : null}
-
         </View>
       </ScrollView>
     </Screen>
@@ -518,7 +519,11 @@ function ShowsRow({ items, kind = 'shows' }: { items: any[]; kind?: 'shows' | 'm
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
-      contentContainerStyle={{ paddingVertical: spacing.sm }}
+      style={{ marginHorizontal: -spacing.lg }}
+      contentContainerStyle={{
+        paddingHorizontal: spacing.lg,
+        paddingVertical: spacing.sm,
+      }}
     >
       {items.slice(0, 10).map((it) => (
         <Link key={it.id} href={`/${route}/${it.id}` as any} asChild>

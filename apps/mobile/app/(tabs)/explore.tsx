@@ -623,7 +623,18 @@ const styles = StyleSheet.create({
     height: 44,
   },
   input: { flex: 1, ...typography.body },
-  filterStack: { marginTop: spacing.sm, gap: spacing.sm },
+  // The search controls sit inside a padded screen header. Break horizontal
+  // scrollers out to the viewport edge, then restore the inset on their content:
+  // the first chip stays aligned while later chips can scroll beneath the margin.
+  filterStack: {
+    marginTop: spacing.sm,
+    marginHorizontal: -spacing.lg,
+    gap: spacing.sm,
+  },
   inlineFilterScroll: { flexGrow: 0, flexShrink: 0 },
-  inlineFilters: { flexDirection: 'row', gap: spacing.sm, paddingRight: spacing.sm },
+  inlineFilters: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+  },
 });

@@ -104,5 +104,6 @@
   "libraryEmptyExploreCta": "استكشف",
   "libraryEmptyBuilder": "أو استخدم أداة إنشاء المكتبة السريعة لإضافة ما شاهدته وضبط تقدّم المسلسلات وإنشاء قائمة المشاهدة.",
   "libraryEmptyBuilderCta": "أداة إنشاء المكتبة السريعة",
-  "libraryEmptyImport": "هل تتتبّع مشاهداتك بالفعل على TV Time أو Trakt؟ استورد بياناتك لنقل مكتبتك."
+  "libraryEmptyImport": "هل تتتبّع مشاهداتك بالفعل على TV Time أو Trakt؟ استورد بياناتك لنقل مكتبتك.",
+  "libraryEmptyAnimationText": "لا شيء لعرضه"
 }

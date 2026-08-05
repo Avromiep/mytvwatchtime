@@ -114,6 +114,7 @@ export default function MovieDetailScreen() {
                       title: movie.title,
                       kind: 'movie',
                       inWatchlist: movie.inWatchlist,
+                      canReassign: movie.canReassign,
                     })
                   }
                 >
@@ -266,7 +267,12 @@ export default function MovieDetailScreen() {
           {movie.cast?.length ? (
             <View>
               <SectionHeader title={t('movies:cast')} />
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={{ marginHorizontal: -spacing.lg }}
+                contentContainerStyle={{ paddingHorizontal: spacing.lg }}
+              >
                 {movie.cast.map((c: any) => (
                   <Pressable
                     key={c.id}

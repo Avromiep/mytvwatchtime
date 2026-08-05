@@ -657,7 +657,12 @@ function AboutTab({ show, id }: { show: any; id: string }) {
       {show.cast?.length ? (
         <View>
           <SectionHeader title={t('showDetail:cast')} />
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={{ marginHorizontal: -spacing.lg }}
+            contentContainerStyle={{ paddingHorizontal: spacing.lg }}
+          >
             {show.cast.map((c: any) => (
               <Pressable
                 key={c.id}

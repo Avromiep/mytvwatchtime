@@ -104,5 +104,6 @@
   "libraryEmptyExploreCta": "Explorar",
   "libraryEmptyBuilder": "Ou use o Criador rápido de biblioteca para adicionar títulos assistidos, definir o progresso das séries e montar sua lista.",
   "libraryEmptyBuilderCta": "Criador rápido de biblioteca",
-  "libraryEmptyImport": "Já acompanha seus títulos no TV Time ou Trakt? Importe seus dados para trazer sua biblioteca."
+  "libraryEmptyImport": "Já acompanha seus títulos no TV Time ou Trakt? Importe seus dados para trazer sua biblioteca.",
+  "libraryEmptyAnimationText": "Nada para ver"
 }

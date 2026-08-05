@@ -152,3 +152,73 @@ describe('MoviesService.reassignUserMovie', () => {
     expect(summary.userMovieStatus).toEqual({ moved: 0, merged: 1 });
   });
 });
+
+describe('MoviesService.getMovie reassign availability', () => {
+  let prisma: any;
+  let meta: any;
+  let mediaVotes: any;
+  let service: MoviesService;
+
+  beforeEach(() => {
+    prisma = {
+      mediaItem: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'movie-1',
+          metadataRefreshedAt: new Date(),
+          titles: { en: 'Movie' },
+          externalIds: [],
+        }),
+      },
+      $queryRaw: jest.fn(),
+    };
+    meta = {
+      getMovieDetail: jest.fn().mockResolvedValue({ id: 'movie-1', title: 'Movie' }),
+      scheduleClassification: jest.fn().mockResolvedValue(undefined),
+    };
+    mediaVotes = {
+      getMovieInteractions: jest.fn().mockResolvedValue({ rating: {}, reaction: {} }),
+    };
+    service = new MoviesService(
+      prisma,
+      meta,
+      { enabled: false } as any,
+      { enabled: false } as any,
+      mediaVotes,
+      undefined as any,
+    );
+  });
+
+  it('allows reassign when any transferable user activity exists', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ canReassign: true }]);
+
+    const detail = await service.getMovie('movie-1', 'user-1');
+
+    expect(detail).toEqual(
+      expect.objectContaining({
+        canReassign: true,
+        interactions: { rating: {}, reaction: {} },
+      }),
+    );
+    const sql = prisma.$queryRaw.mock.calls[0][0].join(' ');
+    expect(sql).toContain('user_movie_status');
+    expect(sql).toContain('watch_history');
+    expect(sql).toContain('ratings');
+    expect(sql).toContain('reactions');
+    expect(sql).toContain('comments');
+  });
+
+  it('hides reassign when the user has no transferable activity', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ canReassign: false }]);
+
+    const detail = await service.getMovie('movie-1', 'user-1');
+
+    expect(detail.canReassign).toBe(false);
+  });
+
+  it('hides reassign and skips the activity query for an anonymous detail request', async () => {
+    const detail = await service.getMovie('movie-1');
+
+    expect(detail.canReassign).toBe(false);
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+});

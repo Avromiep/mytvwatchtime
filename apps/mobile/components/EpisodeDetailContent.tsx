@@ -290,6 +290,8 @@ export function EpisodeDetailContent({
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
+                style={{ marginHorizontal: -spacing.lg }}
+                contentContainerStyle={{ paddingHorizontal: spacing.lg }}
                 // Inside the episode pager: consume horizontal swipes here first (Android);
                 // the pager takes over only at this row's edge.
                 nestedScrollEnabled

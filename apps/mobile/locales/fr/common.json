@@ -51,5 +51,6 @@
   "libraryEmptyExploreCta": "Explorer",
   "libraryEmptyBuilder": "Ou utilisez le créateur rapide de bibliothèque pour ajouter vos titres vus, définir votre progression et créer votre liste.",
   "libraryEmptyBuilderCta": "Créateur rapide de bibliothèque",
-  "libraryEmptyImport": "Vous suivez déjà vos contenus sur TV Time ou Trakt ? Importez vos données pour récupérer votre bibliothèque."
+  "libraryEmptyImport": "Vous suivez déjà vos contenus sur TV Time ou Trakt ? Importez vos données pour récupérer votre bibliothèque.",
+  "libraryEmptyAnimationText": "Rien à voir"
 }

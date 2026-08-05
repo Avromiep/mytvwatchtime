@@ -19,9 +19,51 @@ export class MoviesService {
     private readonly stats: StatsService,
   ) {}
 
+  private async hasReassignableActivity(userId: string | undefined, mediaId: string) {
+    if (!userId) return false;
+
+    const [row] = await this.prisma.$queryRaw<{ canReassign: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1 FROM user_movie_status
+        WHERE user_id = ${userId} AND media_id = ${mediaId}
+        UNION ALL
+        SELECT 1 FROM watch_history
+        WHERE user_id = ${userId} AND media_id = ${mediaId} AND media_type = 'MOVIE'
+        UNION ALL
+        SELECT 1 FROM ratings
+        WHERE user_id = ${userId} AND media_id = ${mediaId}
+        UNION ALL
+        SELECT 1 FROM reactions
+        WHERE user_id = ${userId} AND media_id = ${mediaId}
+        UNION ALL
+        SELECT 1 FROM watchlist_items
+        WHERE user_id = ${userId} AND media_id = ${mediaId}
+        UNION ALL
+        SELECT 1 FROM favorites
+        WHERE user_id = ${userId} AND media_id = ${mediaId}
+        UNION ALL
+        SELECT 1 FROM custom_list_items i
+        JOIN custom_lists l ON l.id = i.list_id
+        WHERE l.user_id = ${userId} AND i.media_id = ${mediaId}
+        UNION ALL
+        SELECT 1 FROM comments
+        WHERE user_id = ${userId}
+          AND (
+            (thread_type = 'MOVIE' AND thread_id = ${mediaId})
+            OR (media_type = 'MOVIE' AND media_id = ${mediaId})
+          )
+      ) AS "canReassign"
+    `;
+    return row?.canReassign ?? false;
+  }
+
   private async withInteractions(detail: any, userId?: string) {
     if (!detail || typeof detail !== 'object') return detail;
-    return { ...detail, interactions: await this.mediaVotes.getMovieInteractions(detail.id, userId) };
+    const [interactions, canReassign] = await Promise.all([
+      this.mediaVotes.getMovieInteractions(detail.id, userId),
+      this.hasReassignableActivity(userId, detail.id),
+    ]);
+    return { ...detail, interactions, canReassign };
   }
 
   async getMovie(id: string, userId?: string) {

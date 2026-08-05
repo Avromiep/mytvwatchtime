@@ -104,5 +104,6 @@
   "libraryEmptyExploreCta": "둘러보기",
   "libraryEmptyBuilder": "또는 빠른 라이브러리 빌더로 시청한 작품을 추가하고 프로그램 진행 상황과 시청 목록을 설정하세요.",
   "libraryEmptyBuilderCta": "빠른 라이브러리 빌더",
-  "libraryEmptyImport": "이미 TV Time 또는 Trakt에서 기록하고 있나요? 데이터를 가져와 라이브러리를 옮겨 보세요."
+  "libraryEmptyImport": "이미 TV Time 또는 Trakt에서 기록하고 있나요? 데이터를 가져와 라이브러리를 옮겨 보세요.",
+  "libraryEmptyAnimationText": "표시할 내용이 없습니다"
 }

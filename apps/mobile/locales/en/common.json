@@ -106,5 +106,6 @@
   "libraryEmptyExploreCta": "Explore",
   "libraryEmptyBuilder": "Or use our Quick Library Builder to add watched titles, set show progress, and build your watchlist.",
   "libraryEmptyBuilderCta": "Quick Library Builder",
-  "libraryEmptyImport": "Already tracking on TV Time or Trakt? Import your data to bring your library over."
+  "libraryEmptyImport": "Already tracking on TV Time or Trakt? Import your data to bring your library over.",
+  "libraryEmptyAnimationText": "Nothing to see"
 }

@@ -240,6 +240,8 @@ export interface MovieDetailDto extends MovieDto {
   /** Dead field — never populated; kept for compatibility. `recommendations` supersedes it. */
   similar: MovieDto[];
   interactions: MovieInteractionsDto;
+  /** Whether this user has activity that can be transferred to a corrected movie match. */
+  canReassign: boolean;
   /** TMDB /recommendations snapshot (tmdbId-keyed, not internal ids). */
   recommendations?: RecommendationDto[];
 }

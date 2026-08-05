@@ -104,5 +104,6 @@
   "libraryEmptyExploreCta": "探索",
   "libraryEmptyBuilder": "或者使用快速媒体库生成器添加已看内容、设置剧集进度并创建想看清单。",
   "libraryEmptyBuilderCta": "快速媒体库生成器",
-  "libraryEmptyImport": "已经在 TV Time 或 Trakt 上记录了吗？导入数据即可迁移你的媒体库。"
+  "libraryEmptyImport": "已经在 TV Time 或 Trakt 上记录了吗？导入数据即可迁移你的媒体库。",
+  "libraryEmptyAnimationText": "没有可显示的内容"
 }

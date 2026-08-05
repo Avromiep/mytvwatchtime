@@ -104,5 +104,6 @@
   "libraryEmptyExploreCta": "Keşfet",
   "libraryEmptyBuilder": "Ya da izlediklerini eklemek, dizi ilerlemeni ayarlamak ve izleme listeni oluşturmak için Hızlı Kitaplık Oluşturucu'yu kullan.",
   "libraryEmptyBuilderCta": "Hızlı Kitaplık Oluşturucu",
-  "libraryEmptyImport": "TV Time veya Trakt kullanıyor musun? Kitaplığını taşımak için verilerini içe aktar."
+  "libraryEmptyImport": "TV Time veya Trakt kullanıyor musun? Kitaplığını taşımak için verilerini içe aktar.",
+  "libraryEmptyAnimationText": "Görüntülenecek bir şey yok"
 }
