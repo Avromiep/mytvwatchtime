@@ -425,10 +425,23 @@ export function NotificationItem({ item, onPress }: { item: any; onPress?: () =>
 }
 
 // ---------------- Upcoming card ----------------
+/** Whole-day difference between the air date and today, ignoring clock time so
+ *  "airs later today" reads 0 and "airs tomorrow" reads 1. null when undated. */
+function daysUntilAir(airDate: string): number | null {
+  const t = new Date(airDate).getTime();
+  if (Number.isNaN(t)) return null;
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const startOfAir = new Date(t);
+  startOfAir.setHours(0, 0, 0, 0);
+  return Math.round((startOfAir.getTime() - startOfToday.getTime()) / 86400000);
+}
+
 export function UpcomingCard({ item }: { item: any }) {
   const { tokens } = useAppearance();
   const air = new Date(item.airDate);
   const dateLabel = air.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const days = daysUntilAir(item.airDate);
   return (
     <Link href={`/episode/${item.id}` as any} asChild>
       <Pressable style={StyleSheet.flatten([styles.upCard, { backgroundColor: tokens.surface }])}>
@@ -455,6 +468,20 @@ export function UpcomingCard({ item }: { item: any }) {
               </T>
             ) : null}
           </View>
+        </View>
+        <View style={styles.upCountdown}>
+          {days == null ? (
+            <T variant="h2" muted>TBA</T>
+          ) : (
+            <>
+              <T variant="title" style={{ fontSize: 26, lineHeight: 30 }}>
+                {days}
+              </T>
+              <T variant="micro" muted style={{ letterSpacing: 0.5 }}>
+                {days === 1 ? 'DAY' : 'DAYS'}
+              </T>
+            </>
+          )}
         </View>
       </Pressable>
     </Link>
@@ -546,6 +573,7 @@ const styles = StyleSheet.create({
   epStill: { width: '100%', height: '100%' },
   epWatchBtn: { position: 'absolute', right: spacing.sm, bottom: spacing.sm },
   upCard: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
+  upCountdown: { width: 60, marginLeft: spacing.sm, alignItems: 'center', justifyContent: 'center' },
   row: { flexDirection: 'row' },
   badge: { alignItems: 'center', borderRadius: radius.md, padding: spacing.md, marginHorizontal: spacing.xs },
   notif: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm },
