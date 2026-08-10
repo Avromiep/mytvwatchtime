@@ -43,6 +43,18 @@ import { countryFlag } from '../../lib/country';
 import { formatRuntime } from '../../lib/format';
 import { WhereToWatch } from '../../components/WhereToWatch';
 
+/** Whole calendar days from today until an ISO date (today = 0); null if missing/invalid. */
+function daysUntilDate(iso?: string | null): number | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const target = new Date(t);
+  target.setHours(0, 0, 0, 0);
+  return Math.round((target.getTime() - start.getTime()) / 86400000);
+}
+
 export default function MovieDetailScreen() {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['movies', 'common', 'episode']);
@@ -158,6 +170,29 @@ export default function MovieDetailScreen() {
                     </>
                   ) : null}
                 </View>
+                {(() => {
+                  const days = daysUntilDate(movie.releaseDate);
+                  if (days == null || days < 0) return null;
+                  return (
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        alignSelf: 'flex-start',
+                        marginTop: spacing.sm,
+                        backgroundColor: tokens.primary,
+                        borderRadius: radius.sm,
+                        paddingHorizontal: 8,
+                        paddingVertical: 4,
+                      }}
+                    >
+                      <Ionicons name="calendar-outline" size={12} color={tokens.primaryForeground} />
+                      <T variant="caption" style={{ color: tokens.primaryForeground, marginLeft: 4 }}>
+                        {days === 0 ? 'Releases today' : `Releases in ${days} ${days === 1 ? 'day' : 'days'}`}
+                      </T>
+                    </View>
+                  );
+                })()}
                 <T variant="caption" muted style={{ marginTop: spacing.sm }}>
                   {movie.genres?.map((g: any) => g.name).join(' · ')}
                 </T>

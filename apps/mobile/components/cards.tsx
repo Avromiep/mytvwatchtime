@@ -38,6 +38,7 @@ function PosterCardImpl({
   progress,
   rating,
   year,
+  releaseDate,
   width = 130,
   style,
   typeBadge = false,
@@ -51,6 +52,8 @@ function PosterCardImpl({
   rating?: number | null;
   /** Release/start year — small caption line under the title. */
   year?: number | null;
+  /** Movie release date (ISO). When it's in the future, a "X DAYS" countdown pill is shown. */
+  releaseDate?: string | null;
   width?: number;
   style?: StyleProp<ViewStyle>;
   /** Mixed-type grids (search): small tv/film icon badge on the poster's top-right. */
@@ -59,6 +62,9 @@ function PosterCardImpl({
   const { tokens } = useAppearance();
   const h = width * 1.5;
   const route = kind === 'shows' ? 'show' : 'movie';
+  // Upcoming-movie countdown: whole days until release, only for a future date.
+  const daysToRelease = kind === 'movies' && releaseDate ? daysUntilAir(releaseDate) : null;
+  const showCountdown = daysToRelease != null && daysToRelease >= 0;
 
   const cardStyle = StyleSheet.flatten([
     {
@@ -112,6 +118,27 @@ function PosterCardImpl({
                 size={11}
                 color={tokens.mediaText}
               />
+            </View>
+          ) : null}
+
+          {showCountdown ? (
+            <View
+              style={{
+                position: 'absolute',
+                top: 4,
+                right: 4,
+                backgroundColor: tokens.primary,
+                borderRadius: radius.sm,
+                paddingHorizontal: 5,
+                paddingVertical: 2,
+              }}
+              pointerEvents="none"
+            >
+              <T variant="micro" style={{ color: tokens.primaryForeground }}>
+                {daysToRelease === 0
+                  ? 'TODAY'
+                  : `${daysToRelease} ${daysToRelease === 1 ? 'DAY' : 'DAYS'}`}
+              </T>
             </View>
           ) : null}
 
@@ -177,7 +204,7 @@ export function PosterGrid({ data, kind, emptyTitle, emptyCta, minCardWidth = 96
       {rows.map((row, ri) => (
         <View key={ri} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.sm }}>
           {row.map((it) => (
-            <PosterCard key={it.id} id={it.id} kind={kind} title={it.title} poster={it.images?.poster ?? it.posterUrl} progress={it.userProgress ?? (it.watched ? 1 : undefined)} rating={it.rating} year={cardYear(it)} width={cellW} style={{ marginRight: 0 }} />
+            <PosterCard key={it.id} id={it.id} kind={kind} title={it.title} poster={it.images?.poster ?? it.posterUrl} progress={it.userProgress ?? (it.watched ? 1 : undefined)} rating={it.rating} year={cardYear(it)} releaseDate={it.releaseDate} width={cellW} style={{ marginRight: 0 }} />
           ))}
           {Array.from({ length: cols - row.length }).map((_, fi) => (
             <View key={'f' + fi} style={{ width: cellW }} />
@@ -218,7 +245,7 @@ export function Carousel({ title, action, onAction, data, kind, width = 120 }: {
         contentContainerStyle={{ paddingHorizontal: spacing.lg }}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <PosterCard id={item.id} kind={kind} title={item.title} poster={item.images?.poster ?? item.posterUrl} progress={cardProgress(item)} rating={item.rating} year={cardYear(item)} width={width} />
+          <PosterCard id={item.id} kind={kind} title={item.title} poster={item.images?.poster ?? item.posterUrl} progress={cardProgress(item)} rating={item.rating} year={cardYear(item)} releaseDate={item.releaseDate} width={width} />
         )}
       />
     </View>

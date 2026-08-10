@@ -30,6 +30,7 @@ interface MovieItem {
   watched?: boolean;
   rating?: number | null;
   year?: number | null;
+  releaseDate?: string | null;
 }
 type SectionKey = 'watchlist' | 'watched' | 'favorites';
 
@@ -88,6 +89,7 @@ export default function MoviesScreen() {
         posterUrl: m.images?.poster ?? m.posterUrl,
         rating: m.rating ?? null,
         year: m.year ?? null,
+        releaseDate: m.releaseDate ?? null,
       })),
     [watchlist.items],
   );
@@ -104,6 +106,7 @@ export default function MoviesScreen() {
           progress: isWatched ? 1 : undefined,
           rating: m.rating ?? null,
           year: m.year ?? null,
+          releaseDate: m.releaseDate ?? null,
         };
       }),
     [favorites.items],
@@ -439,6 +442,7 @@ export default function MoviesScreen() {
                 progress={it.progress}
                 rating={it.rating}
                 year={it.year}
+                releaseDate={it.releaseDate}
                 width={cellW}
                 style={GRID_CARD_STYLE}
               />

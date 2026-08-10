@@ -243,6 +243,10 @@ export function mapMediaCardLite(media: AnyRecord, userId?: string): MediaCardLi
       media.type === MediaType.SHOW
         ? (media.show?.yearStart ?? null)
         : (media.movie?.releaseYear ?? null),
+    releaseDate:
+      media.type === MediaType.MOVIE && media.movie?.releaseDate
+        ? new Date(media.movie.releaseDate).toISOString()
+        : null,
     inWatchlist: !!(media.watchlist?.length || media._inWatchlist),
     favorite: !!(media.favorites?.length || media._favorite),
     ...(media.type === MediaType.SHOW

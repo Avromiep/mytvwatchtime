@@ -38,6 +38,8 @@ export interface MediaCardLiteDto {
   rating?: number | null;
   /** Release/start year (show.yearStart / movie.releaseYear). */
   year?: number | null;
+  /** Movies only: full release date (ISO), used for the upcoming-movie countdown. */
+  releaseDate?: string | null;
   inWatchlist?: boolean;
   favorite?: boolean;
   /** Shows only: 0..1 watched fraction of AIRED episodes. */

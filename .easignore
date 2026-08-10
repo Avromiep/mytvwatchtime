@@ -1,0 +1,51 @@
+node_modules/
+.expo/
+.pnpm/
+dist/
+build/
+screenshots/
+.kilo/
+.kimi-code/
+.playwright-mcp/
+.rtk/
+CLAUDE.md
+*.tsbuildinfo
+app-web/
+.env
+.env.local
+.env.*.local
+.env.prod
+.env.production
+*.log
+npm-debug.*
+.DS_Store
+coverage/
+.pnpm-store/
+.idea/
+.next/
+apps/api/storage/
+apps/admin/.env*
+backups/
+public-site/.env*
+.vscode/
+data-zips/
+db-backup/
+fix.ps1
+deploy.ps1
+docs/Docs.zip
+production-docs/
+# Prisma
+apps/api/prisma/migrations/dev.db
+apps/api/prisma/*.db
+# Mobile
+apps/mobile/build-top.gradle
+apps/mobile/build.gradle
+apps/mobile/keystoreprod.keystore
+apps/mobile/ios/
+apps/mobile/android/
+apps/mobile/web-build/
+mermaid-diagram.png
+mermaid-diagram.svg
+ipa-uploader/
+# NOTE: google-services.json and app.json are intentionally NOT ignored here
+# (unlike .gitignore) so EAS Build uploads them to the cloud builder.
