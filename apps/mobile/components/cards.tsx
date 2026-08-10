@@ -499,7 +499,9 @@ export function UpcomingCard({ item }: { item: any }) {
         <View style={styles.upCountdown}>
           {days == null ? (
             <T variant="h2" muted>TBA</T>
-          ) : (
+          ) : days < 0 ? null : (
+            // Only count down to upcoming airings; already-aired episodes (negative
+            // day counts) show nothing in this slot.
             <>
               <T variant="title" style={{ fontSize: 26, lineHeight: 30 }}>
                 {days}
