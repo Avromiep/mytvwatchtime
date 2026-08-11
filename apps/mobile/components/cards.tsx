@@ -167,7 +167,7 @@ function PosterCardImpl({
         </View>
 
         {countdownDays != null && countdownDays >= 0 ? (
-          <T variant="caption" numberOfLines={1} style={{ marginTop: 6, color: tokens.primary }}>
+          <T variant="h2" numberOfLines={1} style={{ marginTop: 6 }}>
             {countdownDays === 0 ? 'Today' : `${countdownDays} ${countdownDays === 1 ? 'day' : 'days'} left`}
           </T>
         ) : null}
