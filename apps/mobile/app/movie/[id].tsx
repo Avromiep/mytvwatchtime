@@ -46,13 +46,14 @@ import { WhereToWatch } from '../../components/WhereToWatch';
 /** Whole calendar days from today until an ISO date (today = 0); null if missing/invalid. */
 function daysUntilDate(iso?: string | null): number | null {
   if (!iso) return null;
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return null;
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const target = new Date(t);
-  target.setHours(0, 0, 0, 0);
-  return Math.round((target.getTime() - start.getTime()) / 86400000);
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  // Release dates are date-only, stored as midnight UTC. Compare the date's UTC
+  // calendar day to the local calendar day so users behind UTC don't see it a day early.
+  const target = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const now = new Date();
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((target - today) / 86400000);
 }
 
 export default function MovieDetailScreen() {

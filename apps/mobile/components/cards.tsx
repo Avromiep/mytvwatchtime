@@ -455,13 +455,14 @@ export function NotificationItem({ item, onPress }: { item: any; onPress?: () =>
 /** Whole-day difference between the air date and today, ignoring clock time so
  *  "airs later today" reads 0 and "airs tomorrow" reads 1. null when undated. */
 function daysUntilAir(airDate: string): number | null {
-  const t = new Date(airDate).getTime();
-  if (Number.isNaN(t)) return null;
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
-  const startOfAir = new Date(t);
-  startOfAir.setHours(0, 0, 0, 0);
-  return Math.round((startOfAir.getTime() - startOfToday.getTime()) / 86400000);
+  const d = new Date(airDate);
+  if (Number.isNaN(d.getTime())) return null;
+  // Air/release dates are date-only, stored as midnight UTC. Compare the date's UTC
+  // calendar day to the local calendar day so users behind UTC don't see it a day early.
+  const target = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const now = new Date();
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((target - today) / 86400000);
 }
 
 export function UpcomingCard({ item }: { item: any }) {
