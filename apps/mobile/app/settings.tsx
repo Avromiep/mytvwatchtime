@@ -6,6 +6,7 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as WebBrowser from 'expo-web-browser';
+import * as Updates from 'expo-updates';
 import Constants from 'expo-constants';
 import { Header } from '../components/Header';
 import { Button, Card, Screen, SectionHeader, T, APP_ICON } from '../components/primitives';
@@ -207,6 +208,35 @@ export default function SettingsScreen() {
     });
   };
 
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const checkForUpdates = async () => {
+    // expo-updates is inert in dev/Expo Go builds; only production/preview APKs get OTA.
+    if (!Updates.isEnabled) {
+      showToast('Updates are not available in this build.');
+      return;
+    }
+    setCheckingUpdate(true);
+    try {
+      const res = await Updates.checkForUpdateAsync();
+      if (!res.isAvailable) {
+        showToast("You're on the latest version.");
+        return;
+      }
+      showToast('Downloading update…');
+      await Updates.fetchUpdateAsync();
+      showConfirm({
+        title: 'Update ready',
+        description: 'A new version has been downloaded. Restart now to apply it?',
+        confirmLabel: 'Restart',
+        onConfirm: () => Updates.reloadAsync(),
+      });
+    } catch (e: any) {
+      showError({ title: 'Update check failed', description: e?.message ?? t('common:pleaseTryAgain') });
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
   return (
     <Screen>
       <Header title={t('settings:title')} showBack />
@@ -337,6 +367,12 @@ export default function SettingsScreen() {
               }} style={{ marginTop: spacing.sm }} />
             </View>
           ) : null}
+          <Row
+            icon={checkingUpdate ? 'hourglass-outline' : 'cloud-download-outline'}
+            label={checkingUpdate ? 'Checking for updates…' : 'Check for updates'}
+            subtitle="Download and apply the latest version"
+            onPress={checkingUpdate ? undefined : checkForUpdates}
+          />
           <Row icon="flash-outline" label={t('settings:quickSetup')} subtitle={t('settings:quickSetupDesc')} onPress={() => {
             logEvent('onboarding_reopened');
             router.push('/onboarding' as any);
