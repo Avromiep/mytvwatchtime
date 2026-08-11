@@ -521,6 +521,50 @@ export function UpcomingCard({ item }: { item: any }) {
   );
 }
 
+// ---------------- Upcoming movie card ----------------
+/** Mirrors UpcomingCard's layout for movies: poster, title, release date, and the
+ *  same big day-count. Links to the movie detail instead of an episode. */
+export function UpcomingMovieCard({ item }: { item: any }) {
+  const { tokens } = useAppearance();
+  const air = new Date(item.releaseDate);
+  const dateLabel = air.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const days = daysUntilAir(item.releaseDate);
+  return (
+    <Link href={`/movie/${item.id}` as any} asChild>
+      <Pressable style={StyleSheet.flatten([styles.upCard, { backgroundColor: tokens.surface }])}>
+        <PosterImage uri={item.posterUrl} style={{ width: 56, height: 84, borderRadius: radius.sm }} transition={0} />
+        <View style={{ flex: 1, marginLeft: spacing.md }}>
+          <T variant="h2" numberOfLines={2}>
+            {item.title}
+          </T>
+          <View style={[styles.row, { alignItems: 'center', marginTop: 4 }]}>
+            <Ionicons name="calendar-outline" size={13} color={tokens.textMuted} />
+            <T variant="caption" muted style={{ marginLeft: 4 }}>
+              {dateLabel}
+            </T>
+          </View>
+        </View>
+        <View style={styles.upCountdown}>
+          {days == null ? (
+            <T variant="h2" muted>TBA</T>
+          ) : days < 0 ? null : days === 0 ? (
+            <T variant="h2">TODAY</T>
+          ) : (
+            <>
+              <T variant="title" style={{ fontSize: 26, lineHeight: 30 }}>
+                {days}
+              </T>
+              <T variant="micro" muted style={{ letterSpacing: 0.5 }}>
+                {days === 1 ? 'DAY' : 'DAYS'}
+              </T>
+            </>
+          )}
+        </View>
+      </Pressable>
+    </Link>
+  );
+}
+
 // ---------------- Bar chart (SVG) ----------------
 export function BarChart({ data, color, height = 90, formatValue }: { data: { label: string; value: number }[]; color?: string; height?: number; formatValue?: (value: number) => string }) {
   const { tokens } = useAppearance();

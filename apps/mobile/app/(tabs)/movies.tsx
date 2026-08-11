@@ -11,12 +11,14 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { MediaType } from '@tvwatch/shared';
+import { MediaType, type MovieDetailDto } from '@tvwatch/shared';
+import { useQueries } from '@tanstack/react-query';
 import { Header } from '../../components/Header';
-import { PosterCard } from '../../components/cards';
+import { PosterCard, UpcomingMovieCard } from '../../components/cards';
 import { LibraryEmptyState } from '../../components/LibraryEmptyState';
-import { EmptyState, Screen, Spinner, T } from '../../components/primitives';
-import { useFavoritePages, useWatchedMoviePages, useWatchlistPages } from '../../api/hooks';
+import { Chip, EmptyState, Screen, Spinner, T } from '../../components/primitives';
+import { api } from '../../api/client';
+import { qk, useFavoritePages, useWatchedMoviePages, useWatchlistPages } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { spacing } from '../../theme/theme';
@@ -55,7 +57,8 @@ const MOVIE_PAGE_SIZE = 24;
 export default function MoviesScreen() {
   const width = useContentWidth();
   const { tokens } = useAppearance();
-  const { t } = useTranslation(['movies', 'common']);
+  const { t } = useTranslation(['movies', 'common', 'shows']);
+  const [tab, setTab] = useState<'watchlist' | 'upcoming'>('watchlist');
   // First pages load in parallel; additional pages are fetched only when the user
   // expands a section and taps See more.
   const watchlist = useWatchlistPages(MediaType.MOVIE, null, true, true, MOVIE_PAGE_SIZE);
@@ -478,6 +481,13 @@ export default function MoviesScreen() {
   return (
     <Screen>
       <Header title={t('movies:title')} />
+      <View style={styles.tabs}>
+        <Chip label={t('shows:watchList')} active={tab === 'watchlist'} onPress={() => setTab('watchlist')} />
+        <Chip label={t('shows:upcoming')} active={tab === 'upcoming'} onPress={() => setTab('upcoming')} />
+      </View>
+      {tab === 'upcoming' ? (
+        <UpcomingMovies />
+      ) : (
       <FlatList
         ref={listRef}
         data={rows}
@@ -505,11 +515,78 @@ export default function MoviesScreen() {
         viewabilityConfig={viewabilityConfig}
         maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       />
+      )}
     </Screen>
   );
 }
 
+/**
+ * Upcoming movies view. The list feed only carries release YEAR, so we load the
+ * full movie watchlist and fetch each movie's detail (which includes the exact
+ * release date) to surface a day-count without opening the movie. This is the
+ * "workaround" path; a self-hosted backend can instead return releaseDate in the
+ * list feed (see mapMediaCardLite) and skip the per-movie fetches.
+ */
+function UpcomingMovies() {
+  const wl = useWatchlistPages(MediaType.MOVIE, null, true, false, 60);
+  // Pull every page so no upcoming movie is missed beyond the first page.
+  useEffect(() => {
+    if (wl.hasNextPage && !wl.isFetchingNextPage) void wl.fetchNextPage();
+  }, [wl.hasNextPage, wl.isFetchingNextPage, wl.items.length]);
+
+  const ids = useMemo(() => wl.items.map((m: any) => m.id as string), [wl.items]);
+  const details = useQueries({
+    queries: ids.map((id) => ({
+      queryKey: qk.movie(id),
+      queryFn: () => api.get<MovieDetailDto>(`/movies/${id}`),
+      staleTime: 1000 * 60 * 60, // release dates barely move; cache an hour
+    })),
+  });
+
+  const upcoming = useMemo(() => {
+    const now = new Date();
+    const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+    const rows: { id: string; title: string; posterUrl?: string | null; releaseDate: string; _sort: number }[] = [];
+    for (const q of details) {
+      const m: any = q.data;
+      if (!m?.releaseDate) continue;
+      const d = new Date(m.releaseDate);
+      if (Number.isNaN(d.getTime())) continue;
+      const target = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+      if (target < today) continue; // released already — not upcoming
+      rows.push({ id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, releaseDate: m.releaseDate, _sort: target });
+    }
+    rows.sort((a, b) => a._sort - b._sort);
+    return rows;
+  }, [details]);
+
+  const stillLoading = wl.isLoading || wl.hasNextPage || (ids.length > 0 && details.some((q) => q.isLoading));
+
+  if (stillLoading && upcoming.length === 0) return <Spinner />;
+  if (upcoming.length === 0) {
+    return (
+      <View style={{ paddingVertical: 40 }}>
+        <EmptyState title={t18nUpcomingEmpty()} icon="film-outline" />
+      </View>
+    );
+  }
+  return (
+    <FlatList
+      data={upcoming}
+      keyExtractor={(it) => it.id}
+      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: spacing.sm, paddingBottom: 40 }}
+      renderItem={({ item }) => <UpcomingMovieCard item={item} />}
+    />
+  );
+}
+
+// Small helper so the empty string lives in one place (kept simple; no new i18n key).
+function t18nUpcomingEmpty() {
+  return 'No upcoming movies on your watch list';
+}
+
 const styles = StyleSheet.create({
+  tabs: { flexDirection: 'row', paddingHorizontal: spacing.lg, paddingBottom: spacing.sm },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
