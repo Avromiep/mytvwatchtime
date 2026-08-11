@@ -39,6 +39,8 @@ function PosterCardImpl({
   rating,
   year,
   releaseDate,
+  countdownDays,
+  releaseDateLabel,
   width = 130,
   style,
   typeBadge = false,
@@ -54,6 +56,10 @@ function PosterCardImpl({
   year?: number | null;
   /** Movie release date (ISO). When it's in the future, a "X DAYS" countdown pill is shown. */
   releaseDate?: string | null;
+  /** Upcoming grid: whole days until release, rendered as a line UNDER the poster. */
+  countdownDays?: number | null;
+  /** Upcoming grid: formatted release date, rendered as a line under the poster. */
+  releaseDateLabel?: string | null;
   width?: number;
   style?: StyleProp<ViewStyle>;
   /** Mixed-type grids (search): small tv/film icon badge on the poster's top-right. */
@@ -160,12 +166,22 @@ function PosterCardImpl({
           ) : null}
         </View>
 
-        <T variant="caption" numberOfLines={2} style={{ marginTop: 6 }}>
+        {countdownDays != null && countdownDays >= 0 ? (
+          <T variant="caption" numberOfLines={1} style={{ marginTop: 6, color: tokens.primary }}>
+            {countdownDays === 0 ? 'Today' : `${countdownDays} ${countdownDays === 1 ? 'day' : 'days'} left`}
+          </T>
+        ) : null}
+        <T variant="caption" numberOfLines={2} style={{ marginTop: countdownDays != null && countdownDays >= 0 ? 4 : 6 }}>
           {title}
         </T>
         {year ? (
           <T variant="micro" muted numberOfLines={1} style={{ marginTop: 2 }}>
             {year}
+          </T>
+        ) : null}
+        {releaseDateLabel ? (
+          <T variant="micro" muted numberOfLines={1} style={{ marginTop: 2 }}>
+            {releaseDateLabel}
           </T>
         ) : null}
       </Pressable>
@@ -506,50 +522,6 @@ export function UpcomingCard({ item }: { item: any }) {
           ) : (
             // Only count down to upcoming airings; already-aired episodes (negative
             // day counts) show nothing in this slot.
-            <>
-              <T variant="title" style={{ fontSize: 26, lineHeight: 30 }}>
-                {days}
-              </T>
-              <T variant="micro" muted style={{ letterSpacing: 0.5 }}>
-                {days === 1 ? 'DAY' : 'DAYS'}
-              </T>
-            </>
-          )}
-        </View>
-      </Pressable>
-    </Link>
-  );
-}
-
-// ---------------- Upcoming movie card ----------------
-/** Mirrors UpcomingCard's layout for movies: poster, title, release date, and the
- *  same big day-count. Links to the movie detail instead of an episode. */
-export function UpcomingMovieCard({ item }: { item: any }) {
-  const { tokens } = useAppearance();
-  const air = new Date(item.releaseDate);
-  const dateLabel = air.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-  const days = daysUntilAir(item.releaseDate);
-  return (
-    <Link href={`/movie/${item.id}` as any} asChild>
-      <Pressable style={StyleSheet.flatten([styles.upCard, { backgroundColor: tokens.surface }])}>
-        <PosterImage uri={item.posterUrl} style={{ width: 56, height: 84, borderRadius: radius.sm }} transition={0} />
-        <View style={{ flex: 1, marginLeft: spacing.md }}>
-          <T variant="h2" numberOfLines={2}>
-            {item.title}
-          </T>
-          <View style={[styles.row, { alignItems: 'center', marginTop: 4 }]}>
-            <Ionicons name="calendar-outline" size={13} color={tokens.textMuted} />
-            <T variant="caption" muted style={{ marginLeft: 4 }}>
-              {dateLabel}
-            </T>
-          </View>
-        </View>
-        <View style={styles.upCountdown}>
-          {days == null ? (
-            <T variant="h2" muted>TBA</T>
-          ) : days < 0 ? null : days === 0 ? (
-            <T variant="h2">TODAY</T>
-          ) : (
             <>
               <T variant="title" style={{ fontSize: 26, lineHeight: 30 }}>
                 {days}

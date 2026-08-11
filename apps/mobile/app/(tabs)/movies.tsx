@@ -14,7 +14,7 @@ import { Image } from 'expo-image';
 import { MediaType, type MovieDetailDto } from '@tvwatch/shared';
 import { useQueries } from '@tanstack/react-query';
 import { Header } from '../../components/Header';
-import { PosterCard, UpcomingMovieCard } from '../../components/cards';
+import { PosterCard } from '../../components/cards';
 import { LibraryEmptyState } from '../../components/LibraryEmptyState';
 import { Chip, EmptyState, Screen, Spinner, T } from '../../components/primitives';
 import { api } from '../../api/client';
@@ -527,7 +527,24 @@ export default function MoviesScreen() {
  * "workaround" path; a self-hosted backend can instead return releaseDate in the
  * list feed (see mapMediaCardLite) and skip the per-movie fetches.
  */
+interface UpcomingRow {
+  id: string;
+  title: string;
+  posterUrl?: string | null;
+  year: number | null;
+  days: number;
+  dateLabel: string;
+  sort: number;
+}
+
 function UpcomingMovies() {
+  // Same grid math as the watch list so the posters are the same big size.
+  const width = useContentWidth();
+  const containerW = width - 32;
+  const gap = 8;
+  const cols = Math.max(3, Math.floor((containerW + gap) / (110 + gap)));
+  const cellW = Math.floor((containerW - gap * (cols - 1)) / cols);
+
   const wl = useWatchlistPages(MediaType.MOVIE, null, true, false, 60);
   // Pull every page so no upcoming movie is missed beyond the first page.
   useEffect(() => {
@@ -546,19 +563,35 @@ function UpcomingMovies() {
   const upcoming = useMemo(() => {
     const now = new Date();
     const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
-    const rows: { id: string; title: string; posterUrl?: string | null; releaseDate: string; _sort: number }[] = [];
+    const rows: UpcomingRow[] = [];
     for (const q of details) {
       const m: any = q.data;
       if (!m?.releaseDate) continue;
       const d = new Date(m.releaseDate);
       if (Number.isNaN(d.getTime())) continue;
+      // Compare (and display) the date's UTC calendar day so it isn't a day off.
       const target = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
       if (target < today) continue; // released already — not upcoming
-      rows.push({ id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, releaseDate: m.releaseDate, _sort: target });
+      rows.push({
+        id: m.id,
+        title: m.title,
+        posterUrl: m.images?.poster ?? m.posterUrl,
+        year: m.releaseYear ?? null,
+        days: Math.round((target - today) / 86400000),
+        dateLabel: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }),
+        sort: target,
+      });
     }
-    rows.sort((a, b) => a._sort - b._sort);
+    rows.sort((a, b) => a.sort - b.sort);
     return rows;
   }, [details]);
+
+  // Chunk into rows of `cols` so posters line up exactly like the watch-list grid.
+  const gridRows = useMemo(() => {
+    const out: UpcomingRow[][] = [];
+    for (let i = 0; i < upcoming.length; i += cols) out.push(upcoming.slice(i, i + cols));
+    return out;
+  }, [upcoming, cols]);
 
   const stillLoading = wl.isLoading || wl.hasNextPage || (ids.length > 0 && details.some((q) => q.isLoading));
 
@@ -566,23 +599,36 @@ function UpcomingMovies() {
   if (upcoming.length === 0) {
     return (
       <View style={{ paddingVertical: 40 }}>
-        <EmptyState title={t18nUpcomingEmpty()} icon="film-outline" />
+        <EmptyState title="No upcoming movies on your watch list" icon="film-outline" />
       </View>
     );
   }
   return (
     <FlatList
-      data={upcoming}
-      keyExtractor={(it) => it.id}
+      data={gridRows}
+      keyExtractor={(row) => row[0].id}
       contentContainerStyle={{ paddingHorizontal: 16, paddingTop: spacing.sm, paddingBottom: 40 }}
-      renderItem={({ item }) => <UpcomingMovieCard item={item} />}
+      renderItem={({ item: row }) => (
+        <View style={{ flexDirection: 'row', gap, marginBottom: gap }}>
+          {row.map((it) => (
+            <View key={it.id} style={{ width: cellW }}>
+              <PosterCard
+                id={it.id}
+                kind="movies"
+                title={it.title}
+                poster={it.posterUrl}
+                year={it.year}
+                countdownDays={it.days}
+                releaseDateLabel={it.dateLabel}
+                width={cellW}
+                style={GRID_CARD_STYLE}
+              />
+            </View>
+          ))}
+        </View>
+      )}
     />
   );
-}
-
-// Small helper so the empty string lives in one place (kept simple; no new i18n key).
-function t18nUpcomingEmpty() {
-  return 'No upcoming movies on your watch list';
 }
 
 const styles = StyleSheet.create({
