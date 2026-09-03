@@ -481,10 +481,30 @@ function daysUntilAir(airDate: string): number | null {
   return Math.round((target - today) / 86400000);
 }
 
+/** Normalize a provider air-time string to 12-hour format with an ET label.
+ *  Handles 24-hour ("22:00") and existing 12-hour ("10:00 PM") inputs; returns the
+ *  raw value if it isn't a recognizable time. Provider air times for US network
+ *  shows are Eastern, so we surface them as such. */
+function formatAirTimeET(raw?: string | null): string | null {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  const twelve = /(\d{1,2}):(\d{2})\s*([AaPp][Mm])/.exec(s);
+  if (twelve) return `${parseInt(twelve[1], 10)}:${twelve[2]} ${twelve[3].toUpperCase()} ET`;
+  const m = /^(\d{1,2}):(\d{2})/.exec(s);
+  if (!m) return s;
+  let h = parseInt(m[1], 10);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${h}:${m[2]} ${ampm} ET`;
+}
+
 export function UpcomingCard({ item }: { item: any }) {
   const { tokens } = useAppearance();
   const air = new Date(item.airDate);
-  const dateLabel = air.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  // Format in UTC so the label matches the stored calendar day (and the day count),
+  // rather than rolling back a day for viewers behind UTC.
+  const dateLabel = air.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const timeLabel = formatAirTimeET(item.airTime);
   const days = daysUntilAir(item.airDate);
   return (
     <Link href={`/episode/${item.id}` as any} asChild>
@@ -504,7 +524,7 @@ export function UpcomingCard({ item }: { item: any }) {
             <Ionicons name="time-outline" size={13} color={tokens.textMuted} />
             <T variant="caption" muted style={{ marginLeft: 4 }}>
               {dateLabel}
-              {item.airTime ? ` · ${item.airTime}` : ''}
+              {timeLabel ? ` · ${timeLabel}` : ''}
             </T>
             {item.network ? (
               <T variant="micro" style={{ marginLeft: 'auto', color: tokens.primary }}>
