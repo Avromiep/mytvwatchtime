@@ -532,8 +532,9 @@ interface UpcomingRow {
   title: string;
   posterUrl?: string | null;
   year: number | null;
-  days: number;
-  dateLabel: string;
+  upcomingLabel: string; // "35 days left" | "Today" | "TBA"
+  dateLabel: string | null;
+  tba: boolean;
   sort: number;
 }
 
@@ -562,27 +563,33 @@ function UpcomingMovies() {
 
   const upcoming = useMemo(() => {
     const now = new Date();
+    const currentYear = now.getFullYear();
     const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
     const rows: UpcomingRow[] = [];
     for (const q of details) {
       const m: any = q.data;
-      if (!m?.releaseDate) continue;
-      const d = new Date(m.releaseDate);
-      if (Number.isNaN(d.getTime())) continue;
-      // Compare (and display) the date's UTC calendar day so it isn't a day off.
-      const target = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-      if (target < today) continue; // released already — not upcoming
-      rows.push({
-        id: m.id,
-        title: m.title,
-        posterUrl: m.images?.poster ?? m.posterUrl,
-        year: m.releaseYear ?? null,
-        days: Math.round((target - today) / 86400000),
-        dateLabel: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }),
-        sort: target,
-      });
+      if (!m) continue;
+      const base = { id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, year: m.releaseYear ?? null };
+      const d = m.releaseDate ? new Date(m.releaseDate) : null;
+      if (d && !Number.isNaN(d.getTime())) {
+        // Compare (and display) the date's UTC calendar day so it isn't a day off.
+        const target = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+        if (target < today) continue; // released already — not upcoming
+        const days = Math.round((target - today) / 86400000);
+        rows.push({
+          ...base,
+          upcomingLabel: days === 0 ? 'Today' : `${days} ${days === 1 ? 'day' : 'days'} left`,
+          dateLabel: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }),
+          tba: false,
+          sort: target,
+        });
+      } else if (base.year != null && base.year >= currentYear) {
+        // No firm date yet, but plausibly upcoming (this year or later) — show as TBA.
+        rows.push({ ...base, upcomingLabel: 'TBA', dateLabel: null, tba: true, sort: base.year });
+      }
     }
-    rows.sort((a, b) => a.sort - b.sort);
+    // Dated movies first (soonest → latest), then TBA movies (earliest year first).
+    rows.sort((a, b) => (a.tba !== b.tba ? (a.tba ? 1 : -1) : a.sort - b.sort));
     return rows;
   }, [details]);
 
@@ -618,7 +625,7 @@ function UpcomingMovies() {
                 title={it.title}
                 poster={it.posterUrl}
                 year={it.year}
-                countdownDays={it.days}
+                upcomingLabel={it.upcomingLabel}
                 releaseDateLabel={it.dateLabel}
                 width={cellW}
                 style={GRID_CARD_STYLE}

@@ -39,7 +39,7 @@ function PosterCardImpl({
   rating,
   year,
   releaseDate,
-  countdownDays,
+  upcomingLabel,
   releaseDateLabel,
   width = 130,
   style,
@@ -56,8 +56,8 @@ function PosterCardImpl({
   year?: number | null;
   /** Movie release date (ISO). When it's in the future, a "X DAYS" countdown pill is shown. */
   releaseDate?: string | null;
-  /** Upcoming grid: whole days until release, rendered as a line UNDER the poster. */
-  countdownDays?: number | null;
+  /** Upcoming grid: the big line under the poster (e.g. "35 days left", "Today", "TBA"). */
+  upcomingLabel?: string | null;
   /** Upcoming grid: formatted release date, rendered as a line under the poster. */
   releaseDateLabel?: string | null;
   width?: number;
@@ -166,12 +166,12 @@ function PosterCardImpl({
           ) : null}
         </View>
 
-        {countdownDays != null && countdownDays >= 0 ? (
+        {upcomingLabel ? (
           <T variant="h2" numberOfLines={1} style={{ marginTop: 6 }}>
-            {countdownDays === 0 ? 'Today' : `${countdownDays} ${countdownDays === 1 ? 'day' : 'days'} left`}
+            {upcomingLabel}
           </T>
         ) : null}
-        <T variant="caption" numberOfLines={2} style={{ marginTop: countdownDays != null && countdownDays >= 0 ? 4 : 6 }}>
+        <T variant="caption" numberOfLines={2} style={{ marginTop: upcomingLabel ? 4 : 6 }}>
           {title}
         </T>
         {year ? (
