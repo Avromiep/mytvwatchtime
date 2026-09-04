@@ -582,14 +582,23 @@ function useTvmazeAirTimeET(item: any, enabled: boolean): string | null {
 
   if (!enabled) return null;
   const stamp: string | undefined = epQ.data?.airstamp;
-  if (!stamp) return null;
-  // TVmaze stores a fake "noon UTC" placeholder for streaming shows (no broadcast
-  // network) — that's not a real drop time, so suppress it rather than mislead.
+  if (!stamp) return null; // episode not on TVmaze — no time to show
   const d = new Date(stamp);
+  // TVmaze stores a fake "noon UTC" placeholder for streaming shows (no broadcast
+  // network). Real per-episode streaming times don't exist in any free source, so
+  // fall back to the platform's known drop convention instead.
   const isStreamingPlaceholder =
     !showQ.data?.network && d.getUTCHours() === 12 && d.getUTCMinutes() === 0;
-  if (isStreamingPlaceholder) return null;
+  if (isStreamingPlaceholder) return streamingDropET(showQ.data?.webChannel?.name);
   return airstampToET(stamp);
+}
+
+/** Streaming release convention in ET. The major services (Netflix, Prime Video,
+ *  Apple TV+, Disney+, Hulu, Max, Paramount+, Peacock) drop new episodes at
+ *  12:00 AM Pacific = 3:00 AM ET. Marked "~" since it's the platform's standard
+ *  time, not a per-episode confirmation. Free data sources have no real time. */
+function streamingDropET(_platform?: string | null): string {
+  return '~3:00 AM ET';
 }
 
 export function UpcomingCard({ item }: { item: any }) {
