@@ -498,13 +498,33 @@ function formatAirTimeET(raw?: string | null): string | null {
   return `${h}:${m[2]} ${ampm} ET`;
 }
 
+/** Air time as 12-hour Eastern. Prefers the real air moment embedded in airDate
+ *  (when it carries a clock, not just a midnight-UTC date); otherwise falls back to
+ *  the provider's separate air-time string. Returns null when no time is known. */
+function airTimeLabel(airDate?: string | null, airTime?: string | null): string | null {
+  if (airDate) {
+    const d = new Date(airDate);
+    const hasClock = !Number.isNaN(d.getTime()) && (d.getUTCHours() !== 0 || d.getUTCMinutes() !== 0);
+    if (hasClock) {
+      try {
+        return (
+          d.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }) + ' ET'
+        );
+      } catch {
+        // Intl build without IANA tz data — fall back to the provider string below.
+      }
+    }
+  }
+  return formatAirTimeET(airTime);
+}
+
 export function UpcomingCard({ item }: { item: any }) {
   const { tokens } = useAppearance();
   const air = new Date(item.airDate);
   // Format in UTC so the label matches the stored calendar day (and the day count),
   // rather than rolling back a day for viewers behind UTC.
   const dateLabel = air.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
-  const timeLabel = formatAirTimeET(item.airTime);
+  const timeLabel = airTimeLabel(item.airDate, item.airTime);
   const days = daysUntilAir(item.airDate);
   return (
     <Link href={`/episode/${item.id}` as any} asChild>
