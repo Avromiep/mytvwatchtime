@@ -10,6 +10,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { Swipeable } from 'react-native-gesture-handler';
 import { Link, router } from 'expo-router';
+import { useQuery } from '@tanstack/react-query';
 import {
   Card,
   EmptyState,
@@ -534,13 +535,73 @@ function airTimeLabel(airDate?: string | null, airTime?: string | null): string 
   return formatAirTimeET(airTime);
 }
 
+/** Format a full ISO instant (with tz offset) as 12-hour Eastern. */
+function airstampToET(stamp?: string | null): string | null {
+  if (!stamp) return null;
+  const t = new Date(stamp).getTime();
+  if (Number.isNaN(t)) return null;
+  const et = new Date(t + easternOffsetMinutes(t) * 60000);
+  let h = et.getUTCHours();
+  const min = et.getUTCMinutes();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${h}:${String(min).padStart(2, '0')} ${ampm} ET`;
+}
+
+/** When the app has no air time of its own, look one up from TVmaze (free, public, no
+ *  key). TVmaze's `airstamp` is a full timezone-aware instant — including streaming
+ *  drop times — so we can convert it to the viewer's Eastern time. Queries are keyed by
+ *  show/episode so React Query dedupes them across the many cards of one show. */
+function useTvmazeAirTimeET(item: any, enabled: boolean): string | null {
+  const name: string | undefined = item?.title;
+  const season = item?.seasonNumber;
+  const number = item?.episodeNumber;
+
+  const showQ = useQuery({
+    queryKey: ['tvmaze', 'show', name],
+    queryFn: async () => {
+      const r = await fetch(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(name!)}`);
+      return r.ok ? r.json() : null;
+    },
+    enabled: enabled && !!name,
+    staleTime: 24 * 60 * 60 * 1000,
+    retry: 1,
+  });
+  const showId: number | undefined = showQ.data?.id;
+
+  const epQ = useQuery({
+    queryKey: ['tvmaze', 'ep', showId, season, number],
+    queryFn: async () => {
+      const r = await fetch(`https://api.tvmaze.com/shows/${showId}/episodebynumber?season=${season}&number=${number}`);
+      return r.ok ? r.json() : null;
+    },
+    enabled: enabled && !!showId && season != null && number != null,
+    staleTime: 6 * 60 * 60 * 1000,
+    retry: 1,
+  });
+
+  if (!enabled) return null;
+  const stamp: string | undefined = epQ.data?.airstamp;
+  if (!stamp) return null;
+  // TVmaze stores a fake "noon UTC" placeholder for streaming shows (no broadcast
+  // network) — that's not a real drop time, so suppress it rather than mislead.
+  const d = new Date(stamp);
+  const isStreamingPlaceholder =
+    !showQ.data?.network && d.getUTCHours() === 12 && d.getUTCMinutes() === 0;
+  if (isStreamingPlaceholder) return null;
+  return airstampToET(stamp);
+}
+
 export function UpcomingCard({ item }: { item: any }) {
   const { tokens } = useAppearance();
   const air = new Date(item.airDate);
   // Format in UTC so the label matches the stored calendar day (and the day count),
   // rather than rolling back a day for viewers behind UTC.
   const dateLabel = air.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
-  const timeLabel = airTimeLabel(item.airDate, item.airTime);
+  const localTime = airTimeLabel(item.airDate, item.airTime);
+  // App data usually has no time for these — look it up from TVmaze in that case.
+  const tvmazeTime = useTvmazeAirTimeET(item, !localTime);
+  const timeLabel = localTime ?? tvmazeTime;
   const days = daysUntilAir(item.airDate);
   return (
     <Link href={`/episode/${item.id}` as any} asChild>
