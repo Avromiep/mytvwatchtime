@@ -598,7 +598,7 @@ function useTvmazeAirTimeET(item: any, enabled: boolean): string | null {
  *  12:00 AM Pacific = 3:00 AM ET. Marked "~" since it's the platform's standard
  *  time, not a per-episode confirmation. Free data sources have no real time. */
 function streamingDropET(_platform?: string | null): string {
-  return '~3:00 AM ET';
+  return '3:00 AM ET';
 }
 
 export function UpcomingCard({ item }: { item: any }) {
