@@ -498,21 +498,37 @@ function formatAirTimeET(raw?: string | null): string | null {
   return `${h}:${m[2]} ${ampm} ET`;
 }
 
+/** Day-of-month of the nth Sunday of a month (month is 0-indexed, UTC). */
+function nthSundayOfMonth(year: number, month: number, n: number): number {
+  const firstDow = new Date(Date.UTC(year, month, 1)).getUTCDay(); // 0 = Sunday
+  return 1 + ((7 - firstDow) % 7) + (n - 1) * 7;
+}
+
+/** US Eastern offset in minutes for a UTC instant (EDT = -240, EST = -300). DST runs
+ *  from 07:00 UTC on the 2nd Sunday of March to 06:00 UTC on the 1st Sunday of November.
+ *  Computed with plain arithmetic — Hermes doesn't reliably support named IANA zones. */
+function easternOffsetMinutes(utcMs: number): number {
+  const y = new Date(utcMs).getUTCFullYear();
+  const dstStart = Date.UTC(y, 2, nthSundayOfMonth(y, 2, 2), 7);
+  const dstEnd = Date.UTC(y, 10, nthSundayOfMonth(y, 10, 1), 6);
+  return utcMs >= dstStart && utcMs < dstEnd ? -240 : -300;
+}
+
 /** Air time as 12-hour Eastern. Prefers the real air moment embedded in airDate
  *  (when it carries a clock, not just a midnight-UTC date); otherwise falls back to
  *  the provider's separate air-time string. Returns null when no time is known. */
 function airTimeLabel(airDate?: string | null, airTime?: string | null): string | null {
   if (airDate) {
+    const t = new Date(airDate).getTime();
     const d = new Date(airDate);
-    const hasClock = !Number.isNaN(d.getTime()) && (d.getUTCHours() !== 0 || d.getUTCMinutes() !== 0);
+    const hasClock = !Number.isNaN(t) && (d.getUTCHours() !== 0 || d.getUTCMinutes() !== 0);
     if (hasClock) {
-      try {
-        return (
-          d.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }) + ' ET'
-        );
-      } catch {
-        // Intl build without IANA tz data — fall back to the provider string below.
-      }
+      const et = new Date(t + easternOffsetMinutes(t) * 60000);
+      let h = et.getUTCHours();
+      const min = et.getUTCMinutes();
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12 || 12;
+      return `${h}:${String(min).padStart(2, '0')} ${ampm} ET`;
     }
   }
   return formatAirTimeET(airTime);
