@@ -25,18 +25,18 @@ export function usePushNotifications(enabled: boolean) {
     let cancelled = false;
     (async () => {
       try {
-        console.log('[PUSH] Starting push registration...');
+        if (__DEV__) console.log('[PUSH] Starting push registration...');
 
         const { status: existing } = await Notifications.getPermissionsAsync();
-        console.log('[PUSH] Current permission status:', existing);
+        if (__DEV__) console.log('[PUSH] Current permission status:', existing);
         let finalStatus = existing;
         if (existing !== 'granted') {
           const { status } = await Notifications.requestPermissionsAsync();
-          console.log('[PUSH] Requested permission, got:', status);
+          if (__DEV__) console.log('[PUSH] Requested permission, got:', status);
           finalStatus = status;
         }
         if (finalStatus !== 'granted' || cancelled) {
-          console.log('[PUSH] Permission not granted, aborting');
+          if (__DEV__) console.log('[PUSH] Permission not granted, aborting');
           return;
         }
 
@@ -45,8 +45,7 @@ export function usePushNotifications(enabled: boolean) {
           (Constants.expoConfig?.extra as any)?.projectId ||
           (Constants.expoConfig as any)?.projectId;
 
-        console.log('[PUSH] projectId:', projectId);
-        console.log('[PUSH] expoConfig extra:', JSON.stringify(Constants.expoConfig?.extra || {}));
+        if (__DEV__) console.log('[PUSH] projectId:', projectId);
 
         let token: string;
         try {
@@ -57,7 +56,7 @@ export function usePushNotifications(enabled: boolean) {
             token = (await Notifications.getExpoPushTokenAsync()).data;
           }
         } catch (tokenErr: any) {
-          console.error('[PUSH] Token generation FAILED:', tokenErr?.message || tokenErr);
+          if (__DEV__) console.error('[PUSH] Token generation FAILED:', tokenErr?.message || tokenErr);
           showError({
             title: 'Push token failed',
             description: tokenErr?.message || 'Unknown error',
@@ -65,7 +64,7 @@ export function usePushNotifications(enabled: boolean) {
           return;
         }
 
-        console.log('[PUSH] Got token:', token.substring(0, 30) + '...');
+        if (__DEV__) console.log('[PUSH] Got token:', token.substring(0, 30) + '...');
 
         const res = await api.post('/devices/register', {
           token,
@@ -74,7 +73,7 @@ export function usePushNotifications(enabled: boolean) {
           // Re-registered on every app start, so tz changes and pre-tz users backfill.
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         });
-        console.log('[PUSH] Device registered:', JSON.stringify(res));
+        if (__DEV__) console.log('[PUSH] Device registered:', JSON.stringify(res));
 
         if (Platform.OS === 'android') {
           await Notifications.setNotificationChannelAsync('default', {
@@ -82,9 +81,9 @@ export function usePushNotifications(enabled: boolean) {
             importance: Notifications.AndroidImportance.HIGH,
           });
         }
-        console.log('[PUSH] Registration complete!');
+        if (__DEV__) console.log('[PUSH] Registration complete!');
       } catch (e: any) {
-        console.error('[PUSH] Registration failed:', e?.message || e);
+        if (__DEV__) console.error('[PUSH] Registration failed:', e?.message || e);
       }
     })();
     return () => {

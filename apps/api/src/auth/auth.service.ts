@@ -14,6 +14,7 @@ import { OAuth2Client } from 'google-auth-library';
 import * as argon2 from 'argon2';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { EmailService } from '../common/email.service';
 import type { JwtPayload } from './jwt.strategy';
 import { AppleLoginDto, EmailLoginDto, EmailRegisterDto, SocialLoginDto } from './dto/auth.dto';
@@ -45,6 +46,7 @@ export class AuthService {
     private readonly config: ConfigService,
     private readonly email: EmailService,
     private readonly apple: AppleAuthService,
+    private readonly redis: RedisService,
   ) {
     this.googleClient = new OAuth2Client(this.config.get<string>('auth.google.clientId'));
   }
@@ -126,8 +128,10 @@ export class AuthService {
     const passwordHash = await argon2.hash(newPassword);
     await this.prisma.user.update({
       where: { id: userId },
-      data: { passwordHash, mustChangePassword: false },
+      data: { passwordHash, mustChangePassword: false, passwordChangedAt: new Date() },
     });
+    // Invalidate existing sessions immediately (tokens predate the new passwordChangedAt).
+    await this.redis.del(`auth:user:${userId}`);
   }
 
   async forgotPassword(emailAddr: string): Promise<{ sent: boolean }> {
@@ -157,8 +161,10 @@ export class AuthService {
           <p style="color:#666;font-size:13px;">This link expires in 1 hour. If you didn't request this, you can safely ignore this email.</p>
         `;
         await this.email.send(emailAddr, 'Reset Your Password — TVWatchTime', html);
-      } else {
+      } else if (this.config.get<string>('nodeEnv') !== 'production') {
         this.logger.log(`SMTP not configured — reset link for ${emailAddr}: ${link}`);
+      } else {
+        this.logger.log('SMTP not configured — password reset email not sent');
       }
     }
 
@@ -181,12 +187,14 @@ export class AuthService {
     const passwordHash = await argon2.hash(newPassword);
     await this.prisma.user.update({
       where: { id: reset.userId },
-      data: { passwordHash, mustChangePassword: false },
+      data: { passwordHash, mustChangePassword: false, passwordChangedAt: new Date() },
     });
     await this.prisma.passwordReset.update({
       where: { id: reset.id },
       data: { usedAt: new Date() },
     });
+    // Invalidate existing sessions immediately (tokens predate the new passwordChangedAt).
+    await this.redis.del(`auth:user:${reset.userId}`);
   }
 
   createAppleNonce(): Promise<AppleAuthNonceDto> {
@@ -341,6 +349,11 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user) throw new NotFoundException('User not found');
     if (isDeletedUserAccount(user)) throw new UnauthorizedException('Invalid refresh token');
+    // Reject refresh tokens issued before the last password change/reset.
+    const currentPwc = user.passwordChangedAt
+      ? Math.floor(user.passwordChangedAt.getTime() / 1000)
+      : 0;
+    if ((payload.pwc ?? 0) < currentPwc) throw new UnauthorizedException('Invalid refresh token');
     return this.issueSession(
       user.id,
       user.username,
@@ -358,11 +371,6 @@ export class AuthService {
     mustChangePassword: boolean,
     rememberMe = false,
   ): Promise<AuthSessionDto> {
-    // "Stay connected" sessions (admin console) get a long-lived access token; the
-    // refresh token TTL is unchanged either way.
-    const accessTtl = rememberMe ? this.config.get<string>('jwt.rememberTtl') : undefined;
-    const access = this.signToken({ sub: userId, username, email, role }, 'access', accessTtl);
-    const refresh = this.signToken({ sub: userId, username, email, role }, 'refresh');
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: { profile: true, authProviders: true },
@@ -372,6 +380,16 @@ export class AuthService {
     if (user.isSuspended) {
       throw unauthorizedAuth(AuthErrorCode.ACCOUNT_DISABLED, 'Account disabled');
     }
+    // "Stay connected" sessions (admin console) get a long-lived access token; the
+    // refresh token TTL is unchanged either way. Both tokens carry `pwc` so a later
+    // password change can reject them (see JwtStrategy.validate / refresh()).
+    const accessTtl = rememberMe ? this.config.get<string>('jwt.rememberTtl') : undefined;
+    const pwc = user.passwordChangedAt
+      ? Math.floor(user.passwordChangedAt.getTime() / 1000)
+      : undefined;
+    const base = { sub: userId, username, email, role, ...(pwc != null ? { pwc } : {}) };
+    const access = this.signToken(base, 'access', accessTtl);
+    const refresh = this.signToken(base, 'refresh');
     const followersCount = await this.prisma.follow.count({ where: { targetId: userId } });
     const followingCount = await this.prisma.follow.count({ where: { followerId: userId } });
     const commentsCount = await this.prisma.comment.count({ where: { userId } });
@@ -506,6 +524,22 @@ export class AuthService {
   }
 
   private async verifyFacebook(accessToken: string): Promise<SocialProfile> {
+    const appId = this.config.get<string>('auth.facebook.appId');
+    const appSecret = this.config.get<string>('auth.facebook.appSecret');
+    if (!appId || !appSecret) throw new UnauthorizedException('Facebook login not configured');
+
+    // Confirm the token was actually issued for THIS app before trusting /me — a token
+    // minted for a different Facebook app would otherwise be accepted as a valid login.
+    const debugUrl = new URL('https://graph.facebook.com/debug_token');
+    debugUrl.searchParams.set('input_token', accessToken);
+    debugUrl.searchParams.set('access_token', `${appId}|${appSecret}`);
+    const debugRes = await fetch(debugUrl.toString());
+    if (!debugRes.ok) throw new UnauthorizedException('Invalid Facebook token');
+    const debug = (await debugRes.json()) as { data?: { app_id?: string; is_valid?: boolean } };
+    if (debug.data?.is_valid !== true || debug.data.app_id !== appId) {
+      throw new UnauthorizedException('Invalid Facebook token');
+    }
+
     const url = new URL('https://graph.facebook.com/me');
     url.searchParams.set('fields', 'id,name,email');
     url.searchParams.set('access_token', accessToken);

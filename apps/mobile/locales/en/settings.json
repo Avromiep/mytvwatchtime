@@ -34,6 +34,18 @@
   "privacyPolicyRow": "Privacy Policy",
   "termsOfUseRow": "Terms of Use",
   "joinDiscord": "Join our Discord",
+  "updates": {
+    "check": "Check for updates",
+    "checking": "Checking for updates…",
+    "subtitle": "Download and apply the latest version",
+    "unavailable": "Updates are not available in this build.",
+    "upToDate": "You're on the latest version.",
+    "downloading": "Downloading update…",
+    "readyTitle": "Update ready",
+    "readyDesc": "A new version has been downloaded. Restart now to apply it?",
+    "restart": "Restart",
+    "failed": "Update check failed"
+  },
   "quickSetup": "Set up your library",
   "quickSetupDesc": "Add watched titles, update show progress, or build your watchlist.",
   "contactSupport": "Contact support",

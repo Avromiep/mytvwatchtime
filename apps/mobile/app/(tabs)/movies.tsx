@@ -11,14 +11,12 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { MediaType, type MovieDetailDto } from '@tvwatch/shared';
-import { useQueries } from '@tanstack/react-query';
+import { MediaType } from '@tvwatch/shared';
 import { Header } from '../../components/Header';
 import { PosterCard } from '../../components/cards';
 import { LibraryEmptyState } from '../../components/LibraryEmptyState';
 import { Chip, EmptyState, Screen, Spinner, T } from '../../components/primitives';
-import { api } from '../../api/client';
-import { qk, useFavoritePages, useWatchedMoviePages, useWatchlistPages } from '../../api/hooks';
+import { useFavoritePages, useWatchedMoviePages, useWatchlistPages } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { spacing } from '../../theme/theme';
@@ -521,11 +519,10 @@ export default function MoviesScreen() {
 }
 
 /**
- * Upcoming movies view. The list feed only carries release YEAR, so we load the
- * full movie watchlist and fetch each movie's detail (which includes the exact
- * release date) to surface a day-count without opening the movie. This is the
- * "workaround" path; a self-hosted backend can instead return releaseDate in the
- * list feed (see mapMediaCardLite) and skip the per-movie fetches.
+ * Upcoming movies view. Reads `releaseDate` straight from the watchlist list feed
+ * (the backend now returns it on movie card DTOs — see mapMediaCardLite), so there
+ * are no per-movie detail fetches. Movies with a firm future date show a day-count;
+ * dated-less movies releasing this year or later show as TBA.
  */
 interface UpcomingRow {
   id: string;
@@ -539,6 +536,7 @@ interface UpcomingRow {
 }
 
 function UpcomingMovies() {
+  const { t } = useTranslation(['movies']);
   // Same grid math as the watch list so the posters are the same big size.
   const width = useContentWidth();
   const containerW = width - 32;
@@ -552,24 +550,14 @@ function UpcomingMovies() {
     if (wl.hasNextPage && !wl.isFetchingNextPage) void wl.fetchNextPage();
   }, [wl.hasNextPage, wl.isFetchingNextPage, wl.items.length]);
 
-  const ids = useMemo(() => wl.items.map((m: any) => m.id as string), [wl.items]);
-  const details = useQueries({
-    queries: ids.map((id) => ({
-      queryKey: qk.movie(id),
-      queryFn: () => api.get<MovieDetailDto>(`/movies/${id}`),
-      staleTime: 1000 * 60 * 60, // release dates barely move; cache an hour
-    })),
-  });
-
   const upcoming = useMemo(() => {
     const now = new Date();
     const currentYear = now.getFullYear();
     const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
     const rows: UpcomingRow[] = [];
-    for (const q of details) {
-      const m: any = q.data;
+    for (const m of wl.items as any[]) {
       if (!m) continue;
-      const base = { id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, year: m.releaseYear ?? null };
+      const base = { id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, year: m.year ?? null };
       const d = m.releaseDate ? new Date(m.releaseDate) : null;
       if (d && !Number.isNaN(d.getTime())) {
         // Compare (and display) the date's UTC calendar day so it isn't a day off.
@@ -578,20 +566,20 @@ function UpcomingMovies() {
         const days = Math.round((target - today) / 86400000);
         rows.push({
           ...base,
-          upcomingLabel: days === 0 ? 'Today' : `${days} ${days === 1 ? 'day' : 'days'} left`,
+          upcomingLabel: days === 0 ? t('movies:upcoming.today') : t('movies:upcoming.daysLeft', { count: days }),
           dateLabel: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }),
           tba: false,
           sort: target,
         });
       } else if (base.year != null && base.year >= currentYear) {
         // No firm date yet, but plausibly upcoming (this year or later) — show as TBA.
-        rows.push({ ...base, upcomingLabel: 'TBA', dateLabel: null, tba: true, sort: base.year });
+        rows.push({ ...base, upcomingLabel: t('movies:upcoming.tba'), dateLabel: null, tba: true, sort: base.year });
       }
     }
     // Dated movies first (soonest → latest), then TBA movies (earliest year first).
     rows.sort((a, b) => (a.tba !== b.tba ? (a.tba ? 1 : -1) : a.sort - b.sort));
     return rows;
-  }, [details]);
+  }, [wl.items, t]);
 
   // Chunk into rows of `cols` so posters line up exactly like the watch-list grid.
   const gridRows = useMemo(() => {
@@ -600,13 +588,13 @@ function UpcomingMovies() {
     return out;
   }, [upcoming, cols]);
 
-  const stillLoading = wl.isLoading || wl.hasNextPage || (ids.length > 0 && details.some((q) => q.isLoading));
+  const stillLoading = wl.isLoading || wl.hasNextPage;
 
   if (stillLoading && upcoming.length === 0) return <Spinner />;
   if (upcoming.length === 0) {
     return (
       <View style={{ paddingVertical: 40 }}>
-        <EmptyState title="No upcoming movies on your watch list" icon="film-outline" />
+        <EmptyState title={t('movies:upcoming.empty')} icon="film-outline" />
       </View>
     );
   }

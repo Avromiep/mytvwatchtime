@@ -44,8 +44,11 @@ async function bootstrap() {
   app.useStaticAssets(join(process.cwd(), 'apps', 'api', 'storage'), { prefix: '/uploads/' });
 
   const origins = (config.get<string>('CORS_ORIGINS') || '').split(',').filter(Boolean);
+  const isProd = config.get<string>('nodeEnv') === 'production';
   app.enableCors({
-    origin: origins.length ? origins : true,
+    // With no CORS_ORIGINS configured, allow all in dev for convenience but allow NO
+    // browser origin in production (fail closed) rather than reflecting every origin.
+    origin: origins.length ? origins : isProd ? false : true,
     credentials: true,
   });
 

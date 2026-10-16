@@ -46,8 +46,11 @@ export class DataDeletionService {
         `;
         await this.email.send(email, 'Confirm Your Account Deletion — TVWatchTime', html);
         return { sent: true };
-      } else {
+      } else if (this.config.get<string>('nodeEnv') !== 'production') {
         this.logger.log(`SMTP not configured — deletion link for ${email}: ${link}`);
+        return { sent: true };
+      } else {
+        this.logger.log('SMTP not configured — account deletion email not sent');
         return { sent: true };
       }
     }

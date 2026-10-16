@@ -1576,7 +1576,7 @@ export class DiscoveryService {
       where: { id: { in: limitedIds } },
       include: {
         show: { select: { episodesCount: true, yearStart: true } },
-        movie: { select: { releaseYear: true } },
+        movie: { select: { releaseYear: true, releaseDate: true } },
         ...(userId
           ? {
               watchlist: { where: { userId }, select: { id: true } },

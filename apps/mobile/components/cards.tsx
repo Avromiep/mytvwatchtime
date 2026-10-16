@@ -548,22 +548,50 @@ function airstampToET(stamp?: string | null): string | null {
   return `${h}:${String(min).padStart(2, '0')} ${ampm} ET`;
 }
 
+/** Read an external id of a given provider off an item's `externalIds` array. */
+function externalIdOf(item: any, provider: string): string | undefined {
+  const list = item?.externalIds;
+  if (Array.isArray(list)) {
+    const hit = list.find((e: any) => e?.provider === provider && e?.id);
+    if (hit) return String(hit.id);
+  }
+  return undefined;
+}
+
 /** When the app has no air time of its own, look one up from TVmaze (free, public, no
  *  key). TVmaze's `airstamp` is a full timezone-aware instant — including streaming
- *  drop times — so we can convert it to the viewer's Eastern time. Queries are keyed by
+ *  drop times — so we can convert it to the viewer's Eastern time. We resolve the show
+ *  by external id first (TVmaze id, else TheTVDB, else IMDb) and only fall back to a
+ *  title search when none is present, since id matches are exact. Queries are keyed by
  *  show/episode so React Query dedupes them across the many cards of one show. */
 function useTvmazeAirTimeET(item: any, enabled: boolean): string | null {
   const name: string | undefined = item?.title;
   const season = item?.seasonNumber;
   const number = item?.episodeNumber;
+  const tvmazeId = externalIdOf(item, 'TVMAZE');
+  const tvdbId = externalIdOf(item, 'THE_TVDB');
+  const imdbId = externalIdOf(item, 'IMDB');
 
+  // One key per resolution strategy so exact-id and title lookups don't collide.
+  const showKey = tvmazeId
+    ? ['tvmaze', tvmazeId]
+    : tvdbId
+      ? ['tvdb', tvdbId]
+      : imdbId
+        ? ['imdb', imdbId]
+        : ['name', name];
   const showQ = useQuery({
-    queryKey: ['tvmaze', 'show', name],
+    queryKey: ['tvmaze', 'show', ...showKey],
     queryFn: async () => {
-      const r = await fetch(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(name!)}`);
+      let url: string;
+      if (tvmazeId) url = `https://api.tvmaze.com/shows/${encodeURIComponent(tvmazeId)}`;
+      else if (tvdbId) url = `https://api.tvmaze.com/lookup/shows?thetvdb=${encodeURIComponent(tvdbId)}`;
+      else if (imdbId) url = `https://api.tvmaze.com/lookup/shows?imdb=${encodeURIComponent(imdbId)}`;
+      else url = `https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(name!)}`;
+      const r = await fetch(url);
       return r.ok ? r.json() : null;
     },
-    enabled: enabled && !!name,
+    enabled: enabled && !!(tvmazeId || tvdbId || imdbId || name),
     staleTime: 24 * 60 * 60 * 1000,
     retry: 1,
   });
@@ -595,14 +623,16 @@ function useTvmazeAirTimeET(item: any, enabled: boolean): string | null {
 
 /** Streaming release convention in ET. The major services (Netflix, Prime Video,
  *  Apple TV+, Disney+, Hulu, Max, Paramount+, Peacock) drop new episodes at
- *  12:00 AM Pacific = 3:00 AM ET. Marked "~" since it's the platform's standard
- *  time, not a per-episode confirmation. Free data sources have no real time. */
+ *  12:00 AM Pacific = 3:00 AM ET. Returned with a leading "~" because it is the
+ *  platform's standard time, not a per-episode confirmation — no free data source
+ *  carries the real per-episode streaming time. */
 function streamingDropET(_platform?: string | null): string {
-  return '3:00 AM ET';
+  return '~3:00 AM ET';
 }
 
 export function UpcomingCard({ item }: { item: any }) {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['shows']);
   const air = new Date(item.airDate);
   // Format in UTC so the label matches the stored calendar day (and the day count),
   // rather than rolling back a day for viewers behind UTC.
@@ -641,10 +671,10 @@ export function UpcomingCard({ item }: { item: any }) {
         </View>
         <View style={styles.upCountdown}>
           {days == null ? (
-            <T variant="h2" muted>TBA</T>
+            <T variant="h2" muted>{t('shows:upcomingCard.tba')}</T>
           ) : days < 0 ? null : days === 0 ? (
             // Airing today: a single medium-weight word instead of "0 DAYS".
-            <T variant="h2">TODAY</T>
+            <T variant="h2">{t('shows:upcomingCard.today')}</T>
           ) : (
             // Only count down to upcoming airings; already-aired episodes (negative
             // day counts) show nothing in this slot.
@@ -653,7 +683,7 @@ export function UpcomingCard({ item }: { item: any }) {
                 {days}
               </T>
               <T variant="micro" muted style={{ letterSpacing: 0.5 }}>
-                {days === 1 ? 'DAY' : 'DAYS'}
+                {t('shows:upcomingCard.dayLabel', { count: days })}
               </T>
             </>
           )}

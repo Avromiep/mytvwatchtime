@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Body, HttpException, HttpStatus } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { Public } from './common/decorators/public.decorator';
+import { PushRelayDto } from './push-relay.dto';
 import { FeatureFlagService } from './common/feature-flag.service';
 import { CapabilityService } from './common/capability.service';
 import { ConfigService } from '@nestjs/config';
@@ -62,16 +63,16 @@ export class HealthController {
   }
 
   /** Public push relay — allows self-hosted backends to send pushes through this Expo project.
-   *  Rate limited per device token to prevent abuse. */
+   *  Rate limited per device token AND per source IP, and disabled by default. */
   @Public()
+  // Per-IP limit (the class-level @SkipThrottle is re-enabled just for this route),
+  // layered on top of the per-token Redis counter below.
+  @SkipThrottle({ default: false })
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post('push/relay')
-  async pushRelay(
-    @Body() body: { token: string; title: string; body?: string; data?: Record<string, unknown> },
-  ) {
-    const enabled = this.config.get<boolean>('pushRelay.enabled') ?? true;
+  async pushRelay(@Body() body: PushRelayDto) {
+    const enabled = this.config.get<boolean>('pushRelay.enabled') ?? false;
     if (!enabled) throw new HttpException('Push relay disabled', HttpStatus.SERVICE_UNAVAILABLE);
-    if (!body?.token || !body?.title)
-      throw new HttpException('token and title required', HttpStatus.BAD_REQUEST);
 
     // Rate limit per token
     const rateLimit = this.config.get<number>('pushRelay.rateLimit') ?? 10;

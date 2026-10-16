@@ -189,7 +189,7 @@ export default function MovieDetailScreen() {
                     >
                       <Ionicons name="calendar-outline" size={12} color={tokens.primaryForeground} />
                       <T variant="caption" style={{ color: tokens.primaryForeground, marginLeft: 4 }}>
-                        {days === 0 ? 'Releases today' : `Releases in ${days} ${days === 1 ? 'day' : 'days'}`}
+                        {days === 0 ? t('movies:releasesToday') : t('movies:releasesIn', { count: days })}
                       </T>
                     </View>
                   );

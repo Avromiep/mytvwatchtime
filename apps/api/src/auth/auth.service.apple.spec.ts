@@ -127,8 +127,16 @@ function makeService(prisma = makePrisma()) {
     jwt: { secret: 'test-secret-minimum-16-chars', accessTtl: '15m', refreshTtl: '30d' },
     auth: { google: { clientId: 'google-client' } },
   });
-  const service = new AuthService(prisma, new JwtService(), config, {} as any, apple as any);
-  return { service, prisma, apple };
+  const redis = { get: jest.fn(), set: jest.fn(), del: jest.fn() };
+  const service = new AuthService(
+    prisma,
+    new JwtService(),
+    config,
+    {} as any,
+    apple as any,
+    redis as any,
+  );
+  return { service, prisma, apple, redis };
 }
 
 const dto = {

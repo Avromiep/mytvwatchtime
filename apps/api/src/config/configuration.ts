@@ -110,7 +110,8 @@ export default () => ({
   pushRelay: {
     rateLimit: Number(process.env.PUSH_RELAY_RATE_LIMIT || 10),
     rateWindowMinutes: Number(process.env.PUSH_RELAY_RATE_WINDOW_MINUTES || 10),
-    enabled: process.env.PUSH_RELAY_ENABLED !== 'false',
+    // Disabled by default; operators must opt in with PUSH_RELAY_ENABLED=true.
+    enabled: process.env.PUSH_RELAY_ENABLED === 'true',
   },
   email: {
     enabled: !!process.env.SMTP_HOST,
