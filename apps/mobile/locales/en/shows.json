@@ -15,6 +15,12 @@
     "browseAll": "Browse all shows"
   },
   "today": "Today",
+  "upcomingCard": {
+    "today": "TODAY",
+    "tba": "TBA",
+    "dayLabel_one": "DAY",
+    "dayLabel_other": "DAYS"
+  },
   "tomorrow": "Tomorrow",
   "thisWeek": "This week",
   "nextWeek": "Next week",

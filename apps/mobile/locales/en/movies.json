@@ -17,5 +17,15 @@
   "noProviders": "No providers available.",
   "cast": "Cast",
   "rateMovie": "Rate this movie",
-  "similar": "Similar movies"
+  "similar": "Similar movies",
+  "upcoming": {
+    "today": "Today",
+    "daysLeft_one": "{{count}} day left",
+    "daysLeft_other": "{{count}} days left",
+    "tba": "TBA",
+    "empty": "No upcoming movies on your watch list"
+  },
+  "releasesToday": "Releases today",
+  "releasesIn_one": "Releases in {{count}} day",
+  "releasesIn_other": "Releases in {{count}} days"
 }

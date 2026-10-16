@@ -212,26 +212,26 @@ export default function SettingsScreen() {
   const checkForUpdates = async () => {
     // expo-updates is inert in dev/Expo Go builds; only production/preview APKs get OTA.
     if (!Updates.isEnabled) {
-      showToast('Updates are not available in this build.');
+      showToast(t('settings:updates.unavailable'));
       return;
     }
     setCheckingUpdate(true);
     try {
       const res = await Updates.checkForUpdateAsync();
       if (!res.isAvailable) {
-        showToast("You're on the latest version.");
+        showToast(t('settings:updates.upToDate'));
         return;
       }
-      showToast('Downloading update…');
+      showToast(t('settings:updates.downloading'));
       await Updates.fetchUpdateAsync();
       showConfirm({
-        title: 'Update ready',
-        description: 'A new version has been downloaded. Restart now to apply it?',
-        confirmLabel: 'Restart',
+        title: t('settings:updates.readyTitle'),
+        description: t('settings:updates.readyDesc'),
+        confirmLabel: t('settings:updates.restart'),
         onConfirm: () => Updates.reloadAsync(),
       });
     } catch (e: any) {
-      showError({ title: 'Update check failed', description: e?.message ?? t('common:pleaseTryAgain') });
+      showError({ title: t('settings:updates.failed'), description: e?.message ?? t('common:pleaseTryAgain') });
     } finally {
       setCheckingUpdate(false);
     }
@@ -369,8 +369,8 @@ export default function SettingsScreen() {
           ) : null}
           <Row
             icon={checkingUpdate ? 'hourglass-outline' : 'cloud-download-outline'}
-            label={checkingUpdate ? 'Checking for updates…' : 'Check for updates'}
-            subtitle="Download and apply the latest version"
+            label={checkingUpdate ? t('settings:updates.checking') : t('settings:updates.check')}
+            subtitle={t('settings:updates.subtitle')}
             onPress={checkingUpdate ? undefined : checkForUpdates}
           />
           <Row icon="flash-outline" label={t('settings:quickSetup')} subtitle={t('settings:quickSetupDesc')} onPress={() => {
