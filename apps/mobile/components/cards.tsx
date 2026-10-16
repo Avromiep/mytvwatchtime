@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 import { firstNetwork } from '@tvwatch/shared';
 import { useContentWidth } from '../hooks/useContentWidth';
 import { airTimeLabel, tvmazeEpisodeTimeLabel } from '../lib/airtime';
+import { tvmazeGet } from '../lib/tvmaze-fetch';
 
 
 
@@ -523,8 +524,10 @@ function useTvmazeAirTimeET(item: any, enabled: boolean): string | null {
       else if (tvdbId) url = `https://api.tvmaze.com/lookup/shows?thetvdb=${encodeURIComponent(tvdbId)}`;
       else if (imdbId) url = `https://api.tvmaze.com/lookup/shows?imdb=${encodeURIComponent(imdbId)}`;
       else url = `https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(name!)}`;
-      const r = await fetch(url);
-      return r.ok ? r.json() : null;
+      const r = await tvmazeGet(url); // shared gate: ≤2 concurrent, 15/10s, 429 retried
+      if (r.status === 'ok') return r.data;
+      if (r.status === 'notFound') return null;
+      throw new Error('tvmaze show lookup failed'); // non-OK/network → let RQ retry
     },
     enabled: enabled && !!(tvmazeId || tvdbId || imdbId || name),
     staleTime: 24 * 60 * 60 * 1000,
@@ -535,8 +538,12 @@ function useTvmazeAirTimeET(item: any, enabled: boolean): string | null {
   const epQ = useQuery({
     queryKey: ['tvmaze', 'ep', showId, season, number],
     queryFn: async () => {
-      const r = await fetch(`https://api.tvmaze.com/shows/${showId}/episodebynumber?season=${season}&number=${number}`);
-      return r.ok ? r.json() : null;
+      const r = await tvmazeGet(
+        `https://api.tvmaze.com/shows/${showId}/episodebynumber?season=${season}&number=${number}`,
+      );
+      if (r.status === 'ok') return r.data;
+      if (r.status === 'notFound') return null;
+      throw new Error('tvmaze episode lookup failed');
     },
     enabled: enabled && !!showId && season != null && number != null,
     staleTime: 6 * 60 * 60 * 1000,
