@@ -21,6 +21,9 @@ import { useNotificationNavigation } from '../hooks/useNotificationNavigation';
 import { initAnalytics } from '../lib/analytics';
 import { isOnboardingDone } from '../lib/onboarding/draft';
 import { serializeQueryClient } from '../lib/query-persistence';
+import { clearReleaseDateCache } from '../lib/release-date-cache';
+import { clearTvmazeCache } from '../lib/tvmaze-cache';
+import { prefetchUpcoming } from '../lib/prefetch-upcoming';
 import { WEB_PORTRAIT_MAX_WIDTH } from '../hooks/useContentWidth';
 
 if (Platform.OS !== 'web') {
@@ -78,8 +81,11 @@ function Gate() {
       queryClient.clear();
       // Detail payloads are per-user (userProgress, inWatchlist, votes) — drop
       // the persisted cache too or the next account on this device would
-      // restore the previous user's state.
+      // restore the previous user's state. The on-device Upcoming caches are
+      // cleared on the same path for the same reason.
       void queryPersister.removeClient();
+      void clearReleaseDateCache();
+      void clearTvmazeCache();
       router.replace('/(auth)/login');
     } else if (user && needsPasswordChange && segs[1] !== 'change-password') {
       router.replace('/(auth)/change-password');
@@ -97,6 +103,19 @@ function Gate() {
     // Note: onboarding routes are never redirected AWAY from — completed/skipped
     // users may deliberately reopen Quick setup from Settings.
   }, [user, loading, onboardingDone]);
+
+  // Deferred, low-priority warm-up for the Upcoming tabs (movie release dates +
+  // TVmaze air times) ~2s after a logged-in start, off the first-paint path, and
+  // only when the on-device caches are stale. Never blocks startup.
+  useEffect(() => {
+    if (loading || !user) return;
+    const timer = setTimeout(() => {
+      InteractionManager.runAfterInteractions(() => {
+        void prefetchUpcoming(queryClient);
+      });
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [loading, user]);
 
   useEffect(() => {
     if (!loading && Platform.OS !== 'web') SplashScreen.hideAsync();
