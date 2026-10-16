@@ -28,12 +28,14 @@ import {
 } from '../release-date-cache';
 
 const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
 const entry = (over: Partial<ReleaseEntry> = {}): ReleaseEntry => ({
   releaseDate: '2026-09-09',
   releaseYear: 2026,
   title: 't',
   poster: null,
   savedAt: 1_000_000_000_000,
+  ttlJitter: 0,
   ...over,
 });
 
@@ -50,14 +52,25 @@ describe('release-date-cache', () => {
     expect(getReleaseEntry('x')).toBeUndefined();
   });
 
-  it('applies 24h TTL to dated entries and 12h to TBA (null) entries', () => {
+  it('TTL (no jitter): near=24h, far(>30d)=7d, TBA=3d', () => {
     const now = 1_000_000_000_000;
-    const dated = entry({ savedAt: now });
+    const near = entry({ releaseDate: new Date(now + 10 * DAY).toISOString(), savedAt: now });
+    const far = entry({ releaseDate: new Date(now + 60 * DAY).toISOString(), savedAt: now });
     const tba = entry({ releaseDate: null, savedAt: now });
-    expect(isReleaseEntryFresh(dated, now + 23 * HOUR)).toBe(true);
-    expect(isReleaseEntryFresh(dated, now + 25 * HOUR)).toBe(false);
-    expect(isReleaseEntryFresh(tba, now + 11 * HOUR)).toBe(true);
-    expect(isReleaseEntryFresh(tba, now + 13 * HOUR)).toBe(false);
+    expect(isReleaseEntryFresh(near, now + 23 * HOUR)).toBe(true);
+    expect(isReleaseEntryFresh(near, now + 25 * HOUR)).toBe(false);
+    expect(isReleaseEntryFresh(far, now + 6 * DAY)).toBe(true);
+    expect(isReleaseEntryFresh(far, now + 8 * DAY)).toBe(false);
+    expect(isReleaseEntryFresh(tba, now + 2 * DAY)).toBe(true);
+    expect(isReleaseEntryFresh(tba, now + 4 * DAY)).toBe(false);
+  });
+
+  it('per-entry jitter extends the TTL', () => {
+    const now = 1_000_000_000_000;
+    // base 24h + 20% jitter ≈ 28.8h
+    const jittered = entry({ releaseDate: new Date(now + 10 * DAY).toISOString(), savedAt: now, ttlJitter: 0.2 });
+    expect(isReleaseEntryFresh(jittered, now + 25 * HOUR)).toBe(true);
+    expect(isReleaseEntryFresh(jittered, now + 29 * HOUR)).toBe(false);
   });
 
   it('batches writes: setEntry does not persist immediately; flush writes once', async () => {

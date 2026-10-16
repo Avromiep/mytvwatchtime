@@ -1,8 +1,11 @@
 /**
  * Async loader for the Upcoming Movies tab. Resolves each watchlist movie's release
- * date from the on-device cache first, and only fetches /movies/{id} (through a polite
- * limiter) for entries that are missing or expired. Shared by the tab and the deferred
- * app-start prefetch.
+ * date from the on-device cache first and fetches /movies/{id} only for entries that
+ * are missing or stale (stale-while-revalidate: stale values stay usable meanwhile).
+ *
+ * Each movie is fetched at most once per fill: the module-level deduper collapses the
+ * same id across overlapping runs into one network call, and every fetch re-checks the
+ * cache first in case another run just filled it. Shared by the tab and the prefetch.
  */
 import type { QueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -14,6 +17,7 @@ import {
   getReleaseEntry,
   isReleaseEntryFresh,
   loadReleaseDateCache,
+  releaseTtlJitter,
   setReleaseEntry,
   type ReleaseEntry,
 } from './release-date-cache';
@@ -26,6 +30,12 @@ export interface LoadUpcomingMovieOpts {
   queryClient?: QueryClient;
   force?: boolean;
   onProgress?: (done: number, total: number) => void;
+}
+
+export interface LoadUpcomingMovieResult {
+  entries: MovieDateInfo[];
+  /** A movie failed to load and had no cached copy, so it was left out of `entries`. */
+  failedNoCache: boolean;
 }
 
 /** Stable key for the loader's useQuery, derived from the candidate ids. */
@@ -46,14 +56,22 @@ function fromCache(m: WatchlistLite, cached: ReleaseEntry): MovieDateInfo {
 export async function loadUpcomingMovieDates(
   items: WatchlistLite[],
   opts: LoadUpcomingMovieOpts = {},
-): Promise<MovieDateInfo[]> {
+): Promise<LoadUpcomingMovieResult> {
   await loadReleaseDateCache();
   const now = Date.now();
   const currentYear = new Date(now).getFullYear();
-  // Movies released before last year can't be upcoming — skip their detail fetch.
+  // Movies released before last year can't be upcoming — never fetch their detail.
   const candidates = items.filter((m) => m.year == null || m.year >= currentYear - 1);
 
-  const total = candidates.length;
+  const out: MovieDateInfo[] = [];
+  const toFetch: WatchlistLite[] = [];
+  for (const m of candidates) {
+    const e = getReleaseEntry(m.id);
+    if (!opts.force && e && isReleaseEntryFresh(e, now)) out.push(fromCache(m, e));
+    else toFetch.push(m);
+  }
+
+  const total = toFetch.length;
   let done = 0;
   const bump = (): void => {
     done += 1;
@@ -61,17 +79,17 @@ export async function loadUpcomingMovieDates(
   };
   opts.onProgress?.(0, total);
 
-  const out: MovieDateInfo[] = [];
+  let failedNoCache = false;
   await Promise.all(
-    candidates.map(async (m) => {
-      const cached = getReleaseEntry(m.id);
-      // Cache hit: resolve immediately, don't occupy a network slot.
-      if (!opts.force && cached && isReleaseEntryFresh(cached, now)) {
-        out.push(fromCache(m, cached));
-        bump();
-        return;
-      }
-      await movieLimiter.run(async () => {
+    toFetch.map((m) =>
+      movieLimiter.run(async () => {
+        // Another overlapping run may have just cached this fresh — skip the fetch.
+        const fresh = getReleaseEntry(m.id);
+        if (!opts.force && fresh && isReleaseEntryFresh(fresh, Date.now())) {
+          out.push(fromCache(m, fresh));
+          bump();
+          return;
+        }
         try {
           const detail: any = await movieDedupe(m.id, () => api.get<any>(`/movies/${m.id}`));
           const entry: ReleaseEntry = {
@@ -80,9 +98,9 @@ export async function loadUpcomingMovieDates(
             title: detail?.title ?? m.title,
             poster: detail?.images?.poster ?? detail?.posterUrl ?? m.poster ?? null,
             savedAt: Date.now(),
+            ttlJitter: releaseTtlJitter(),
           };
           setReleaseEntry(m.id, entry);
-          // Keep movie-detail screens instant.
           opts.queryClient?.setQueryData(qk.movie(m.id), detail);
           out.push({
             id: m.id,
@@ -92,23 +110,15 @@ export async function loadUpcomingMovieDates(
             releaseDate: entry.releaseDate,
           });
         } catch {
-          // Per-movie failure never fails the whole list.
-          if (cached) out.push(fromCache(m, cached));
-          else
-            out.push({
-              id: m.id,
-              title: m.title,
-              poster: m.poster,
-              year: m.year,
-              releaseDate: null,
-              loadFailed: true,
-            });
+          const stale = getReleaseEntry(m.id);
+          if (stale) out.push(fromCache(m, stale)); // stale-while-revalidate
+          else failedNoCache = true; // no cached copy — leave it out entirely
         } finally {
           bump();
         }
-      });
-    }),
+      }),
+    ),
   );
   await flushReleaseDateCache();
-  return out;
+  return { entries: out, failedNoCache };
 }

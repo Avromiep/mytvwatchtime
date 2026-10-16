@@ -46,11 +46,14 @@ describe('tvmaze-cache', () => {
     expect(getShow('x')).toBeUndefined();
   });
 
-  it('show id entries live 30 days', () => {
+  it('resolved show ids live 30 days; a null id (404) only 6h', () => {
     const now = 1_000_000_000_000;
-    const e = { id: 5, hasNetwork: true, webChannel: null, savedAt: now };
-    expect(isShowFresh(e, now + 29 * DAY)).toBe(true);
-    expect(isShowFresh(e, now + 31 * DAY)).toBe(false);
+    const resolved = { id: 5, hasNetwork: true, webChannel: null, savedAt: now };
+    expect(isShowFresh(resolved, now + 29 * DAY)).toBe(true);
+    expect(isShowFresh(resolved, now + 31 * DAY)).toBe(false);
+    const notFound = { id: null, hasNetwork: false, webChannel: null, savedAt: now };
+    expect(isShowFresh(notFound, now + 5 * HOUR)).toBe(true);
+    expect(isShowFresh(notFound, now + 7 * HOUR)).toBe(false);
   });
 
   it('episode TTL: 12h if airing within 7 days, 24h otherwise, 6h for not-found', () => {

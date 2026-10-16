@@ -1,41 +1,71 @@
 /**
- * Tiny promise concurrency limiter + in-flight deduper. Used to keep the Upcoming
- * tabs polite: at most N backend / TVmaze requests run at once, optionally spaced
- * by a minimum interval (a simple rate cap), and identical in-flight requests share
- * a single promise instead of refetching.
+ * Tiny promise concurrency limiter + in-flight deduper. Keeps the Upcoming tabs polite:
+ * at most N requests run at once, optionally spaced by a minimum interval and/or capped
+ * to a maximum number of starts per rolling time window, and identical in-flight
+ * requests share one promise.
  *
  * No external dependencies (OTA-safe, no native code).
  */
+
+export interface RollingWindow {
+  /** Max task starts allowed within any `windowMs` span. */
+  maxStarts: number;
+  windowMs: number;
+}
+
+export interface LimiterOptions {
+  /** Minimum gap between task starts (a simple rate cap). */
+  minIntervalMs?: number;
+  /** Cap on starts per rolling time window (e.g. 15 per 10s). */
+  rollingWindow?: RollingWindow;
+}
 
 export interface Limiter {
   run<T>(fn: () => Promise<T>): Promise<T>;
 }
 
 /**
- * At most `maxConcurrent` tasks run at once. With `minIntervalMs`, task *starts* are
- * also spaced at least that far apart, which bounds the request rate (e.g. 334ms ≈
- * 3/sec). FIFO: tasks start in the order they were submitted. A task that throws
- * frees its slot like any other, so one failure never stalls the queue.
+ * At most `maxConcurrent` tasks run at once. FIFO: tasks start in submission order. A
+ * task that throws frees its slot like any other, so one failure never stalls the
+ * queue. `minIntervalMs` spaces starts; `rollingWindow` bounds starts per window.
  */
-export function createLimiter(
-  maxConcurrent: number,
-  opts: { minIntervalMs?: number } = {},
-): Limiter {
+export function createLimiter(maxConcurrent: number, opts: LimiterOptions = {}): Limiter {
   const max = Math.max(1, Math.floor(maxConcurrent) || 1);
   const minInterval = Math.max(0, opts.minIntervalMs ?? 0);
+  const rolling = opts.rollingWindow;
   const queue: Array<() => void> = [];
+  const starts: number[] = []; // recent start timestamps, for the rolling window
   let active = 0;
   let nextAllowedAt = 0;
+  let timer: ReturnType<typeof setTimeout> | null = null;
 
   const pump = (): void => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
     if (active >= max || queue.length === 0) return;
     const now = Date.now();
-    const wait = Math.max(0, nextAllowedAt - now);
+    let wait = Math.max(0, nextAllowedAt - now);
+    if (rolling) {
+      const cutoff = now - rolling.windowMs;
+      while (starts.length && starts[0] <= cutoff) starts.shift();
+      if (starts.length >= rolling.maxStarts) {
+        wait = Math.max(wait, starts[0] + rolling.windowMs - now);
+      }
+    }
+    if (wait > 0) {
+      timer = setTimeout(pump, wait);
+      (timer as { unref?: () => void })?.unref?.();
+      return;
+    }
     const launch = queue.shift() as () => void;
     active += 1;
     nextAllowedAt = Math.max(now, nextAllowedAt) + minInterval;
-    if (wait > 0) setTimeout(launch, wait);
-    else launch();
+    if (rolling) starts.push(now);
+    launch();
+    // More may be startable this tick (concurrency slots free).
+    pump();
   };
 
   return {
@@ -58,8 +88,7 @@ export function createLimiter(
 
 /**
  * Collapse identical in-flight async calls: while a call for `key` is pending, other
- * calls with the same key return the same promise. The entry clears once it settles,
- * so later calls run fresh.
+ * calls with the same key return the same promise. The entry clears once it settles.
  */
 export function createDeduper<T>(): (key: string, fn: () => Promise<T>) => Promise<T> {
   const inflight = new Map<string, Promise<T>>();

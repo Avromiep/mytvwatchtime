@@ -24,6 +24,20 @@ describe('createLimiter', () => {
     expect(maxRunning).toBeGreaterThan(1);
   });
 
+  it('respects the rolling-window start cap', async () => {
+    const limiter = createLimiter(10, { rollingWindow: { maxStarts: 3, windowMs: 200 } });
+    const t0 = Date.now();
+    const starts: number[] = [];
+    await Promise.all(
+      Array.from({ length: 6 }, () => limiter.run(async () => void starts.push(Date.now() - t0))),
+    );
+    starts.sort((a, b) => a - b);
+    // No 4th start may fall within 200ms of the start 3 positions earlier.
+    for (let i = 0; i + 3 < starts.length; i += 1) {
+      expect(starts[i + 3] - starts[i]).toBeGreaterThanOrEqual(190);
+    }
+  });
+
   it('a throwing task frees its slot so the queue keeps draining', async () => {
     const limiter = createLimiter(1);
     const ran: string[] = [];

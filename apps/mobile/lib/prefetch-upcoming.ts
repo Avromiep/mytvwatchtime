@@ -7,7 +7,6 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { MediaType } from '@tvwatch/shared';
 import { airTimeLabel } from './airtime';
-import { isReleaseCacheStale } from './release-date-cache';
 import type { WatchlistLite } from './upcoming-movies';
 import { loadUpcomingMovieDates } from './upcoming-movies-loader';
 import { resolveUpcomingAirtimes } from './upcoming-airtimes';
@@ -46,12 +45,11 @@ function timelessFromUpcoming(upcoming: any): any[] {
 }
 
 export async function prefetchUpcoming(queryClient: QueryClient): Promise<void> {
-  // Movies: warm release dates only when the on-device cache is stale.
+  // Movies: the loader only fetches entries that are missing or stale, so this is a
+  // no-op when everything is already fresh.
   try {
-    if (await isReleaseCacheStale()) {
-      const items = movieWatchlistFromCache(queryClient);
-      if (items.length) await loadUpcomingMovieDates(items, { queryClient });
-    }
+    const items = movieWatchlistFromCache(queryClient);
+    if (items.length) await loadUpcomingMovieDates(items, { queryClient });
   } catch {
     // ignore
   }

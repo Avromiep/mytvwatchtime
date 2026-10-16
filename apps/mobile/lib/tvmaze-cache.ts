@@ -76,7 +76,10 @@ export function getShow(key: string): ShowEntry | undefined {
   return mem?.shows[key];
 }
 export function isShowFresh(entry: ShowEntry, now = Date.now()): boolean {
-  return now - entry.savedAt < SHOW_TTL_MS;
+  // A resolved show id lasts 30 days; a real 404 (id null) only gets the short
+  // not-found TTL so it re-resolves soon.
+  const ttl = entry.id == null ? EPISODE_NOT_FOUND_TTL_MS : SHOW_TTL_MS;
+  return now - entry.savedAt < ttl;
 }
 export function setShow(key: string, entry: Omit<ShowEntry, 'savedAt'>): void {
   if (!mem) mem = emptyStore();
@@ -109,6 +112,7 @@ function markDirty(): void {
       flushTimer = null;
       void flushTvmazeCache();
     }, FLUSH_DELAY_MS);
+    (flushTimer as { unref?: () => void })?.unref?.();
   }
 }
 

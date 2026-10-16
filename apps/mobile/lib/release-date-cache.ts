@@ -10,8 +10,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const RELEASE_DATE_CACHE_KEY = 'upcomingMovieDates:v1';
-const DATED_TTL_MS = 24 * 60 * 60 * 1000;
-const NULL_TTL_MS = 12 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+const FAR_TTL_MS = 7 * DAY_MS; // dated, release > 30 days away
+const NEAR_TTL_MS = DAY_MS; // dated, release within 30 days
+const TBA_TTL_MS = 3 * DAY_MS; // no date yet
+const FAR_THRESHOLD_MS = 30 * DAY_MS;
 const FLUSH_DELAY_MS = 1500;
 
 export interface ReleaseEntry {
@@ -20,6 +24,13 @@ export interface ReleaseEntry {
   title: string;
   poster: string | null;
   savedAt: number;
+  /** Per-entry fraction 0–0.2 added to the base TTL so entries don't all expire at once. */
+  ttlJitter?: number;
+}
+
+/** A fresh jitter fraction (0–0.2) to stamp on a new cache entry. */
+export function releaseTtlJitter(): number {
+  return Math.random() * 0.2;
 }
 
 type Store = Record<string, ReleaseEntry>;
@@ -51,8 +62,17 @@ export function getReleaseEntry(id: string): ReleaseEntry | undefined {
   return mem?.[id];
 }
 
+/** Base TTL before jitter: dateless → 3d; dated and >30 days away → 7d; dated and
+ *  within 30 days → 24h. Stale-while-revalidate keeps stale entries visible meanwhile. */
+function baseTtlMs(entry: ReleaseEntry, now: number): number {
+  if (!entry.releaseDate) return TBA_TTL_MS;
+  const releaseMs = Date.parse(entry.releaseDate);
+  if (Number.isNaN(releaseMs)) return NEAR_TTL_MS;
+  return releaseMs - now > FAR_THRESHOLD_MS ? FAR_TTL_MS : NEAR_TTL_MS;
+}
+
 export function isReleaseEntryFresh(entry: ReleaseEntry, now = Date.now()): boolean {
-  const ttl = entry.releaseDate ? DATED_TTL_MS : NULL_TTL_MS;
+  const ttl = baseTtlMs(entry, now) * (1 + (entry.ttlJitter ?? 0));
   return now - entry.savedAt < ttl;
 }
 
@@ -66,6 +86,7 @@ export function setReleaseEntry(id: string, entry: ReleaseEntry): void {
       flushTimer = null;
       void flushReleaseDateCache();
     }, FLUSH_DELAY_MS);
+    (flushTimer as { unref?: () => void })?.unref?.();
   }
 }
 
@@ -93,16 +114,6 @@ export async function clearReleaseDateCache(): Promise<void> {
   } catch {
     // ignore
   }
-}
-
-/** True when nothing is cached or the newest entry is older than the dated TTL —
- *  used to decide whether the deferred prefetch should run. */
-export async function isReleaseCacheStale(now = Date.now()): Promise<boolean> {
-  await loadReleaseDateCache();
-  const entries = mem ? Object.values(mem) : [];
-  if (entries.length === 0) return true;
-  const newest = entries.reduce((max, e) => Math.max(max, e.savedAt), 0);
-  return now - newest >= DATED_TTL_MS;
 }
 
 /** Test-only: reset in-memory state so each test starts clean. */

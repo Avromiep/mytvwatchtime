@@ -1,16 +1,15 @@
 /**
- * Screen-level TVmaze air-time resolver for Upcoming Shows. Given the upcoming items
- * that have no local time, it dedupes by show, resolves the TVmaze show id (cache
- * first, then external id → title search — in practice title, since upcoming items
- * carry no ids), fetches the show's episodes once, and returns a Map of episodeKey →
- * 12-hour ET label (null = resolved, no time). Results are cached on device.
+ * Screen-level TVmaze air-time resolver for Upcoming Shows. Dedupes by show, resolves
+ * the TVmaze show id (cache first, then external id → title search — in practice title,
+ * since upcoming items carry no ids), fetches the show's episodes once, and returns a
+ * Map of episodeKey → 12-hour ET label (null = resolved, no time). Results are cached.
  *
- * Politeness: at most 4 shows resolve at once (so ≤4 concurrent TVmaze requests). A
- * 429 is retried once after ~2s; if it still 429s we leave the entry unresolved and
- * never cache a blank, so it retries later.
+ * Every TVmaze request goes through the shared gate (tvmaze-fetch): ≤2 concurrent and
+ * ≤15 starts / 10s, with 429 retries. Only real 404s are cached as "not found"; 429s,
+ * other non-OK answers and network errors are left unresolved and never cached.
  */
-import { createLimiter } from './limit';
 import { tvmazeEpisodeTimeLabel } from './airtime';
+import { tvmazeGet } from './tvmaze-fetch';
 import {
   episodeKey,
   flushTvmazeCache,
@@ -24,7 +23,6 @@ import {
   type EpisodeEntry,
 } from './tvmaze-cache';
 
-const tvmazeLimiter = createLimiter(4);
 const BASE = 'https://api.tvmaze.com';
 
 export interface UpcomingLikeItem {
@@ -52,28 +50,6 @@ function externalIdOf(item: UpcomingLikeItem, provider: string): string | undefi
   return hit ? String(hit.id) : undefined;
 }
 
-const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-interface FetchResult {
-  data: any;
-  rateLimited: boolean;
-}
-
-/** GET with one 429 retry after ~2s. `rateLimited` means it 429'd both times. */
-async function tvmazeFetch(url: string): Promise<FetchResult> {
-  try {
-    let r = await fetch(url);
-    if (r.status === 429) {
-      await delay(2000);
-      r = await fetch(url);
-      if (r.status === 429) return { data: null, rateLimited: true };
-    }
-    return { data: r.ok ? await r.json() : null, rateLimited: false };
-  } catch {
-    return { data: null, rateLimited: false };
-  }
-}
-
 function labelFromEntry(entry: EpisodeEntry): string | null {
   return tvmazeEpisodeTimeLabel(
     { airstamp: entry.airstamp },
@@ -84,14 +60,12 @@ function labelFromEntry(entry: EpisodeEntry): string | null {
   );
 }
 
-interface ResolvedShow {
-  id: number | null;
-  hasNetwork: boolean;
-  webChannel: string | null;
-  rateLimited: boolean;
-}
+type ShowOutcome =
+  | { outcome: 'ok'; id: number; hasNetwork: boolean; webChannel: string | null }
+  | { outcome: 'notFound' }
+  | { outcome: 'error' };
 
-async function resolveShowId(item: UpcomingLikeItem): Promise<ResolvedShow> {
+async function resolveShowId(item: UpcomingLikeItem): Promise<ShowOutcome> {
   const tvmazeId = externalIdOf(item, 'TVMAZE');
   const tvdbId = externalIdOf(item, 'THE_TVDB');
   const imdbId = externalIdOf(item, 'IMDB');
@@ -100,19 +74,18 @@ async function resolveShowId(item: UpcomingLikeItem): Promise<ResolvedShow> {
   else if (tvdbId) url = `${BASE}/lookup/shows?thetvdb=${encodeURIComponent(tvdbId)}`;
   else if (imdbId) url = `${BASE}/lookup/shows?imdb=${encodeURIComponent(imdbId)}`;
   else if (item.title) url = `${BASE}/singlesearch/shows?q=${encodeURIComponent(item.title)}`;
-  else return { id: null, hasNetwork: false, webChannel: null, rateLimited: false };
+  else return { outcome: 'notFound' };
 
-  const res = await tvmazeFetch(url);
-  if (res.rateLimited) return { id: null, hasNetwork: false, webChannel: null, rateLimited: true };
+  const res = await tvmazeGet(url);
+  if (res.status === 'error') return { outcome: 'error' };
+  if (res.status === 'notFound') return { outcome: 'notFound' };
   const show = res.data;
-  if (!show || typeof show.id !== 'number') {
-    return { id: null, hasNetwork: false, webChannel: null, rateLimited: false };
-  }
+  if (!show || typeof show.id !== 'number') return { outcome: 'notFound' };
   return {
+    outcome: 'ok',
     id: show.id,
     hasNetwork: !!show.network,
     webChannel: show.webChannel?.name ?? null,
-    rateLimited: false,
   };
 }
 
@@ -132,29 +105,28 @@ async function resolveShow(
   }
   if (needing.length === 0) return;
 
-  // Show id + network info (cache first).
   let showEntry = getShow(rk);
   if (force || !showEntry || !isShowFresh(showEntry, now)) {
     const resolved = await resolveShowId(group.item0);
-    if (resolved.rateLimited) return; // leave unresolved, never cache a blank on 429
-    setShow(rk, {
-      id: resolved.id,
-      hasNetwork: resolved.hasNetwork,
-      webChannel: resolved.webChannel,
-    });
-    showEntry = { ...resolved, savedAt: now };
+    if (resolved.outcome === 'error') return; // never cache an error; retry later
+    const id = resolved.outcome === 'ok' ? resolved.id : null;
+    const hasNetwork = resolved.outcome === 'ok' ? resolved.hasNetwork : false;
+    const webChannel = resolved.outcome === 'ok' ? resolved.webChannel : null;
+    setShow(rk, { id, hasNetwork, webChannel });
+    showEntry = { id, hasNetwork, webChannel, savedAt: now };
   }
   const showId = showEntry.id;
   if (showId == null) {
+    // Real 404 — the show isn't on TVmaze, so there's no time to show.
     for (const ep of needing) labels.set(itemEpisodeKey(ep) as string, null);
     return;
   }
 
   // One episodes call per show; match locally. Fall back to episodebynumber per miss.
-  const allRes = await tvmazeFetch(`${BASE}/shows/${showId}/episodes`);
-  if (allRes.rateLimited) return;
+  const allRes = await tvmazeGet(`${BASE}/shows/${showId}/episodes`);
+  if (allRes.status === 'error') return; // leave unresolved, never cache
   const byNum = new Map<string, any>();
-  if (Array.isArray(allRes.data)) {
+  if (allRes.status === 'ok' && Array.isArray(allRes.data)) {
     for (const e of allRes.data) {
       if (e && typeof e.season === 'number' && typeof e.number === 'number') {
         byNum.set(`${e.season}-${e.number}`, e);
@@ -166,30 +138,27 @@ async function resolveShow(
     const epKey = itemEpisodeKey(ep) as string;
     let episode = byNum.get(`${ep.seasonNumber}-${ep.episodeNumber}`);
     if (!episode) {
-      const one = await tvmazeFetch(
+      const one = await tvmazeGet(
         `${BASE}/shows/${showId}/episodebynumber?season=${ep.seasonNumber}&number=${ep.episodeNumber}`,
       );
-      if (one.rateLimited) continue; // never cache a blank on 429
+      if (one.status === 'error') continue; // never cache an error
+      if (one.status === 'notFound') {
+        setEpisode(epKey, { airstamp: null, hasNetwork: showEntry.hasNetwork, webChannel: showEntry.webChannel });
+        labels.set(epKey, null);
+        continue;
+      }
       episode = one.data && typeof one.data === 'object' ? one.data : null;
     }
     const airstamp: string | null = episode?.airstamp ?? null;
     setEpisode(epKey, { airstamp, hasNetwork: showEntry.hasNetwork, webChannel: showEntry.webChannel });
-    labels.set(
-      epKey,
-      tvmazeEpisodeTimeLabel(
-        { airstamp },
-        {
-          network: showEntry.hasNetwork ? {} : null,
-          webChannel: showEntry.webChannel ? { name: showEntry.webChannel } : null,
-        },
-      ),
-    );
+    labels.set(epKey, labelFromEntry({ airstamp, hasNetwork: showEntry.hasNetwork, webChannel: showEntry.webChannel, savedAt: now }));
   }
 }
 
 /**
  * Resolve ET air-time labels for the given upcoming items. Returns episodeKey → label
- * (null = resolved but no time). Items without a season/episode are ignored.
+ * (null = resolved but no time). Items without a season/episode are ignored. The shared
+ * TVmaze gate bounds total request concurrency/rate across all shows.
  */
 export async function resolveUpcomingAirtimes(
   items: UpcomingLikeItem[],
@@ -209,9 +178,7 @@ export async function resolveUpcomingAirtimes(
   }
 
   await Promise.all(
-    [...byShow.entries()].map(([rk, group]) =>
-      tvmazeLimiter.run(() => resolveShow(rk, group, now, labels, !!opts.force)),
-    ),
+    [...byShow.entries()].map(([rk, group]) => resolveShow(rk, group, now, labels, !!opts.force)),
   );
   await flushTvmazeCache();
   return labels;

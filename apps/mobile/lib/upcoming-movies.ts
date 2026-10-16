@@ -35,6 +35,20 @@ export interface WatchlistLite {
   year: number | null;
 }
 
+/** Localizable labels for the upcoming-movie rows. */
+export interface UpcomingMovieLabels {
+  today: string;
+  tba: string;
+  daysLeft: (n: number) => string;
+}
+
+/** English defaults, so the pure builder works without an i18n context. */
+export const DEFAULT_UPCOMING_LABELS: UpcomingMovieLabels = {
+  today: 'Today',
+  tba: 'TBA',
+  daysLeft: (n) => `${n} ${n === 1 ? 'day' : 'days'} left`,
+};
+
 /**
  * Build the sorted Upcoming Movies rows. Behavior preserved exactly from the original
  * in-component memo:
@@ -45,7 +59,11 @@ export interface WatchlistLite {
  *  - dateless movies whose year >= the current year are shown as "TBA", ordered after
  *    the dated ones by year.
  */
-export function buildUpcomingMovieRows(entries: MovieDateInfo[], now: Date): UpcomingMovieRow[] {
+export function buildUpcomingMovieRows(
+  entries: MovieDateInfo[],
+  now: Date,
+  labels: UpcomingMovieLabels = DEFAULT_UPCOMING_LABELS,
+): UpcomingMovieRow[] {
   const currentYear = now.getFullYear();
   const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
   const rows: UpcomingMovieRow[] = [];
@@ -59,7 +77,7 @@ export function buildUpcomingMovieRows(entries: MovieDateInfo[], now: Date): Upc
       const days = Math.round((target - today) / 86400000);
       rows.push({
         ...base,
-        upcomingLabel: days === 0 ? 'Today' : `${days} ${days === 1 ? 'day' : 'days'} left`,
+        upcomingLabel: days === 0 ? labels.today : labels.daysLeft(days),
         dateLabel: d.toLocaleDateString(undefined, {
           month: 'short',
           day: 'numeric',
@@ -70,7 +88,7 @@ export function buildUpcomingMovieRows(entries: MovieDateInfo[], now: Date): Upc
         sort: target,
       });
     } else if (base.year != null && base.year >= currentYear) {
-      rows.push({ ...base, upcomingLabel: 'TBA', dateLabel: null, tba: true, sort: base.year });
+      rows.push({ ...base, upcomingLabel: labels.tba, dateLabel: null, tba: true, sort: base.year });
     }
   }
   // Dated movies first (soonest → latest), then TBA movies (earliest year first).
