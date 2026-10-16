@@ -28,6 +28,8 @@ import { pickLocale, runAnnouncementAction } from '../../lib/announcement';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { spacing } from '../../theme/theme';
+import { airTimeLabel } from '../../lib/airtime';
+import { itemEpisodeKey, resolveUpcomingAirtimes } from '../../lib/upcoming-airtimes';
 import { UpcomingGroupDto, UpcomingPastBucket, WatchNextBucket } from '@tvwatch/shared';
 
 const VALID_ICONS = new Set([
@@ -678,6 +680,46 @@ function Upcoming() {
     pushGroups(mainGroups);
     return merged.filter((g) => g.items.length > 0);
   }, [data?.groups, pastQuery.data?.pages]);
+
+  // Screen-level TVmaze air-time resolver: the upcoming feed usually has no time, so we
+  // batch-resolve the missing ones (capped + cached) and hand each card its label,
+  // instead of every card firing its own lookup.
+  const [airtimeLabels, setAirtimeLabels] = useState<Map<string, string | null>>(new Map());
+  const [airtimesResolving, setAirtimesResolving] = useState(false);
+  const timelessItems = useMemo(() => {
+    const items: any[] = [];
+    for (const g of groups) {
+      for (const it of g.items) {
+        if (it.seasonNumber == null || it.episodeNumber == null) continue;
+        if (!airTimeLabel(it.airDate, it.airTime)) items.push(it);
+      }
+    }
+    return items;
+  }, [groups]);
+  const timelessKey = useMemo(
+    () => timelessItems.map((i) => `${i.mediaId}:${i.seasonNumber}:${i.episodeNumber}`).sort().join('|'),
+    [timelessItems],
+  );
+  useEffect(() => {
+    if (timelessItems.length === 0) {
+      setAirtimesResolving(false);
+      return;
+    }
+    let cancelled = false;
+    setAirtimesResolving(true);
+    void resolveUpcomingAirtimes(timelessItems)
+      .then((labels) => {
+        if (!cancelled) setAirtimeLabels(labels);
+      })
+      .finally(() => {
+        if (!cancelled) setAirtimesResolving(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timelessKey]);
+
   // Infinite top scroll: with no pages fetched yet, the main endpoint's
   // hasMore+cursor gates the first fetch; afterwards the last page's cursor gates.
   const canFetchPast =
@@ -823,14 +865,23 @@ function Upcoming() {
           </View>
         );
       }
+      const epKey = itemEpisodeKey(row.item);
+      let label: string | null | undefined;
+      if (epKey != null) {
+        label = airtimeLabels.has(epKey)
+          ? airtimeLabels.get(epKey) ?? null
+          : airtimesResolving
+            ? undefined
+            : null;
+      }
       return (
         <View style={{ height: UPCOMING_H }}>
-          <UpcomingCard item={row.item} />
+          <UpcomingCard item={row.item} tvmazeManaged={epKey != null} tvmazeTimeLabel={label} />
         </View>
       );
       // eslint-disable-next-line react-hooks/exhaustive-deps
     },
-    [t, groupLabel],
+    [t, groupLabel, airtimeLabels, airtimesResolving],
   );
 
   if (isLoading) return <Spinner />;
