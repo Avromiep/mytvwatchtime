@@ -11,18 +11,19 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { MediaType, type MovieDetailDto } from '@tvwatch/shared';
-import { useQueries } from '@tanstack/react-query';
+import { MediaType } from '@tvwatch/shared';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Header } from '../../components/Header';
 import { PosterCard } from '../../components/cards';
 import { LibraryEmptyState } from '../../components/LibraryEmptyState';
 import { Chip, EmptyState, Screen, Spinner, T } from '../../components/primitives';
-import { api } from '../../api/client';
-import { qk, useFavoritePages, useWatchedMoviePages, useWatchlistPages } from '../../api/hooks';
+import { useFavoritePages, useWatchedMoviePages, useWatchlistPages } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
-import { spacing } from '../../theme/theme';
+import { radius, spacing } from '../../theme/theme';
 import { useContentWidth } from '../../hooks/useContentWidth';
+import { buildUpcomingMovieRows, type UpcomingMovieRow, type WatchlistLite } from '../../lib/upcoming-movies';
+import { idsHash, loadUpcomingMovieDates } from '../../lib/upcoming-movies-loader';
 
 interface MovieItem {
   id: string;
@@ -521,24 +522,16 @@ export default function MoviesScreen() {
 }
 
 /**
- * Upcoming movies view. The list feed only carries release YEAR, so we load the
- * full movie watchlist and fetch each movie's detail (which includes the exact
- * release date) to surface a day-count without opening the movie. This is the
- * "workaround" path; a self-hosted backend can instead return releaseDate in the
- * list feed (see mapMediaCardLite) and skip the per-movie fetches.
+ * Upcoming movies view. The list feed only carries release YEAR, so the exact release
+ * date comes from /movies/{id}. Those dates are cached on device (see
+ * release-date-cache) and fetched through a capped, rate-limited loader; movies
+ * released before last year are skipped. The whole sorted list renders at once — a
+ * skeleton grid with "Loading x of N" until every date resolves, then one swap (no
+ * progressive re-sorting). Cached rows show instantly on reopen.
  */
-interface UpcomingRow {
-  id: string;
-  title: string;
-  posterUrl?: string | null;
-  year: number | null;
-  upcomingLabel: string; // "35 days left" | "Today" | "TBA"
-  dateLabel: string | null;
-  tba: boolean;
-  sort: number;
-}
-
 function UpcomingMovies() {
+  const { tokens } = useAppearance();
+  const queryClient = useQueryClient();
   // Same grid math as the watch list so the posters are the same big size.
   const width = useContentWidth();
   const containerW = width - 32;
@@ -552,58 +545,89 @@ function UpcomingMovies() {
     if (wl.hasNextPage && !wl.isFetchingNextPage) void wl.fetchNextPage();
   }, [wl.hasNextPage, wl.isFetchingNextPage, wl.items.length]);
 
-  const ids = useMemo(() => wl.items.map((m: any) => m.id as string), [wl.items]);
-  const details = useQueries({
-    queries: ids.map((id) => ({
-      queryKey: qk.movie(id),
-      queryFn: () => api.get<MovieDetailDto>(`/movies/${id}`),
-      staleTime: 1000 * 60 * 60, // release dates barely move; cache an hour
-    })),
+  const liteItems: WatchlistLite[] = useMemo(
+    () =>
+      wl.items.map((m: any) => ({
+        id: m.id,
+        title: m.title,
+        poster: m.images?.poster ?? m.posterUrl ?? null,
+        year: m.year ?? null,
+      })),
+    [wl.items],
+  );
+  const ids = useMemo(() => liteItems.map((m) => m.id), [liteItems]);
+  const allPagesLoaded = !wl.isLoading && !wl.hasNextPage;
+
+  // Start resolving dates as each page arrives (fire-and-forget) so the final resolve
+  // is already cache-warm — not blocked on the last page.
+  useEffect(() => {
+    if (liteItems.length && wl.hasNextPage) void loadUpcomingMovieDates(liteItems, { queryClient });
+  }, [liteItems, wl.hasNextPage, queryClient]);
+
+  const [progress, setProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
+  const [refreshing, setRefreshing] = useState(false);
+  const forceRef = useRef(false);
+
+  const q = useQuery({
+    queryKey: ['upcomingMovies', 'dates', idsHash(ids)],
+    enabled: allPagesLoaded,
+    staleTime: 60 * 60 * 1000,
+    queryFn: async () => {
+      const force = forceRef.current;
+      forceRef.current = false;
+      const entries = await loadUpcomingMovieDates(liteItems, {
+        queryClient,
+        force,
+        onProgress: (done, total) => setProgress({ done, total }),
+      });
+      return buildUpcomingMovieRows(entries, new Date());
+    },
   });
 
-  const upcoming = useMemo(() => {
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
-    const rows: UpcomingRow[] = [];
-    for (const q of details) {
-      const m: any = q.data;
-      if (!m) continue;
-      const base = { id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, year: m.releaseYear ?? null };
-      const d = m.releaseDate ? new Date(m.releaseDate) : null;
-      if (d && !Number.isNaN(d.getTime())) {
-        // Compare (and display) the date's UTC calendar day so it isn't a day off.
-        const target = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-        if (target < today) continue; // released already — not upcoming
-        const days = Math.round((target - today) / 86400000);
-        rows.push({
-          ...base,
-          upcomingLabel: days === 0 ? 'Today' : `${days} ${days === 1 ? 'day' : 'days'} left`,
-          dateLabel: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }),
-          tba: false,
-          sort: target,
-        });
-      } else if (base.year != null && base.year >= currentYear) {
-        // No firm date yet, but plausibly upcoming (this year or later) — show as TBA.
-        rows.push({ ...base, upcomingLabel: 'TBA', dateLabel: null, tba: true, sort: base.year });
-      }
-    }
-    // Dated movies first (soonest → latest), then TBA movies (earliest year first).
-    rows.sort((a, b) => (a.tba !== b.tba ? (a.tba ? 1 : -1) : a.sort - b.sort));
-    return rows;
-  }, [details]);
-
-  // Chunk into rows of `cols` so posters line up exactly like the watch-list grid.
+  const rows = q.data ?? [];
   const gridRows = useMemo(() => {
-    const out: UpcomingRow[][] = [];
-    for (let i = 0; i < upcoming.length; i += cols) out.push(upcoming.slice(i, i + cols));
+    const out: UpcomingMovieRow[][] = [];
+    for (let i = 0; i < rows.length; i += cols) out.push(rows.slice(i, i + cols));
     return out;
-  }, [upcoming, cols]);
+  }, [rows, cols]);
 
-  const stillLoading = wl.isLoading || wl.hasNextPage || (ids.length > 0 && details.some((q) => q.isLoading));
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    forceRef.current = true;
+    try {
+      await q.refetch();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [q]);
 
-  if (stillLoading && upcoming.length === 0) return <Spinner />;
-  if (upcoming.length === 0) {
+  // Cold start (no resolved rows yet): skeleton grid + "Loading x of N".
+  if (!q.data) {
+    const rowsCount = 4;
+    return (
+      <View style={{ paddingHorizontal: 16, paddingTop: spacing.sm }}>
+        <T variant="caption" muted style={{ marginBottom: spacing.sm }}>
+          {progress.total > 0 ? `Loading ${progress.done} of ${progress.total}…` : 'Loading…'}
+        </T>
+        {Array.from({ length: rowsCount }).map((_, ri) => (
+          <View key={ri} style={{ flexDirection: 'row', gap, marginBottom: gap }}>
+            {Array.from({ length: cols }).map((__, ci) => (
+              <View
+                key={ci}
+                style={{
+                  width: cellW,
+                  height: cellW * 1.5,
+                  borderRadius: radius.md,
+                  backgroundColor: tokens.surface,
+                }}
+              />
+            ))}
+          </View>
+        ))}
+      </View>
+    );
+  }
+  if (rows.length === 0) {
     return (
       <View style={{ paddingVertical: 40 }}>
         <EmptyState title="No upcoming movies on your watch list" icon="film-outline" />
@@ -614,6 +638,14 @@ function UpcomingMovies() {
     <FlatList
       data={gridRows}
       keyExtractor={(row) => row[0].id}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          colors={[tokens.primary]}
+          tintColor={tokens.primary}
+        />
+      }
       contentContainerStyle={{ paddingHorizontal: 16, paddingTop: spacing.sm, paddingBottom: 40 }}
       renderItem={({ item: row }) => (
         <View style={{ flexDirection: 'row', gap, marginBottom: gap }}>
