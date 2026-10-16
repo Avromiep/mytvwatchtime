@@ -23,7 +23,11 @@
     "daysLeft_one": "{{count}} day left",
     "daysLeft_other": "{{count}} days left",
     "tba": "TBA",
-    "empty": "No upcoming movies on your watch list"
+    "empty": "No upcoming movies on your watch list",
+    "loading": "Loading {{done}} of {{total}}…",
+    "loadingSimple": "Loading…",
+    "updating": "Updating dates… {{done}} of {{total}}",
+    "loadError": "Some movies couldn't load. Pull to refresh."
   },
   "releasesToday": "Releases today",
   "releasesIn_one": "Releases in {{count}} day",
